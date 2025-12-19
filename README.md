@@ -16,6 +16,7 @@ On Windows, you can use the setup script:
 ```
 
 If you install Visual Studio Build Tools or Visual Studio, make sure **Desktop development with C++** is selected.
+You can also specify a generator: `.\scripts\erkao.ps1 build -Generator "Ninja"`.
 
 Run a file:
 
