@@ -1,11 +1,31 @@
 print("hello from erkao");
 
 let name = "Erkao";
-print("Welcome, " + name + "!");
+print("Welcome", name);
 
 let xs = [1, 2, 3];
-xs[3] = 4;
+print("push", push(xs, 4));
+print("xs", xs);
 print("len", len(xs));
 
 let data = { project: "Erkao", version: "0.1" };
-print(data["project"]);
+print("project", data["project"]);
+print("keys", keys(data));
+print("values", values(data));
+
+print("user", env.get("USERNAME"));
+print("args", env.args());
+
+let entries = fs.listDir(".");
+print("entries", entries);
+
+let readme = fs.readText("README.md");
+print("readme bytes", len(readme));
+
+if (false) {
+  fs.writeText("demo.txt", "hello from erkao");
+}
+
+if (false) {
+  plugin.load("plugins/demo.dll");
+}

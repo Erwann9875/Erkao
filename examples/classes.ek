@@ -14,3 +14,10 @@ class Robot {
 
 let r = Robot("R2");
 r.beep(3);
+
+let exitCode = proc.run("cmd /c echo robot ready");
+print("proc exit", exitCode);
+
+if (false) {
+  plugin.load("plugins/robot.dll");
+}
