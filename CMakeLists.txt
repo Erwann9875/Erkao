@@ -12,4 +12,16 @@ add_executable(erkao
   src/value.c
   src/interpreter.c
   src/stdlib.c
+  src/gc.c
+  src/program.c
+  src/plugin.c
 )
+
+target_include_directories(erkao PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+if(NOT WIN32)
+  target_link_libraries(erkao dl)
+endif()

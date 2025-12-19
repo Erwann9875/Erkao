@@ -1,6 +1,7 @@
 #include "lexer.h"
 #include "parser.h"
 #include "interpreter.h"
+#include "program.h"
 
 #include <stdio.h>
 
@@ -53,17 +54,7 @@ static bool runSource(VM* vm, char* source) {
     return false;
   }
 
-  StmtArray* program = (StmtArray*)malloc(sizeof(StmtArray));
-  if (!program) {
-    fprintf(stderr, "Out of memory.\n");
-    freeStatements(&statements);
-    free(source);
-    return false;
-  }
-  *program = statements;
-  vmKeepSource(vm, source);
-  vmKeepProgram(vm, program);
-
+  Program* program = programCreate(vm, source, statements);
   return interpret(vm, program);
 }
 

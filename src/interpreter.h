@@ -4,10 +4,13 @@
 #include "ast.h"
 #include "value.h"
 
+typedef struct Program Program;
+
 typedef struct Env {
   struct Env* enclosing;
   ObjMap* values;
   struct Env* next;
+  bool marked;
 } Env;
 
 typedef struct VM {
@@ -16,22 +19,23 @@ typedef struct VM {
   Env* envs;
   Obj* objects;
   ObjArray* args;
-  char** sources;
-  int sourceCount;
-  int sourceCapacity;
-  StmtArray** programs;
-  int programCount;
-  int programCapacity;
+  Program* programs;
+  Program* currentProgram;
+  void** pluginHandles;
+  int pluginCount;
+  int pluginCapacity;
+  size_t gcAllocCount;
+  size_t gcNext;
+  bool gcPending;
   bool hadError;
 } VM;
 
 void vmInit(VM* vm);
 void vmFree(VM* vm);
 void vmSetArgs(VM* vm, int argc, const char** argv);
-void vmKeepSource(VM* vm, char* source);
-void vmKeepProgram(VM* vm, StmtArray* program);
 void defineNative(VM* vm, const char* name, NativeFn function, int arity);
+void defineGlobal(VM* vm, const char* name, Value value);
 
-bool interpret(VM* vm, const StmtArray* statements);
+bool interpret(VM* vm, Program* program);
 
 #endif

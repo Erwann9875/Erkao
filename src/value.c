@@ -1,5 +1,7 @@
 #include "value.h"
 #include "interpreter.h"
+#include "gc.h"
+#include "program.h"
 
 static Obj* allocateObject(VM* vm, size_t size, ObjType type) {
   Obj* object = (Obj*)malloc(size);
@@ -9,7 +11,9 @@ static Obj* allocateObject(VM* vm, size_t size, ObjType type) {
   }
   object->type = type;
   object->next = vm->objects;
+  object->marked = false;
   vm->objects = object;
+  gcTrackAlloc(vm);
   return object;
 }
 
@@ -40,13 +44,15 @@ ObjString* stringFromToken(VM* vm, Token token) {
 }
 
 ObjFunction* newFunction(VM* vm, Stmt* declaration, ObjString* name, int arity,
-                         bool isInitializer, Env* closure) {
+                         bool isInitializer, Env* closure, Program* program) {
   ObjFunction* function = (ObjFunction*)allocateObject(vm, sizeof(ObjFunction), OBJ_FUNCTION);
   function->arity = arity;
   function->isInitializer = isInitializer;
   function->name = name;
   function->declaration = declaration;
   function->closure = closure;
+  function->program = program;
+  programRetain(program);
   return function;
 }
 

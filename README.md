@@ -72,8 +72,46 @@ print(greet(name));
 - `type(value)`
 - `len(value)`
 - `args()`
+- `push(array, value)`
+- `keys(map)`
+- `values(map)`
+
+## Stdlib modules
+
+- `fs.readText(path)`
+- `fs.writeText(path, text)`
+- `fs.listDir(path)`
+- `proc.run(cmd)`
+- `env.get(name)`
+- `env.args()`
+- `plugin.load(path)`
+
+## Plugins
+
+Plugins are DLLs that export `erkao_init` and register native functions.
+
+```c
+#include "erkao_plugin.h"
+
+static Value hello(VM* vm, int argc, Value* args) {
+  (void)vm;
+  (void)argc;
+  (void)args;
+  printf("hello from plugin\n");
+  return NULL_VAL;
+}
+
+bool erkao_init(ErkaoApi* api) {
+  if (api->apiVersion != ERKAO_PLUGIN_API_VERSION) return false;
+  api->defineNative(api->vm, "pluginHello", hello, 0);
+  return true;
+}
+```
+
+Build a plugin with include paths to `include` and `src`.
 
 ## Notes
 
 - Strings are UTF-8 byte sequences (no unicode processing yet).
-- Memory is freed at process exit (no GC yet).
+- Mark-and-sweep GC runs at statement boundaries to reclaim runtime objects.
+- Source and AST programs are freed when no live functions reference them.

@@ -17,6 +17,7 @@ typedef struct ObjBoundMethod ObjBoundMethod;
 typedef struct VM VM;
 typedef struct Env Env;
 typedef struct Stmt Stmt;
+typedef struct Program Program;
 
 typedef enum {
   VAL_NULL,
@@ -64,6 +65,7 @@ typedef enum {
 struct Obj {
   ObjType type;
   Obj* next;
+  bool marked;
 };
 
 struct ObjString {
@@ -79,6 +81,7 @@ struct ObjFunction {
   ObjString* name;
   Stmt* declaration;
   Env* closure;
+  Program* program;
 };
 
 struct ObjNative {
@@ -130,7 +133,7 @@ ObjString* copyStringWithLength(VM* vm, const char* chars, int length);
 ObjString* stringFromToken(VM* vm, Token token);
 
 ObjFunction* newFunction(VM* vm, Stmt* declaration, ObjString* name, int arity,
-                         bool isInitializer, Env* closure);
+                         bool isInitializer, Env* closure, Program* program);
 ObjNative* newNative(VM* vm, NativeFn function, int arity, ObjString* name);
 ObjClass* newClass(VM* vm, ObjString* name, ObjMap* methods);
 ObjInstance* newInstance(VM* vm, ObjClass* klass);

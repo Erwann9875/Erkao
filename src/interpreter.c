@@ -1,5 +1,8 @@
 #include "interpreter.h"
 #include "stdlib.h"
+#include "gc.h"
+#include "plugin.h"
+#include "program.h"
 
 #include <math.h>
 
@@ -44,7 +47,9 @@ static Env* newEnv(VM* vm, Env* enclosing) {
   env->enclosing = enclosing;
   env->values = newMap(vm);
   env->next = vm->envs;
+  env->marked = false;
   vm->envs = env;
+  gcTrackAlloc(vm);
   return env;
 }
 
@@ -95,15 +100,22 @@ void defineNative(VM* vm, const char* name, NativeFn function, int arity) {
   envDefine(vm->globals, nameObj, OBJ_VAL(native));
 }
 
+void defineGlobal(VM* vm, const char* name, Value value) {
+  ObjString* nameObj = copyString(vm, name);
+  envDefine(vm->globals, nameObj, value);
+}
+
 void vmInit(VM* vm) {
   vm->objects = NULL;
   vm->envs = NULL;
-  vm->sources = NULL;
-  vm->sourceCount = 0;
-  vm->sourceCapacity = 0;
   vm->programs = NULL;
-  vm->programCount = 0;
-  vm->programCapacity = 0;
+  vm->currentProgram = NULL;
+  vm->pluginHandles = NULL;
+  vm->pluginCount = 0;
+  vm->pluginCapacity = 0;
+  vm->gcAllocCount = 0;
+  vm->gcNext = 1024;
+  vm->gcPending = false;
   vm->hadError = false;
   vm->globals = newEnv(vm, NULL);
   vm->env = vm->globals;
@@ -113,6 +125,16 @@ void vmInit(VM* vm) {
 }
 
 void vmFree(VM* vm) {
+  pluginUnloadAll(vm);
+
+  Obj* object = vm->objects;
+  while (object) {
+    Obj* next = object->next;
+    freeObject(vm, object);
+    object = next;
+  }
+  vm->objects = NULL;
+
   Env* env = vm->envs;
   while (env) {
     Env* next = env->next;
@@ -121,68 +143,7 @@ void vmFree(VM* vm) {
   }
   vm->envs = NULL;
 
-  for (int i = 0; i < vm->sourceCount; i++) {
-    free(vm->sources[i]);
-  }
-  FREE_ARRAY(char*, vm->sources, vm->sourceCapacity);
-  vm->sources = NULL;
-  vm->sourceCount = 0;
-  vm->sourceCapacity = 0;
-
-  for (int i = 0; i < vm->programCount; i++) {
-    StmtArray* program = vm->programs[i];
-    for (int j = 0; j < program->count; j++) {
-      freeStmt(program->items[j]);
-    }
-    freeStmtArray(program);
-    free(program);
-  }
-  FREE_ARRAY(StmtArray*, vm->programs, vm->programCapacity);
-  vm->programs = NULL;
-  vm->programCount = 0;
-  vm->programCapacity = 0;
-
-  Obj* object = vm->objects;
-  while (object) {
-    Obj* next = object->next;
-    switch (object->type) {
-      case OBJ_STRING: {
-        ObjString* string = (ObjString*)object;
-        free(string->chars);
-        free(string);
-        break;
-      }
-      case OBJ_FUNCTION:
-        free(object);
-        break;
-      case OBJ_NATIVE:
-        free(object);
-        break;
-      case OBJ_CLASS:
-        free(object);
-        break;
-      case OBJ_INSTANCE:
-        free(object);
-        break;
-      case OBJ_ARRAY: {
-        ObjArray* array = (ObjArray*)object;
-        FREE_ARRAY(Value, array->items, array->capacity);
-        free(array);
-        break;
-      }
-      case OBJ_MAP: {
-        ObjMap* map = (ObjMap*)object;
-        FREE_ARRAY(MapEntryValue, map->entries, map->capacity);
-        free(map);
-        break;
-      }
-      case OBJ_BOUND_METHOD:
-        free(object);
-        break;
-    }
-    object = next;
-  }
-  vm->objects = NULL;
+  programFreeAll(vm);
 }
 
 void vmSetArgs(VM* vm, int argc, const char** argv) {
@@ -194,25 +155,6 @@ void vmSetArgs(VM* vm, int argc, const char** argv) {
   vm->args = array;
 }
 
-void vmKeepSource(VM* vm, char* source) {
-  if (!source) return;
-  if (vm->sourceCapacity < vm->sourceCount + 1) {
-    int oldCapacity = vm->sourceCapacity;
-    vm->sourceCapacity = GROW_CAPACITY(oldCapacity);
-    vm->sources = GROW_ARRAY(char*, vm->sources, oldCapacity, vm->sourceCapacity);
-  }
-  vm->sources[vm->sourceCount++] = source;
-}
-
-void vmKeepProgram(VM* vm, StmtArray* program) {
-  if (!program) return;
-  if (vm->programCapacity < vm->programCount + 1) {
-    int oldCapacity = vm->programCapacity;
-    vm->programCapacity = GROW_CAPACITY(oldCapacity);
-    vm->programs = GROW_ARRAY(StmtArray*, vm->programs, oldCapacity, vm->programCapacity);
-  }
-  vm->programs[vm->programCount++] = program;
-}
 
 static Value evaluate(VM* vm, Expr* expr);
 static ExecResult execute(VM* vm, Stmt* stmt);
@@ -242,7 +184,10 @@ static bool callFunction(VM* vm, ObjFunction* function, Value receiver,
     envDefine(env, name, args[i]);
   }
 
+  Program* previousProgram = vm->currentProgram;
+  vm->currentProgram = function->program;
   ExecResult result = executeBlock(vm, &decl->as.function.body, env);
+  vm->currentProgram = previousProgram;
   if (result.type == EXEC_ERROR) return false;
 
   if (function->isInitializer) {
@@ -659,6 +604,7 @@ static ExecResult executeBlock(VM* vm, const StmtArray* statements, Env* env) {
       vm->env = previous;
       return result;
     }
+    gcMaybe(vm);
   }
 
   vm->env = previous;
@@ -704,6 +650,7 @@ static ExecResult execute(VM* vm, Stmt* stmt) {
         if (!isTruthy(condition)) break;
         ExecResult result = execute(vm, stmt->as.whileStmt.body);
         if (result.type != EXEC_OK) return result;
+        gcMaybe(vm);
       }
       return execOk();
     }
@@ -711,7 +658,8 @@ static ExecResult execute(VM* vm, Stmt* stmt) {
       ObjString* name = stringFromToken(vm, stmt->as.function.name);
       int arity = stmt->as.function.params.count;
       bool isInitializer = false;
-      ObjFunction* function = newFunction(vm, stmt, name, arity, isInitializer, vm->env);
+      ObjFunction* function = newFunction(vm, stmt, name, arity, isInitializer, vm->env,
+                                          vm->currentProgram);
       envDefine(vm->env, name, OBJ_VAL(function));
       return execOk();
     }
@@ -735,7 +683,7 @@ static ExecResult execute(VM* vm, Stmt* stmt) {
                              memcmp(methodStmt->as.function.name.start, "init", 4) == 0;
         ObjFunction* method = newFunction(vm, methodStmt, methodName,
                                           methodStmt->as.function.params.count,
-                                          isInitializer, vm->env);
+                                          isInitializer, vm->env, vm->currentProgram);
         mapSet(methods, methodName, OBJ_VAL(method));
       }
 
@@ -748,11 +696,23 @@ static ExecResult execute(VM* vm, Stmt* stmt) {
   return execOk();
 }
 
-bool interpret(VM* vm, const StmtArray* statements) {
+bool interpret(VM* vm, Program* program) {
   vm->hadError = false;
-  for (int i = 0; i < statements->count; i++) {
-    ExecResult result = execute(vm, statements->items[i]);
-    if (result.type == EXEC_ERROR) return false;
+  Program* previousProgram = vm->currentProgram;
+  vm->currentProgram = program;
+  programRunBegin(program);
+
+  for (int i = 0; i < program->statements.count; i++) {
+    ExecResult result = execute(vm, program->statements.items[i]);
+    if (result.type == EXEC_ERROR) {
+      programRunEnd(vm, program);
+      vm->currentProgram = previousProgram;
+      return false;
+    }
+    gcMaybe(vm);
   }
+
+  programRunEnd(vm, program);
+  vm->currentProgram = previousProgram;
   return !vm->hadError;
 }
