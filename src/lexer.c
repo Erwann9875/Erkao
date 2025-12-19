@@ -69,7 +69,7 @@ static bool match(Scanner* scanner, char expected) {
   return true;
 }
 
-static Token makeToken(Scanner* scanner, TokenType type) {
+static Token makeToken(Scanner* scanner, ErkaoTokenType type) {
   Token token;
   token.type = type;
   token.start = scanner->start;
@@ -137,8 +137,8 @@ static bool isAlpha(char c) {
          c == '_';
 }
 
-static TokenType checkKeyword(Scanner* scanner, int start, int length,
-                              const char* rest, TokenType type) {
+static ErkaoTokenType checkKeyword(Scanner* scanner, int start, int length,
+                                   const char* rest, ErkaoTokenType type) {
   int tokenLength = (int)(scanner->current - scanner->start);
   if (tokenLength == start + length &&
       memcmp(scanner->start + start, rest, length) == 0) {
@@ -147,7 +147,7 @@ static TokenType checkKeyword(Scanner* scanner, int start, int length,
   return TOKEN_IDENTIFIER;
 }
 
-static TokenType identifierType(Scanner* scanner) {
+static ErkaoTokenType identifierType(Scanner* scanner) {
   switch (scanner->start[0]) {
     case 'a':
       return checkKeyword(scanner, 1, 2, "nd", TOKEN_AND);
@@ -306,7 +306,7 @@ TokenArray scanTokens(const char* source, bool* hadError) {
   return array;
 }
 
-const char* tokenTypeName(TokenType type) {
+const char* tokenTypeName(ErkaoTokenType type) {
   switch (type) {
     case TOKEN_LEFT_PAREN: return "LEFT_PAREN";
     case TOKEN_RIGHT_PAREN: return "RIGHT_PAREN";

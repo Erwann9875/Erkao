@@ -1,5 +1,5 @@
 #include "interpreter.h"
-#include "stdlib.h"
+#include "erkao_stdlib.h"
 #include "gc.h"
 #include "plugin.h"
 #include "program.h"

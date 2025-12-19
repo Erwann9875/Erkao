@@ -52,10 +52,10 @@ typedef enum {
 
   TOKEN_ERROR,
   TOKEN_EOF
-} TokenType;
+} ErkaoTokenType;
 
 typedef struct {
-  TokenType type;
+  ErkaoTokenType type;
   const char* start;
   int length;
   int line;
@@ -74,6 +74,6 @@ void freeTokenArray(TokenArray* array);
 
 TokenArray scanTokens(const char* source, bool* hadError);
 
-const char* tokenTypeName(TokenType type);
+const char* tokenTypeName(ErkaoTokenType type);
 
 #endif

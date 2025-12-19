@@ -1,4 +1,4 @@
-#include "stdlib.h"
+#include "erkao_stdlib.h"
 #include "plugin.h"
 
 #ifdef _WIN32

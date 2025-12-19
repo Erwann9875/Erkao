@@ -24,12 +24,12 @@ static Token advance(Parser* parser) {
   return previous(parser);
 }
 
-static bool check(Parser* parser, TokenType type) {
+static bool check(Parser* parser, ErkaoTokenType type) {
   if (isAtEnd(parser)) return false;
   return peek(parser).type == type;
 }
 
-static bool match(Parser* parser, TokenType type) {
+static bool match(Parser* parser, ErkaoTokenType type) {
   if (!check(parser, type)) return false;
   advance(parser);
   return true;
@@ -55,7 +55,7 @@ static void errorAtCurrent(Parser* parser, const char* message) {
   errorAt(parser, peek(parser), message);
 }
 
-static Token consume(Parser* parser, TokenType type, const char* message) {
+static Token consume(Parser* parser, ErkaoTokenType type, const char* message) {
   if (check(parser, type)) return advance(parser);
   errorAtCurrent(parser, message);
   return peek(parser);
