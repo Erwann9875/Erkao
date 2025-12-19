@@ -4,6 +4,6 @@
 #include "ast.h"
 #include "lexer.h"
 
-bool parseTokens(const TokenArray* tokens, StmtArray* outStatements);
+bool parseTokens(const TokenArray* tokens, const char* source, StmtArray* outStatements);
 
 #endif

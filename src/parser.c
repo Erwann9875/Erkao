@@ -2,6 +2,7 @@
 
 typedef struct {
   const TokenArray* tokens;
+  const char* source;
   int current;
   bool hadError;
   bool panicMode;
@@ -49,6 +50,7 @@ static void errorAt(Parser* parser, Token token, const char* message) {
     fprintf(stderr, " at '%.*s'", token.length, token.start);
   }
   fprintf(stderr, ": %s\n", message);
+  printErrorContext(parser->source, token.line, token.column);
 }
 
 static void errorAtCurrent(Parser* parser, const char* message) {
@@ -57,7 +59,15 @@ static void errorAtCurrent(Parser* parser, const char* message) {
 
 static Token consume(Parser* parser, ErkaoTokenType type, const char* message) {
   if (check(parser, type)) return advance(parser);
-  errorAtCurrent(parser, message);
+  if (type == TOKEN_SEMICOLON && parser->current > 0) {
+    Token token = previous(parser);
+    if (token.length > 0) {
+      token.column += token.length;
+    }
+    errorAt(parser, token, message);
+  } else {
+    errorAtCurrent(parser, message);
+  }
   return peek(parser);
 }
 
@@ -540,9 +550,10 @@ static Expr* primary(Parser* parser) {
   return newLiteralExpr(makeNullLiteral());
 }
 
-bool parseTokens(const TokenArray* tokens, StmtArray* outStatements) {
+bool parseTokens(const TokenArray* tokens, const char* source, StmtArray* outStatements) {
   Parser parser;
   parser.tokens = tokens;
+  parser.source = source;
   parser.current = 0;
   parser.hadError = false;
   parser.panicMode = false;

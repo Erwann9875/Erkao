@@ -46,7 +46,7 @@ static bool runSource(VM* vm, char* source) {
   }
 
   StmtArray statements;
-  bool parseOk = parseTokens(&tokens, &statements);
+  bool parseOk = parseTokens(&tokens, source, &statements);
   freeTokenArray(&tokens);
   if (!parseOk) {
     freeStatements(&statements);

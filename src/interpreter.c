@@ -59,6 +59,9 @@ static void runtimeError(VM* vm, Token token, const char* message) {
     fprintf(stderr, " at '%.*s'", token.length, token.start);
   }
   fprintf(stderr, ": %s\n", message);
+  if (vm->currentProgram) {
+    printErrorContext(vm->currentProgram->source, token.line, token.column);
+  }
   vm->hadError = true;
 }
 

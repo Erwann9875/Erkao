@@ -295,6 +295,7 @@ TokenArray scanTokens(const char* source, bool* hadError) {
     if (token.type == TOKEN_ERROR) {
       fprintf(stderr, "[line %d:%d] Error: %.*s\n",
               token.line, token.column, token.length, token.start);
+      printErrorContext(source, token.line, token.column);
       *hadError = true;
       continue;
     }
