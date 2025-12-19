@@ -21,13 +21,13 @@ You can also specify a generator: `.\scripts\erkao.ps1 build -Generator "Ninja"`
 Run a file:
 
 ```sh
-build/erkao examples/hello.ek
+./build/Debug/erkao.exe ./examples/hello.ek
 ```
 
 Start a REPL (no args):
 
 ```sh
-build/erkao
+./build/Debug/erkao.exe
 ```
 
 ## Language quick tour
