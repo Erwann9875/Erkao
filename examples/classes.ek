@@ -1,0 +1,16 @@
+class Robot {
+  fun init(name) {
+    this.name = name;
+  }
+
+  fun beep(times) {
+    let i = 0;
+    while (i < times) {
+      print(this.name + ": beep");
+      i = i + 1;
+    }
+  }
+}
+
+let r = Robot("R2");
+r.beep(3);
