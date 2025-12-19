@@ -18,16 +18,37 @@ On Windows, you can use the setup script:
 If you install Visual Studio Build Tools or Visual Studio, make sure **Desktop development with C++** is selected.
 You can also specify a generator: `.\scripts\erkao.ps1 build -Generator "Ninja"`.
 
+## CLI
+
+Help and version:
+
+```sh
+./build/Debug/erkao.exe --help
+./build/Debug/erkao.exe --version
+```
+
 Run a file:
 
 ```sh
-./build/Debug/erkao.exe ./examples/hello.ek
+./build/Debug/erkao.exe run ./examples/hello.ek
+```
+
+Start a REPL:
+
+```sh
+./build/Debug/erkao.exe repl
 ```
 
 Start a REPL (no args):
 
 ```sh
 ./build/Debug/erkao.exe
+```
+
+Backward-compatible shorthand:
+
+```sh
+./build/Debug/erkao.exe ./examples/hello.ek
 ```
 
 ## Language quick tour

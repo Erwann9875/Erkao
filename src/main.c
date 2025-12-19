@@ -4,6 +4,11 @@
 #include "program.h"
 
 #include <stdio.h>
+#include <string.h>
+
+#ifndef ERKAO_VERSION
+#define ERKAO_VERSION "dev"
+#endif
 
 static char* readFile(const char* path) {
   FILE* file = fopen(path, "rb");
@@ -89,15 +94,91 @@ static void repl(VM* vm) {
   }
 }
 
+static const char* exeName(const char* path) {
+  const char* lastSlash = strrchr(path, '/');
+  const char* lastBackslash = strrchr(path, '\\');
+  const char* base = path;
+  if (lastSlash && lastSlash + 1 > base) base = lastSlash + 1;
+  if (lastBackslash && lastBackslash + 1 > base) base = lastBackslash + 1;
+  return base;
+}
+
+static bool isFlag(const char* arg, const char* longName, const char* shortName) {
+  if (longName && strcmp(arg, longName) == 0) return true;
+  if (shortName && strcmp(arg, shortName) == 0) return true;
+  return false;
+}
+
+static void printHelp(const char* exe) {
+  fprintf(stdout,
+          "Usage:\n"
+          "  %s [--help|-h] [--version|-v]\n"
+          "  %s repl\n"
+          "  %s run <file> [-- args...]\n"
+          "  %s <file> [args...]\n"
+          "\n"
+          "Commands:\n"
+          "  run   Run a script file.\n"
+          "  repl  Start the interactive REPL.\n"
+          "\n"
+          "Options:\n"
+          "  -h, --help     Show this help.\n"
+          "  -v, --version  Show the version.\n",
+          exe, exe, exe, exe);
+}
+
+static void printVersion(void) {
+  fprintf(stdout, "Erkao %s\n", ERKAO_VERSION);
+}
+
+static int runWithArgs(VM* vm, const char* path, int argc, const char** argv) {
+  int argStart = 0;
+  if (argc > 0 && strcmp(argv[0], "--") == 0) {
+    argStart = 1;
+  }
+  return runFile(vm, path, argc - argStart, argv + argStart);
+}
+
 int main(int argc, const char** argv) {
+  const char* exe = exeName(argv[0]);
+  if (argc > 1 && isFlag(argv[1], "--help", "-h")) {
+    printHelp(exe);
+    return 0;
+  }
+  if (argc > 1 && isFlag(argv[1], "--version", "-v")) {
+    printVersion();
+    return 0;
+  }
+
   VM vm;
   vmInit(&vm);
 
   int result = 0;
   if (argc == 1) {
     repl(&vm);
+  } else if (strcmp(argv[1], "repl") == 0) {
+    if (argc > 2) {
+      fprintf(stderr, "Unexpected arguments for 'repl'.\n");
+      printHelp(exe);
+      result = 64;
+    } else {
+      repl(&vm);
+    }
+  } else if (strcmp(argv[1], "run") == 0) {
+    if (argc < 3 || isFlag(argv[2], "--help", "-h")) {
+      printHelp(exe);
+      result = (argc < 3) ? 64 : 0;
+    } else {
+      result = runWithArgs(&vm, argv[2], argc - 3, argv + 3);
+    }
   } else {
-    result = runFile(&vm, argv[1], argc - 2, argv + 2);
+    if (argv[1][0] == '-' && argv[1][1] != '\0') {
+      fprintf(stderr, "Unknown option: %s\n", argv[1]);
+      printHelp(exe);
+      result = 64;
+    } else {
+      result = runWithArgs(&vm, argv[1], argc - 2, argv + 2);
+    }
   }
 
   vmFree(&vm);
