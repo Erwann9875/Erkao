@@ -9,6 +9,14 @@ cmake -S . -B build
 cmake --build build
 ```
 
+On Windows, you can use the setup script:
+
+```powershell
+.\scripts\erkao.ps1
+```
+
+If you install Visual Studio Build Tools or Visual Studio, make sure **Desktop development with C++** is selected.
+
 Run a file:
 
 ```sh

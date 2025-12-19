@@ -1,5 +1,6 @@
 param(
-  [string]$Action
+  [string]$Action,
+  [string]$Generator
 )
 
 $ErrorActionPreference = "Stop"
@@ -7,6 +8,93 @@ $ErrorActionPreference = "Stop"
 function Test-Command {
   param([string]$Name)
   return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+function Test-CompilerInPath {
+  return (Test-Command "cl") -or (Test-Command "gcc") -or (Test-Command "clang")
+}
+
+function Is-VisualStudioGenerator {
+  param([string]$Name)
+  return $Name -match "^Visual Studio [0-9]+"
+}
+
+function Get-VSWherePath {
+  $paths = @()
+  if (${env:ProgramFiles(x86)}) {
+    $paths += (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\\Installer\\vswhere.exe")
+  }
+  if ($env:ProgramFiles) {
+    $paths += (Join-Path $env:ProgramFiles "Microsoft Visual Studio\\Installer\\vswhere.exe")
+  }
+
+  foreach ($path in $paths) {
+    if (Test-Path -LiteralPath $path) {
+      return $path
+    }
+  }
+  return $null
+}
+
+function Get-VisualStudioGenerator {
+  $vswhere = Get-VSWherePath
+  if (-not $vswhere) {
+    return $null
+  }
+
+  $version = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationVersion 2>$null
+  if (-not $version) {
+    return $null
+  }
+
+  $major = $version.Trim().Split(".")[0]
+  switch ($major) {
+    "17" { return "Visual Studio 17 2022" }
+    "16" { return "Visual Studio 16 2019" }
+    "15" { return "Visual Studio 15 2017" }
+    default { return $null }
+  }
+}
+
+function Test-VisualStudioInstalled {
+  return $null -ne (Get-VisualStudioGenerator)
+}
+
+function Resolve-Generator {
+  param([string]$Requested)
+
+  if ($Requested) {
+    return $Requested
+  }
+
+  if ($env:CMAKE_GENERATOR) {
+    if ($env:CMAKE_GENERATOR -eq "NMake Makefiles" -and -not (Test-Command "nmake")) {
+      Write-Host "CMAKE_GENERATOR is set to NMake Makefiles but nmake is not available. Ignoring it."
+    } elseif ((Is-VisualStudioGenerator $env:CMAKE_GENERATOR) -and -not (Test-VisualStudioInstalled)) {
+      Write-Host "CMAKE_GENERATOR is set to $env:CMAKE_GENERATOR but no Visual Studio installation was detected. Ignoring it."
+    } else {
+      return $env:CMAKE_GENERATOR
+    }
+  }
+
+  if (Test-Command "ninja") {
+    return "Ninja"
+  }
+
+  $vsGen = Get-VisualStudioGenerator
+  if ($vsGen) {
+    return $vsGen
+  }
+
+  if (Test-Command "nmake") {
+    return "NMake Makefiles"
+  }
+
+  if (Test-Command "mingw32-make") {
+    return "MinGW Makefiles"
+  }
+
+  return $null
 }
 
 function Require-RepoRoot {
@@ -63,8 +151,29 @@ function Build-Project {
     throw "CMake not found. Run option 1 first."
   }
 
+  $resolvedGenerator = Resolve-Generator -Requested $Generator
+  if (-not $resolvedGenerator) {
+    throw "No CMake generator found. Install Visual Studio Build Tools or Ninja, or pass -Generator."
+  }
+
+  if ((Is-VisualStudioGenerator $resolvedGenerator) -and -not (Test-VisualStudioInstalled)) {
+    if ($Generator) {
+      throw "CMake generator '$resolvedGenerator' requested but no Visual Studio installation was detected. Install Build Tools or choose a different generator (e.g., Ninja)."
+    }
+    throw "CMake generator '$resolvedGenerator' selected but no Visual Studio installation was detected. Install Build Tools or choose a different generator (e.g., Ninja)."
+  }
+
+  if ($resolvedGenerator -eq "NMake Makefiles" -and -not (Test-Command "nmake")) {
+    throw "CMake generator 'NMake Makefiles' requested but nmake is not available. Install Visual Studio Build Tools or choose a different generator (e.g., Ninja)."
+  }
+
+  if (-not (Test-CompilerInPath) -and -not (Test-VisualStudioInstalled)) {
+    throw "No C compiler detected. Run option 1 or install a compiler (Visual Studio Build Tools, MinGW, or LLVM)."
+  }
+
   $buildDir = "build"
-  cmake -S . -B $buildDir
+  $cmakeArgs = @("-S", ".", "-B", $buildDir, "-G", $resolvedGenerator)
+  cmake @cmakeArgs
   cmake --build $buildDir
 }
 
