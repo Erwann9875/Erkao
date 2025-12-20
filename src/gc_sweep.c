@@ -67,12 +67,14 @@ void sweepYoung(VM* vm, bool fullGc) {
       if (promote) {
         object->generation = OBJ_GEN_OLD;
         object->age = 0;
+        object->remembered = false;
         if (!fullGc) {
           object->marked = false;
         }
         object->next = vm->oldObjects;
         vm->oldObjects = object;
         vm->gcOldBytes += object->size;
+        gcRememberObjectIfYoungRefs(vm, object);
       } else {
         object->marked = false;
         object->next = newYoung;

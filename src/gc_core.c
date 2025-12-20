@@ -27,13 +27,17 @@ void updateFullNext(VM* vm) {
 void gcTrackAlloc(VM* vm, Obj* object) {
   if (!vm || !object) return;
 
-  vm->gcYoungBytes += object->size;
-  if (!vm->gcPendingYoung && vm->gcYoungBytes > vm->gcYoungNext) {
-    if (vm->gcLog) {
-      fprintf(stderr, "[gc] young threshold reached: bytes=%zu next=%zu\n",
-              vm->gcYoungBytes, vm->gcYoungNext);
+  if (object->generation == OBJ_GEN_OLD) {
+    vm->gcOldBytes += object->size;
+  } else {
+    vm->gcYoungBytes += object->size;
+    if (!vm->gcPendingYoung && vm->gcYoungBytes > vm->gcYoungNext) {
+      if (vm->gcLog) {
+        fprintf(stderr, "[gc] young threshold reached: bytes=%zu next=%zu\n",
+                vm->gcYoungBytes, vm->gcYoungNext);
+      }
+      vm->gcPendingYoung = true;
     }
-    vm->gcPendingYoung = true;
   }
 
   size_t total = gcTotalHeapBytes(vm);
@@ -96,7 +100,53 @@ void gcTrackEnvAlloc(VM* vm, size_t size) {
   }
 }
 
+static void rememberObject(VM* vm, Obj* object) {
+  if (!vm || !object) return;
+  if (object->generation != OBJ_GEN_OLD) return;
+  if (object->remembered) return;
+
+  if (vm->gcRememberedCapacity < vm->gcRememberedCount + 1) {
+    size_t oldCapacity = vm->gcRememberedCapacity;
+    vm->gcRememberedCapacity = GROW_CAPACITY(oldCapacity);
+    vm->gcRemembered = GROW_ARRAY(Obj*, vm->gcRemembered, oldCapacity,
+                                  vm->gcRememberedCapacity);
+  }
+
+  object->remembered = true;
+  vm->gcRemembered[vm->gcRememberedCount++] = object;
+}
+
+static void rebuildRemembered(VM* vm) {
+  if (!vm) return;
+  vm->gcRememberedCount = 0;
+  for (Obj* object = vm->oldObjects; object; object = object->next) {
+    object->remembered = false;
+    if (gcObjectHasYoungRefs(object)) {
+      rememberObject(vm, object);
+    }
+  }
+}
+
+void gcWriteBarrier(VM* vm, Obj* owner, Value value) {
+  if (!vm || !owner) return;
+  if (owner->generation != OBJ_GEN_OLD) return;
+  if (!IS_OBJ(value)) return;
+
+  Obj* child = AS_OBJ(value);
+  if (child->generation != OBJ_GEN_YOUNG) return;
+  rememberObject(vm, owner);
+}
+
+void gcRememberObjectIfYoungRefs(VM* vm, Obj* object) {
+  if (!vm || !object) return;
+  if (object->generation != OBJ_GEN_OLD) return;
+  if (gcObjectHasYoungRefs(object)) {
+    rememberObject(vm, object);
+  }
+}
+
 static void finishFullSweep(VM* vm) {
+  rebuildRemembered(vm);
   vm->gcSweeping = false;
   updateFullNext(vm);
 

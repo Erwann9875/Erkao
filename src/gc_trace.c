@@ -12,6 +12,8 @@ static void markYoungValue(VM* vm, Value value);
 static void markYoungObject(VM* vm, Obj* object);
 static void markYoungFromEnv(VM* vm, Env* env);
 static void markYoungChunk(VM* vm, Chunk* chunk);
+static bool valueHasYoung(Value value);
+static bool envHasYoungValues(Env* env);
 
 static void grayPushObject(VM* vm, Obj* object) {
   if (vm->gcGrayObjectCapacity < vm->gcGrayObjectCount + 1) {
@@ -207,6 +209,19 @@ static void markYoungChunk(VM* vm, Chunk* chunk) {
   }
 }
 
+static bool valueHasYoung(Value value) {
+  return IS_OBJ(value) && AS_OBJ(value)->generation == OBJ_GEN_YOUNG;
+}
+
+static bool envHasYoungValues(Env* env) {
+  for (Env* current = env; current; current = current->enclosing) {
+    if (current->values && current->values->obj.generation == OBJ_GEN_YOUNG) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void markRoots(VM* vm) {
   markEnv(vm, vm->globals);
   markEnv(vm, vm->env);
@@ -277,4 +292,70 @@ void traceYoung(VM* vm) {
   while (vm->gcGrayObjectCount > 0) {
     blackenYoungObject(vm, grayPopObject(vm));
   }
+}
+
+bool gcObjectHasYoungRefs(Obj* object) {
+  if (!object) return false;
+
+  switch (object->type) {
+    case OBJ_STRING:
+      return false;
+    case OBJ_FUNCTION: {
+      ObjFunction* function = (ObjFunction*)object;
+      if (function->name && function->name->obj.generation == OBJ_GEN_YOUNG) {
+        return true;
+      }
+      for (int i = 0; i < function->arity; i++) {
+        if (function->params[i] && function->params[i]->obj.generation == OBJ_GEN_YOUNG) {
+          return true;
+        }
+      }
+      if (envHasYoungValues(function->closure)) return true;
+      if (function->chunk) {
+        for (int i = 0; i < function->chunk->constantsCount; i++) {
+          if (valueHasYoung(function->chunk->constants[i])) return true;
+        }
+      }
+      return false;
+    }
+    case OBJ_NATIVE: {
+      ObjNative* native = (ObjNative*)object;
+      return native->name && native->name->obj.generation == OBJ_GEN_YOUNG;
+    }
+    case OBJ_CLASS: {
+      ObjClass* klass = (ObjClass*)object;
+      if (klass->name && klass->name->obj.generation == OBJ_GEN_YOUNG) return true;
+      return klass->methods && klass->methods->obj.generation == OBJ_GEN_YOUNG;
+    }
+    case OBJ_INSTANCE: {
+      ObjInstance* instance = (ObjInstance*)object;
+      if (instance->klass && instance->klass->obj.generation == OBJ_GEN_YOUNG) return true;
+      return instance->fields && instance->fields->obj.generation == OBJ_GEN_YOUNG;
+    }
+    case OBJ_ARRAY: {
+      ObjArray* array = (ObjArray*)object;
+      for (int i = 0; i < array->count; i++) {
+        if (valueHasYoung(array->items[i])) return true;
+      }
+      return false;
+    }
+    case OBJ_MAP: {
+      ObjMap* map = (ObjMap*)object;
+      for (int i = 0; i < map->count; i++) {
+        if (map->entries[i].key &&
+            map->entries[i].key->obj.generation == OBJ_GEN_YOUNG) {
+          return true;
+        }
+        if (valueHasYoung(map->entries[i].value)) return true;
+      }
+      return false;
+    }
+    case OBJ_BOUND_METHOD: {
+      ObjBoundMethod* bound = (ObjBoundMethod*)object;
+      if (valueHasYoung(bound->receiver)) return true;
+      return bound->method && bound->method->obj.generation == OBJ_GEN_YOUNG;
+    }
+  }
+
+  return false;
 }

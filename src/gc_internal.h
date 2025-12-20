@@ -12,6 +12,7 @@ void markYoungRoots(VM* vm);
 void traceFull(VM* vm);
 void traceYoung(VM* vm);
 void blackenYoungObject(VM* vm, Obj* object);
+bool gcObjectHasYoungRefs(Obj* object);
 
 void sweepYoung(VM* vm, bool fullGc);
 bool sweepOldStep(VM* vm, size_t budget);

@@ -71,6 +71,7 @@ struct Obj {
   ObjType type;
   Obj* next;
   bool marked;
+  bool remembered;
   ObjGen generation;
   uint8_t age;
   size_t size;

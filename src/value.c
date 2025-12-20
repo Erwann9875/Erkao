@@ -4,7 +4,7 @@
 #include "gc.h"
 #include "program.h"
 
-static Obj* allocateObject(VM* vm, size_t size, ObjType type) {
+static Obj* allocateObject(VM* vm, size_t size, ObjType type, ObjGen generation) {
   Obj* object = (Obj*)malloc(size);
   if (!object) {
     fprintf(stderr, "Out of memory.\n");
@@ -12,18 +12,24 @@ static Obj* allocateObject(VM* vm, size_t size, ObjType type) {
   }
   object->type = type;
   object->marked = false;
-  object->generation = OBJ_GEN_YOUNG;
+  object->remembered = false;
+  object->generation = generation;
   object->age = 0;
   object->size = size;
-  object->next = vm->youngObjects;
-  vm->youngObjects = object;
+  if (generation == OBJ_GEN_OLD) {
+    object->next = vm->oldObjects;
+    vm->oldObjects = object;
+  } else {
+    object->next = vm->youngObjects;
+    vm->youngObjects = object;
+  }
   gcTrackAlloc(vm, object);
   return object;
 }
 
 static ObjString* allocateString(VM* vm, char* chars, int length) {
   size_t size = sizeof(ObjString) + (size_t)length + 1;
-  ObjString* string = (ObjString*)allocateObject(vm, size, OBJ_STRING);
+  ObjString* string = (ObjString*)allocateObject(vm, size, OBJ_STRING, OBJ_GEN_OLD);
   string->length = length;
   string->chars = chars;
   return string;
@@ -50,7 +56,8 @@ ObjString* stringFromToken(VM* vm, Token token) {
 
 ObjFunction* newFunction(VM* vm, ObjString* name, int arity, bool isInitializer,
                          ObjString** params, Chunk* chunk, Env* closure, Program* program) {
-  ObjFunction* function = (ObjFunction*)allocateObject(vm, sizeof(ObjFunction), OBJ_FUNCTION);
+  ObjFunction* function = (ObjFunction*)allocateObject(vm, sizeof(ObjFunction), OBJ_FUNCTION,
+                                                      OBJ_GEN_OLD);
   function->arity = arity;
   function->isInitializer = isInitializer;
   function->name = name;
@@ -59,6 +66,7 @@ ObjFunction* newFunction(VM* vm, ObjString* name, int arity, bool isInitializer,
   function->closure = closure;
   function->program = program;
   programRetain(program);
+  gcRememberObjectIfYoungRefs(vm, (Obj*)function);
   return function;
 }
 
@@ -80,36 +88,40 @@ ObjFunction* cloneFunction(VM* vm, ObjFunction* proto, Env* closure) {
 }
 
 ObjNative* newNative(VM* vm, NativeFn function, int arity, ObjString* name) {
-  ObjNative* native = (ObjNative*)allocateObject(vm, sizeof(ObjNative), OBJ_NATIVE);
+  ObjNative* native = (ObjNative*)allocateObject(vm, sizeof(ObjNative), OBJ_NATIVE, OBJ_GEN_OLD);
   native->function = function;
   native->arity = arity;
   native->name = name;
+  gcRememberObjectIfYoungRefs(vm, (Obj*)native);
   return native;
 }
 
 ObjClass* newClass(VM* vm, ObjString* name, ObjMap* methods) {
-  ObjClass* klass = (ObjClass*)allocateObject(vm, sizeof(ObjClass), OBJ_CLASS);
+  ObjClass* klass = (ObjClass*)allocateObject(vm, sizeof(ObjClass), OBJ_CLASS, OBJ_GEN_OLD);
   klass->name = name;
   klass->methods = methods;
+  gcRememberObjectIfYoungRefs(vm, (Obj*)klass);
   return klass;
 }
 
 ObjInstance* newInstance(VM* vm, ObjClass* klass) {
-  ObjInstance* instance = (ObjInstance*)allocateObject(vm, sizeof(ObjInstance), OBJ_INSTANCE);
+  ObjInstance* instance = (ObjInstance*)allocateObject(vm, sizeof(ObjInstance), OBJ_INSTANCE,
+                                                       OBJ_GEN_YOUNG);
   instance->klass = klass;
   instance->fields = newMap(vm);
   return instance;
 }
 
 ObjInstance* newInstanceWithFields(VM* vm, ObjClass* klass, ObjMap* fields) {
-  ObjInstance* instance = (ObjInstance*)allocateObject(vm, sizeof(ObjInstance), OBJ_INSTANCE);
+  ObjInstance* instance = (ObjInstance*)allocateObject(vm, sizeof(ObjInstance), OBJ_INSTANCE,
+                                                       OBJ_GEN_YOUNG);
   instance->klass = klass;
   instance->fields = fields;
   return instance;
 }
 
 ObjArray* newArray(VM* vm) {
-  ObjArray* array = (ObjArray*)allocateObject(vm, sizeof(ObjArray), OBJ_ARRAY);
+  ObjArray* array = (ObjArray*)allocateObject(vm, sizeof(ObjArray), OBJ_ARRAY, OBJ_GEN_YOUNG);
   array->vm = vm;
   array->items = NULL;
   array->count = 0;
@@ -118,7 +130,7 @@ ObjArray* newArray(VM* vm) {
 }
 
 ObjMap* newMap(VM* vm) {
-  ObjMap* map = (ObjMap*)allocateObject(vm, sizeof(ObjMap), OBJ_MAP);
+  ObjMap* map = (ObjMap*)allocateObject(vm, sizeof(ObjMap), OBJ_MAP, OBJ_GEN_YOUNG);
   map->vm = vm;
   map->entries = NULL;
   map->count = 0;
@@ -127,7 +139,8 @@ ObjMap* newMap(VM* vm) {
 }
 
 ObjBoundMethod* newBoundMethod(VM* vm, Value receiver, ObjFunction* method) {
-  ObjBoundMethod* bound = (ObjBoundMethod*)allocateObject(vm, sizeof(ObjBoundMethod), OBJ_BOUND_METHOD);
+  ObjBoundMethod* bound = (ObjBoundMethod*)allocateObject(vm, sizeof(ObjBoundMethod),
+                                                         OBJ_BOUND_METHOD, OBJ_GEN_YOUNG);
   bound->receiver = receiver;
   bound->method = method;
   return bound;
@@ -147,6 +160,9 @@ void arrayWrite(ObjArray* array, Value value) {
     }
   }
   array->items[array->count++] = value;
+  if (array->vm) {
+    gcWriteBarrier(array->vm, (Obj*)array, value);
+  }
 }
 
 bool arrayGet(ObjArray* array, int index, Value* out) {
@@ -159,6 +175,9 @@ bool arraySet(ObjArray* array, int index, Value value) {
   if (index < 0) return false;
   if (index < array->count) {
     array->items[index] = value;
+    if (array->vm) {
+      gcWriteBarrier(array->vm, (Obj*)array, value);
+    }
     return true;
   }
   if (index == array->count) {
@@ -202,6 +221,9 @@ void mapSet(ObjMap* map, ObjString* key, Value value) {
   for (int i = 0; i < map->count; i++) {
     if (stringsEqual(map->entries[i].key, key)) {
       map->entries[i].value = value;
+      if (map->vm) {
+        gcWriteBarrier(map->vm, (Obj*)map, value);
+      }
       return;
     }
   }
@@ -222,12 +244,19 @@ void mapSet(ObjMap* map, ObjString* key, Value value) {
   map->entries[map->count].key = key;
   map->entries[map->count].value = value;
   map->count++;
+  if (map->vm) {
+    gcWriteBarrier(map->vm, (Obj*)map, OBJ_VAL(key));
+    gcWriteBarrier(map->vm, (Obj*)map, value);
+  }
 }
 
 bool mapSetByTokenIfExists(ObjMap* map, Token key, Value value) {
   for (int i = 0; i < map->count; i++) {
     if (stringMatchesToken(map->entries[i].key, key)) {
       map->entries[i].value = value;
+      if (map->vm) {
+        gcWriteBarrier(map->vm, (Obj*)map, value);
+      }
       return true;
     }
   }
@@ -238,6 +267,9 @@ bool mapSetIfExists(ObjMap* map, ObjString* key, Value value) {
   for (int i = 0; i < map->count; i++) {
     if (stringsEqual(map->entries[i].key, key)) {
       map->entries[i].value = value;
+      if (map->vm) {
+        gcWriteBarrier(map->vm, (Obj*)map, value);
+      }
       return true;
     }
   }

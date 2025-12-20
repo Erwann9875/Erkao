@@ -63,6 +63,9 @@ typedef struct VM {
   Env** gcGrayEnvs;
   size_t gcGrayEnvCount;
   size_t gcGrayEnvCapacity;
+  Obj** gcRemembered;
+  size_t gcRememberedCount;
+  size_t gcRememberedCapacity;
   Obj** gcSweepOld;
   Env** gcSweepEnv;
   clock_t gcLogStart;

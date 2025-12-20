@@ -2,6 +2,23 @@
 
 #include <stdio.h>
 
+static void pruneRemembered(VM* vm) {
+  if (!vm || vm->gcRememberedCount == 0) return;
+
+  size_t write = 0;
+  for (size_t i = 0; i < vm->gcRememberedCount; i++) {
+    Obj* object = vm->gcRemembered[i];
+    if (!object || object->generation != OBJ_GEN_OLD) continue;
+    if (gcObjectHasYoungRefs(object)) {
+      object->remembered = true;
+      vm->gcRemembered[write++] = object;
+    } else {
+      object->remembered = false;
+    }
+  }
+  vm->gcRememberedCount = write;
+}
+
 void gcCollectYoung(VM* vm) {
   if (!vm) return;
   vm->gcPendingYoung = false;
@@ -16,12 +33,16 @@ void gcCollectYoung(VM* vm) {
 
   markYoungRoots(vm);
 
-  for (Obj* object = vm->oldObjects; object; object = object->next) {
-    blackenYoungObject(vm, object);
+  for (size_t i = 0; i < vm->gcRememberedCount; i++) {
+    Obj* object = vm->gcRemembered[i];
+    if (object && object->generation == OBJ_GEN_OLD) {
+      blackenYoungObject(vm, object);
+    }
   }
 
   traceYoung(vm);
   sweepYoung(vm, false);
+  pruneRemembered(vm);
   updateYoungNext(vm);
 
   if (vm->gcLog) {

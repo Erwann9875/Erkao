@@ -97,6 +97,9 @@ void vmInit(VM* vm) {
   vm->gcGrayEnvs = NULL;
   vm->gcGrayEnvCount = 0;
   vm->gcGrayEnvCapacity = 0;
+  vm->gcRemembered = NULL;
+  vm->gcRememberedCount = 0;
+  vm->gcRememberedCapacity = 0;
   vm->gcSweepOld = NULL;
   vm->gcSweepEnv = NULL;
   vm->gcLogStart = 0;
@@ -120,12 +123,16 @@ void vmFree(VM* vm) {
 
   FREE_ARRAY(Obj*, vm->gcGrayObjects, vm->gcGrayObjectCapacity);
   FREE_ARRAY(Env*, vm->gcGrayEnvs, vm->gcGrayEnvCapacity);
+  FREE_ARRAY(Obj*, vm->gcRemembered, vm->gcRememberedCapacity);
   vm->gcGrayObjects = NULL;
   vm->gcGrayEnvs = NULL;
+  vm->gcRemembered = NULL;
   vm->gcGrayObjectCount = 0;
   vm->gcGrayObjectCapacity = 0;
   vm->gcGrayEnvCount = 0;
   vm->gcGrayEnvCapacity = 0;
+  vm->gcRememberedCount = 0;
+  vm->gcRememberedCapacity = 0;
 
   Obj* object = vm->youngObjects;
   while (object) {
