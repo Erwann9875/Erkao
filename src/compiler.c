@@ -11,7 +11,29 @@ typedef struct {
   Program* program;
   Chunk* chunk;
   bool hadError;
+  int scopeDepth;
+  int tempIndex;
+  struct BreakContext* breakContext;
 } Compiler;
+
+typedef struct {
+  int* offsets;
+  int count;
+  int capacity;
+} JumpList;
+
+typedef enum {
+  BREAK_LOOP,
+  BREAK_SWITCH
+} BreakContextType;
+
+typedef struct BreakContext {
+  BreakContextType type;
+  struct BreakContext* enclosing;
+  int scopeDepth;
+  JumpList breaks;
+  JumpList continues;
+} BreakContext;
 
 typedef enum {
   CONST_NULL,
@@ -398,6 +420,83 @@ static int emitStringConstant(Compiler* compiler, Token token) {
   return makeConstant(compiler, OBJ_VAL(name), token);
 }
 
+static void initJumpList(JumpList* list) {
+  list->offsets = NULL;
+  list->count = 0;
+  list->capacity = 0;
+}
+
+static void writeJumpList(JumpList* list, int offset) {
+  if (list->capacity < list->count + 1) {
+    int oldCapacity = list->capacity;
+    list->capacity = GROW_CAPACITY(oldCapacity);
+    list->offsets = GROW_ARRAY(int, list->offsets, oldCapacity, list->capacity);
+  }
+  list->offsets[list->count++] = offset;
+}
+
+static void freeJumpList(JumpList* list) {
+  FREE_ARRAY(int, list->offsets, list->capacity);
+  initJumpList(list);
+}
+
+static void patchJumpTo(Compiler* compiler, int offset, int target, Token token) {
+  int jump = target - offset - 2;
+  if (jump < 0 || jump > UINT16_MAX) {
+    compilerErrorAt(compiler, token, "Too much code to jump over.");
+    return;
+  }
+  compiler->chunk->code[offset] = (uint8_t)((jump >> 8) & 0xff);
+  compiler->chunk->code[offset + 1] = (uint8_t)(jump & 0xff);
+}
+
+static void patchJumpList(Compiler* compiler, JumpList* list, int target, Token token) {
+  for (int i = 0; i < list->count; i++) {
+    patchJumpTo(compiler, list->offsets[i], target, token);
+  }
+}
+
+static void emitScopeExits(Compiler* compiler, int targetDepth) {
+  for (int depth = compiler->scopeDepth; depth > targetDepth; depth--) {
+    emitByte(compiler, OP_END_SCOPE, noToken());
+  }
+}
+
+static BreakContext* findLoopContext(Compiler* compiler) {
+  for (BreakContext* ctx = compiler->breakContext; ctx; ctx = ctx->enclosing) {
+    if (ctx->type == BREAK_LOOP) return ctx;
+  }
+  return NULL;
+}
+
+static int emitStringConstantFromChars(Compiler* compiler, const char* chars, int length) {
+  ObjString* name = copyStringWithLength(compiler->vm, chars, length);
+  return makeConstant(compiler, OBJ_VAL(name), noToken());
+}
+
+static int emitTempNameConstant(Compiler* compiler, const char* prefix) {
+  char buffer[64];
+  int length = snprintf(buffer, sizeof(buffer), "__%s%d", prefix, compiler->tempIndex++);
+  if (length < 0) length = 0;
+  if (length >= (int)sizeof(buffer)) length = (int)sizeof(buffer) - 1;
+  return emitStringConstantFromChars(compiler, buffer, length);
+}
+
+static void emitGetVarConstant(Compiler* compiler, int nameIndex) {
+  emitByte(compiler, OP_GET_VAR, noToken());
+  emitShort(compiler, (uint16_t)nameIndex, noToken());
+}
+
+static void emitSetVarConstant(Compiler* compiler, int nameIndex) {
+  emitByte(compiler, OP_SET_VAR, noToken());
+  emitShort(compiler, (uint16_t)nameIndex, noToken());
+}
+
+static void emitDefineVarConstant(Compiler* compiler, int nameIndex) {
+  emitByte(compiler, OP_DEFINE_VAR, noToken());
+  emitShort(compiler, (uint16_t)nameIndex, noToken());
+}
+
 static void emitGc(Compiler* compiler) {
   emitByte(compiler, OP_GC, noToken());
 }
@@ -612,6 +711,13 @@ static ObjFunction* compileFunction(Compiler* compiler, Stmt* stmt, bool isIniti
   VM* vm = compiler->vm;
   ObjString* name = stringFromToken(vm, stmt->as.function.name);
   int arity = stmt->as.function.params.count;
+  int minArity = arity;
+  for (int i = 0; i < arity; i++) {
+    if (stmt->as.function.params.items[i].defaultValue) {
+      minArity = i;
+      break;
+    }
+  }
   ObjString** params = NULL;
   if (arity > 0) {
     params = (ObjString**)malloc(sizeof(ObjString*) * (size_t)arity);
@@ -620,7 +726,7 @@ static ObjFunction* compileFunction(Compiler* compiler, Stmt* stmt, bool isIniti
       exit(1);
     }
     for (int i = 0; i < arity; i++) {
-      params[i] = stringFromToken(vm, stmt->as.function.params.items[i]);
+      params[i] = stringFromToken(vm, stmt->as.function.params.items[i].name);
     }
   }
 
@@ -631,7 +737,7 @@ static ObjFunction* compileFunction(Compiler* compiler, Stmt* stmt, bool isIniti
   }
   initChunk(chunk);
 
-  ObjFunction* function = newFunction(vm, name, arity, isInitializer, params, chunk,
+  ObjFunction* function = newFunction(vm, name, arity, minArity, isInitializer, params, chunk,
                                       NULL, compiler->program);
 
   Compiler fnCompiler;
@@ -639,6 +745,30 @@ static ObjFunction* compileFunction(Compiler* compiler, Stmt* stmt, bool isIniti
   fnCompiler.program = compiler->program;
   fnCompiler.chunk = chunk;
   fnCompiler.hadError = false;
+  fnCompiler.scopeDepth = 0;
+  fnCompiler.tempIndex = 0;
+  fnCompiler.breakContext = NULL;
+
+  for (int i = 0; i < arity; i++) {
+    Param* param = &stmt->as.function.params.items[i];
+    if (!param->defaultValue) continue;
+
+    emitByte(&fnCompiler, OP_ARG_COUNT, param->name);
+    emitConstant(&fnCompiler, NUMBER_VAL((double)(i + 1)), param->name);
+    emitByte(&fnCompiler, OP_LESS, param->name);
+    int skipJump = emitJump(&fnCompiler, OP_JUMP_IF_FALSE, param->name);
+    emitByte(&fnCompiler, OP_POP, noToken());
+    compileExpr(&fnCompiler, param->defaultValue);
+    int nameIndex = emitStringConstant(&fnCompiler, param->name);
+    emitByte(&fnCompiler, OP_SET_VAR, param->name);
+    emitShort(&fnCompiler, (uint16_t)nameIndex, param->name);
+    emitByte(&fnCompiler, OP_POP, noToken());
+    int endJump = emitJump(&fnCompiler, OP_JUMP, param->name);
+    patchJump(&fnCompiler, skipJump, param->name);
+    emitByte(&fnCompiler, OP_POP, noToken());
+    patchJump(&fnCompiler, endJump, param->name);
+    emitGc(&fnCompiler);
+  }
 
   for (int i = 0; i < stmt->as.function.body.count; i++) {
     compileStmt(&fnCompiler, stmt->as.function.body.items[i]);
@@ -679,10 +809,12 @@ static void compileStmt(Compiler* compiler, Stmt* stmt) {
     }
     case STMT_BLOCK: {
       emitByte(compiler, OP_BEGIN_SCOPE, noToken());
+      compiler->scopeDepth++;
       for (int i = 0; i < stmt->as.block.statements.count; i++) {
         compileStmt(compiler, stmt->as.block.statements.items[i]);
       }
       emitByte(compiler, OP_END_SCOPE, noToken());
+      compiler->scopeDepth--;
       emitGc(compiler);
       break;
     }
@@ -732,12 +864,261 @@ static void compileStmt(Compiler* compiler, Stmt* stmt) {
       compileExpr(compiler, stmt->as.whileStmt.condition);
       int exitJump = emitJump(compiler, OP_JUMP_IF_FALSE, stmt->as.whileStmt.keyword);
       emitByte(compiler, OP_POP, noToken());
+      BreakContext loop;
+      loop.type = BREAK_LOOP;
+      loop.enclosing = compiler->breakContext;
+      loop.scopeDepth = compiler->scopeDepth;
+      initJumpList(&loop.breaks);
+      initJumpList(&loop.continues);
+      compiler->breakContext = &loop;
       compileStmt(compiler, stmt->as.whileStmt.body);
+      int continueTarget = compiler->chunk->count;
       emitGc(compiler);
       emitLoop(compiler, loopStart, stmt->as.whileStmt.keyword);
+      compiler->breakContext = loop.enclosing;
       patchJump(compiler, exitJump, stmt->as.whileStmt.keyword);
       emitByte(compiler, OP_POP, noToken());
       emitGc(compiler);
+      int loopEnd = compiler->chunk->count;
+      patchJumpList(compiler, &loop.breaks, loopEnd, stmt->as.whileStmt.keyword);
+      patchJumpList(compiler, &loop.continues, continueTarget, stmt->as.whileStmt.keyword);
+      freeJumpList(&loop.breaks);
+      freeJumpList(&loop.continues);
+      break;
+    }
+    case STMT_FOR: {
+      emitByte(compiler, OP_BEGIN_SCOPE, noToken());
+      compiler->scopeDepth++;
+
+      if (stmt->as.forStmt.initializer) {
+        compileStmt(compiler, stmt->as.forStmt.initializer);
+      }
+
+      int loopStart = compiler->chunk->count;
+      int exitJump = -1;
+      if (stmt->as.forStmt.condition) {
+        compileExpr(compiler, stmt->as.forStmt.condition);
+        exitJump = emitJump(compiler, OP_JUMP_IF_FALSE, stmt->as.forStmt.keyword);
+        emitByte(compiler, OP_POP, noToken());
+      }
+
+      BreakContext loop;
+      loop.type = BREAK_LOOP;
+      loop.enclosing = compiler->breakContext;
+      loop.scopeDepth = compiler->scopeDepth;
+      initJumpList(&loop.breaks);
+      initJumpList(&loop.continues);
+      compiler->breakContext = &loop;
+
+      compileStmt(compiler, stmt->as.forStmt.body);
+
+      int continueTarget = compiler->chunk->count;
+      if (stmt->as.forStmt.increment) {
+        compileExpr(compiler, stmt->as.forStmt.increment);
+        emitByte(compiler, OP_POP, noToken());
+      }
+      emitGc(compiler);
+      emitLoop(compiler, loopStart, stmt->as.forStmt.keyword);
+      compiler->breakContext = loop.enclosing;
+
+      if (exitJump != -1) {
+        patchJump(compiler, exitJump, stmt->as.forStmt.keyword);
+        emitByte(compiler, OP_POP, noToken());
+      }
+      emitGc(compiler);
+
+      int loopEnd = compiler->chunk->count;
+      patchJumpList(compiler, &loop.breaks, loopEnd, stmt->as.forStmt.keyword);
+      patchJumpList(compiler, &loop.continues, continueTarget, stmt->as.forStmt.keyword);
+      freeJumpList(&loop.breaks);
+      freeJumpList(&loop.continues);
+
+      emitByte(compiler, OP_END_SCOPE, noToken());
+      compiler->scopeDepth--;
+      emitGc(compiler);
+      break;
+    }
+    case STMT_FOREACH: {
+      emitByte(compiler, OP_BEGIN_SCOPE, noToken());
+      compiler->scopeDepth++;
+
+      int iterName = emitTempNameConstant(compiler, "iter");
+      compileExpr(compiler, stmt->as.foreachStmt.iterable);
+      emitDefineVarConstant(compiler, iterName);
+
+      int collectionName = iterName;
+      if (stmt->as.foreachStmt.hasKey) {
+        int keysFn = emitStringConstantFromChars(compiler, "keys", 4);
+        emitGetVarConstant(compiler, keysFn);
+        emitGetVarConstant(compiler, iterName);
+        emitByte(compiler, OP_CALL, noToken());
+        emitByte(compiler, 1, noToken());
+        int keysName = emitTempNameConstant(compiler, "keys");
+        emitDefineVarConstant(compiler, keysName);
+        collectionName = keysName;
+      }
+
+      int indexName = emitTempNameConstant(compiler, "i");
+      emitConstant(compiler, NUMBER_VAL(0), noToken());
+      emitDefineVarConstant(compiler, indexName);
+
+      int lenFn = emitStringConstantFromChars(compiler, "len", 3);
+      int loopStart = compiler->chunk->count;
+      emitGetVarConstant(compiler, indexName);
+      emitGetVarConstant(compiler, lenFn);
+      emitGetVarConstant(compiler, collectionName);
+      emitByte(compiler, OP_CALL, noToken());
+      emitByte(compiler, 1, noToken());
+      emitByte(compiler, OP_LESS, stmt->as.foreachStmt.keyword);
+      int exitJump = emitJump(compiler, OP_JUMP_IF_FALSE, stmt->as.foreachStmt.keyword);
+      emitByte(compiler, OP_POP, noToken());
+
+      BreakContext loop;
+      loop.type = BREAK_LOOP;
+      loop.enclosing = compiler->breakContext;
+      loop.scopeDepth = compiler->scopeDepth;
+      initJumpList(&loop.breaks);
+      initJumpList(&loop.continues);
+      compiler->breakContext = &loop;
+
+      if (stmt->as.foreachStmt.hasKey) {
+        int keyName = emitStringConstant(compiler, stmt->as.foreachStmt.key);
+        int valueName = emitStringConstant(compiler, stmt->as.foreachStmt.value);
+        emitGetVarConstant(compiler, collectionName);
+        emitGetVarConstant(compiler, indexName);
+        emitByte(compiler, OP_GET_INDEX, stmt->as.foreachStmt.key);
+        emitByte(compiler, OP_DEFINE_VAR, stmt->as.foreachStmt.key);
+        emitShort(compiler, (uint16_t)keyName, stmt->as.foreachStmt.key);
+
+        emitGetVarConstant(compiler, iterName);
+        emitByte(compiler, OP_GET_VAR, stmt->as.foreachStmt.key);
+        emitShort(compiler, (uint16_t)keyName, stmt->as.foreachStmt.key);
+        emitByte(compiler, OP_GET_INDEX, stmt->as.foreachStmt.value);
+        emitByte(compiler, OP_DEFINE_VAR, stmt->as.foreachStmt.value);
+        emitShort(compiler, (uint16_t)valueName, stmt->as.foreachStmt.value);
+      } else {
+        int valueName = emitStringConstant(compiler, stmt->as.foreachStmt.value);
+        emitGetVarConstant(compiler, iterName);
+        emitGetVarConstant(compiler, indexName);
+        emitByte(compiler, OP_GET_INDEX, stmt->as.foreachStmt.value);
+        emitByte(compiler, OP_DEFINE_VAR, stmt->as.foreachStmt.value);
+        emitShort(compiler, (uint16_t)valueName, stmt->as.foreachStmt.value);
+      }
+
+      compileStmt(compiler, stmt->as.foreachStmt.body);
+
+      int continueTarget = compiler->chunk->count;
+      emitGetVarConstant(compiler, indexName);
+      emitConstant(compiler, NUMBER_VAL(1), noToken());
+      emitByte(compiler, OP_ADD, noToken());
+      emitSetVarConstant(compiler, indexName);
+      emitByte(compiler, OP_POP, noToken());
+      emitGc(compiler);
+      emitLoop(compiler, loopStart, stmt->as.foreachStmt.keyword);
+      compiler->breakContext = loop.enclosing;
+
+      patchJump(compiler, exitJump, stmt->as.foreachStmt.keyword);
+      emitByte(compiler, OP_POP, noToken());
+      emitGc(compiler);
+
+      int loopEnd = compiler->chunk->count;
+      patchJumpList(compiler, &loop.breaks, loopEnd, stmt->as.foreachStmt.keyword);
+      patchJumpList(compiler, &loop.continues, continueTarget, stmt->as.foreachStmt.keyword);
+      freeJumpList(&loop.breaks);
+      freeJumpList(&loop.continues);
+
+      emitByte(compiler, OP_END_SCOPE, noToken());
+      compiler->scopeDepth--;
+      emitGc(compiler);
+      break;
+    }
+    case STMT_SWITCH: {
+      emitByte(compiler, OP_BEGIN_SCOPE, noToken());
+      compiler->scopeDepth++;
+
+      int switchValue = emitTempNameConstant(compiler, "switch");
+      compileExpr(compiler, stmt->as.switchStmt.value);
+      emitDefineVarConstant(compiler, switchValue);
+
+      BreakContext ctx;
+      ctx.type = BREAK_SWITCH;
+      ctx.enclosing = compiler->breakContext;
+      ctx.scopeDepth = compiler->scopeDepth;
+      initJumpList(&ctx.breaks);
+      initJumpList(&ctx.continues);
+      compiler->breakContext = &ctx;
+
+      JumpList endJumps;
+      initJumpList(&endJumps);
+
+      int previousJump = -1;
+      for (int i = 0; i < stmt->as.switchStmt.cases.count; i++) {
+        SwitchCase* caseEntry = &stmt->as.switchStmt.cases.items[i];
+        if (previousJump != -1) {
+          patchJump(compiler, previousJump, stmt->as.switchStmt.keyword);
+          emitByte(compiler, OP_POP, noToken());
+        }
+
+        emitGetVarConstant(compiler, switchValue);
+        compileExpr(compiler, caseEntry->value);
+        emitByte(compiler, OP_EQUAL, stmt->as.switchStmt.keyword);
+        previousJump = emitJump(compiler, OP_JUMP_IF_FALSE, stmt->as.switchStmt.keyword);
+        emitByte(compiler, OP_POP, noToken());
+
+        for (int j = 0; j < caseEntry->statements.count; j++) {
+          compileStmt(compiler, caseEntry->statements.items[j]);
+        }
+
+        int endJump = emitJump(compiler, OP_JUMP, stmt->as.switchStmt.keyword);
+        writeJumpList(&endJumps, endJump);
+      }
+
+      if (previousJump != -1) {
+        patchJump(compiler, previousJump, stmt->as.switchStmt.keyword);
+        emitByte(compiler, OP_POP, noToken());
+      }
+
+      if (stmt->as.switchStmt.hasDefault) {
+        for (int i = 0; i < stmt->as.switchStmt.defaultStatements.count; i++) {
+          compileStmt(compiler, stmt->as.switchStmt.defaultStatements.items[i]);
+        }
+      }
+
+      compiler->breakContext = ctx.enclosing;
+
+      int switchEnd = compiler->chunk->count;
+      patchJumpList(compiler, &endJumps, switchEnd, stmt->as.switchStmt.keyword);
+      patchJumpList(compiler, &ctx.breaks, switchEnd, stmt->as.switchStmt.keyword);
+      freeJumpList(&endJumps);
+      freeJumpList(&ctx.breaks);
+      freeJumpList(&ctx.continues);
+
+      emitByte(compiler, OP_END_SCOPE, noToken());
+      compiler->scopeDepth--;
+      emitGc(compiler);
+      break;
+    }
+    case STMT_BREAK: {
+      if (!compiler->breakContext) {
+        compilerErrorAt(compiler, stmt->as.breakStmt.keyword,
+                        "Cannot use 'break' outside of a loop or switch.");
+        break;
+      }
+      emitScopeExits(compiler, compiler->breakContext->scopeDepth);
+      int jump = emitJump(compiler, OP_JUMP, stmt->as.breakStmt.keyword);
+      writeJumpList(&compiler->breakContext->breaks, jump);
+      break;
+    }
+    case STMT_CONTINUE: {
+      BreakContext* loop = findLoopContext(compiler);
+      if (!loop) {
+        compilerErrorAt(compiler, stmt->as.continueStmt.keyword,
+                        "Cannot use 'continue' outside of a loop.");
+        break;
+      }
+      emitScopeExits(compiler, loop->scopeDepth);
+      int jump = emitJump(compiler, OP_JUMP, stmt->as.continueStmt.keyword);
+      writeJumpList(&loop->continues, jump);
       break;
     }
     case STMT_IMPORT: {
@@ -807,13 +1188,16 @@ ObjFunction* compileProgram(VM* vm, Program* program) {
   }
   initChunk(chunk);
 
-  ObjFunction* function = newFunction(vm, NULL, 0, false, NULL, chunk, vm->env, program);
+  ObjFunction* function = newFunction(vm, NULL, 0, 0, false, NULL, chunk, vm->env, program);
 
   Compiler compiler;
   compiler.vm = vm;
   compiler.program = program;
   compiler.chunk = chunk;
   compiler.hadError = false;
+  compiler.scopeDepth = 0;
+  compiler.tempIndex = 0;
+  compiler.breakContext = NULL;
 
   for (int i = 0; i < program->statements.count; i++) {
     compileStmt(&compiler, program->statements.items[i]);

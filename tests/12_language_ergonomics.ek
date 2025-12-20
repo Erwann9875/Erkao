@@ -1,0 +1,90 @@
+print("for");
+let sum = 0;
+for (let i = 0; i < 5; i = i + 1) {
+  sum = sum + i;
+}
+print("sum", sum);
+
+print("continue");
+let i = 0;
+let total = 0;
+while (i < 5) {
+  i = i + 1;
+  if (i == 3) {
+    continue;
+  }
+  total = total + i;
+}
+print("total", total);
+
+print("break");
+let count = 0;
+for (;;) {
+  count = count + 1;
+  if (count == 2) {
+    break;
+  }
+}
+print("count", count);
+
+let nums = [2, 4, 6];
+let product = 1;
+foreach (n in nums) {
+  product = product * n;
+}
+print("product", product);
+
+let map = { a: 2, b: 3 };
+let sumValues = 0;
+foreach (k, v in map) {
+  if (k == "a") {
+    sumValues = sumValues + v;
+  } else if (k == "b") {
+    sumValues = sumValues + v;
+  }
+}
+print("sumValues", sumValues);
+
+fun greet(name, suffix = "!") {
+  return name + suffix;
+}
+print(greet("hi"));
+print(greet("hi", "?"));
+
+fun add(a, b = 2, c = 3) {
+  return a + b + c;
+}
+print(add(1));
+print(add(1, 5));
+print(add(1, 5, 6));
+
+switch (2) {
+  case 1:
+    print("case", "one");
+    break;
+  case 2:
+    print("case", "two");
+  default:
+    print("case", "other");
+}
+
+switch (1) {
+  case 1:
+    print("break", "switch");
+    break;
+  default:
+    print("break", "default");
+}
+
+switch (3) {
+  case 1:
+    print("switch", "one");
+  case 2:
+    print("switch", "two");
+  default:
+    print("switch", "default");
+}
+
+from "modules/ergonomics.ek" import mod;
+print("import", mod.value);
+print("import", mod.double(4));

@@ -16,6 +16,7 @@ typedef struct {
   Env* previousEnv;
   Program* previousProgram;
   Value receiver;
+  int argCount;
   bool isModule;
   bool discardResult;
   ObjInstance* moduleInstance;

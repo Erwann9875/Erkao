@@ -154,7 +154,7 @@ static Value evaluateSetIndex(VM* vm, Token token, Value object, Value index, Va
 
 static bool callFunction(VM* vm, ObjFunction* function, Value receiver,
                          bool hasReceiver, int argc) {
-  if (argc != function->arity) {
+  if (argc < function->minArity || argc > function->arity) {
     Token token;
     memset(&token, 0, sizeof(Token));
     runtimeError(vm, token, "Wrong number of arguments.");
@@ -175,6 +175,7 @@ static bool callFunction(VM* vm, ObjFunction* function, Value receiver,
   frame->previousEnv = vm->env;
   frame->previousProgram = vm->currentProgram;
   frame->receiver = hasReceiver ? receiver : NULL_VAL;
+  frame->argCount = argc;
   frame->isModule = false;
   frame->discardResult = false;
   frame->moduleInstance = NULL;
@@ -188,7 +189,8 @@ static bool callFunction(VM* vm, ObjFunction* function, Value receiver,
     envDefine(env, thisName, receiver);
   }
   for (int i = 0; i < function->arity; i++) {
-    envDefine(env, function->params[i], frame->slots[i + 1]);
+    Value arg = i < argc ? frame->slots[i + 1] : NULL_VAL;
+    envDefine(env, function->params[i], arg);
   }
 
   vm->env = env;
@@ -526,6 +528,9 @@ static bool run(VM* vm) {
         frame = &vm->frames[vm->frameCount - 1];
         break;
       }
+      case OP_ARG_COUNT:
+        push(vm, NUMBER_VAL((double)frame->argCount));
+        break;
       case OP_CLOSURE: {
         ObjFunction* proto = (ObjFunction*)AS_OBJ(READ_CONSTANT());
         ObjFunction* function = cloneFunction(vm, proto, vm->env);
@@ -676,6 +681,7 @@ static bool run(VM* vm) {
         moduleFrame->previousEnv = previousEnv;
         moduleFrame->previousProgram = vm->currentProgram;
         moduleFrame->receiver = NULL_VAL;
+        moduleFrame->argCount = 0;
         moduleFrame->isModule = true;
         moduleFrame->discardResult = true;
         moduleFrame->moduleInstance = moduleInstance;
@@ -747,6 +753,7 @@ static bool callScript(VM* vm, ObjFunction* function) {
   frame->previousEnv = vm->env;
   frame->previousProgram = vm->currentProgram;
   frame->receiver = NULL_VAL;
+  frame->argCount = 0;
   frame->isModule = false;
   frame->discardResult = false;
   frame->moduleInstance = NULL;

@@ -76,11 +76,13 @@ ObjString* stringFromToken(VM* vm, Token token) {
   return copyStringWithLength(vm, token.start, token.length);
 }
 
-ObjFunction* newFunction(VM* vm, ObjString* name, int arity, bool isInitializer,
-                         ObjString** params, Chunk* chunk, Env* closure, Program* program) {
+ObjFunction* newFunction(VM* vm, ObjString* name, int arity, int minArity,
+                         bool isInitializer, ObjString** params, Chunk* chunk,
+                         Env* closure, Program* program) {
   ObjFunction* function = (ObjFunction*)allocateObject(vm, sizeof(ObjFunction), OBJ_FUNCTION,
                                                       OBJ_GEN_OLD);
   function->arity = arity;
+  function->minArity = minArity;
   function->isInitializer = isInitializer;
   function->name = name;
   function->chunk = chunk;
@@ -105,7 +107,7 @@ ObjFunction* cloneFunction(VM* vm, ObjFunction* proto, Env* closure) {
       params[i] = proto->params[i];
     }
   }
-  return newFunction(vm, proto->name, proto->arity, proto->isInitializer,
+  return newFunction(vm, proto->name, proto->arity, proto->minArity, proto->isInitializer,
                      params, chunk, closure, proto->program);
 }
 

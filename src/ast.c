@@ -56,17 +56,17 @@ void initParamArray(ParamArray* array) {
   array->capacity = 0;
 }
 
-void writeParamArray(ParamArray* array, Token param) {
+void writeParamArray(ParamArray* array, Param param) {
   if (array->capacity < array->count + 1) {
     int oldCapacity = array->capacity;
     array->capacity = GROW_CAPACITY(oldCapacity);
-    array->items = GROW_ARRAY(Token, array->items, oldCapacity, array->capacity);
+    array->items = GROW_ARRAY(Param, array->items, oldCapacity, array->capacity);
   }
   array->items[array->count++] = param;
 }
 
 void freeParamArray(ParamArray* array) {
-  FREE_ARRAY(Token, array->items, array->capacity);
+  FREE_ARRAY(Param, array->items, array->capacity);
   initParamArray(array);
 }
 
@@ -90,6 +90,25 @@ void freeMapEntryArray(MapEntryArray* array) {
   initMapEntryArray(array);
 }
 
+void initSwitchCaseArray(SwitchCaseArray* array) {
+  array->items = NULL;
+  array->count = 0;
+  array->capacity = 0;
+}
+
+void writeSwitchCaseArray(SwitchCaseArray* array, SwitchCase entry) {
+  if (array->capacity < array->count + 1) {
+    int oldCapacity = array->capacity;
+    array->capacity = GROW_CAPACITY(oldCapacity);
+    array->items = GROW_ARRAY(SwitchCase, array->items, oldCapacity, array->capacity);
+  }
+  array->items[array->count++] = entry;
+}
+
+void freeSwitchCaseArray(SwitchCaseArray* array) {
+  FREE_ARRAY(SwitchCase, array->items, array->capacity);
+  initSwitchCaseArray(array);
+}
 Expr* newLiteralExpr(Literal literal) {
   Expr* expr = (Expr*)allocateNode(sizeof(Expr));
   expr->type = EXPR_LITERAL;
@@ -252,6 +271,57 @@ Stmt* newWhileStmt(Token keyword, Expr* condition, Stmt* body) {
   return stmt;
 }
 
+Stmt* newForStmt(Token keyword, Stmt* initializer, Expr* condition,
+                 Expr* increment, Stmt* body) {
+  Stmt* stmt = (Stmt*)allocateNode(sizeof(Stmt));
+  stmt->type = STMT_FOR;
+  stmt->as.forStmt.keyword = keyword;
+  stmt->as.forStmt.initializer = initializer;
+  stmt->as.forStmt.condition = condition;
+  stmt->as.forStmt.increment = increment;
+  stmt->as.forStmt.body = body;
+  return stmt;
+}
+
+Stmt* newForeachStmt(Token keyword, Token key, Token value, bool hasKey,
+                     Expr* iterable, Stmt* body) {
+  Stmt* stmt = (Stmt*)allocateNode(sizeof(Stmt));
+  stmt->type = STMT_FOREACH;
+  stmt->as.foreachStmt.keyword = keyword;
+  stmt->as.foreachStmt.key = key;
+  stmt->as.foreachStmt.value = value;
+  stmt->as.foreachStmt.hasKey = hasKey;
+  stmt->as.foreachStmt.iterable = iterable;
+  stmt->as.foreachStmt.body = body;
+  return stmt;
+}
+
+Stmt* newSwitchStmt(Token keyword, Expr* value, SwitchCaseArray cases,
+                    StmtArray defaultStatements, bool hasDefault) {
+  Stmt* stmt = (Stmt*)allocateNode(sizeof(Stmt));
+  stmt->type = STMT_SWITCH;
+  stmt->as.switchStmt.keyword = keyword;
+  stmt->as.switchStmt.value = value;
+  stmt->as.switchStmt.cases = cases;
+  stmt->as.switchStmt.defaultStatements = defaultStatements;
+  stmt->as.switchStmt.hasDefault = hasDefault;
+  return stmt;
+}
+
+Stmt* newBreakStmt(Token keyword) {
+  Stmt* stmt = (Stmt*)allocateNode(sizeof(Stmt));
+  stmt->type = STMT_BREAK;
+  stmt->as.breakStmt.keyword = keyword;
+  return stmt;
+}
+
+Stmt* newContinueStmt(Token keyword) {
+  Stmt* stmt = (Stmt*)allocateNode(sizeof(Stmt));
+  stmt->type = STMT_CONTINUE;
+  stmt->as.continueStmt.keyword = keyword;
+  return stmt;
+}
+
 Stmt* newImportStmt(Token keyword, Expr* path, Token alias, bool hasAlias) {
   Stmt* stmt = (Stmt*)allocateNode(sizeof(Stmt));
   stmt->type = STMT_IMPORT;
@@ -388,12 +458,46 @@ void freeStmt(Stmt* stmt) {
       freeExpr(stmt->as.whileStmt.condition);
       freeStmt(stmt->as.whileStmt.body);
       break;
+    case STMT_FOR:
+      freeStmt(stmt->as.forStmt.initializer);
+      freeExpr(stmt->as.forStmt.condition);
+      freeExpr(stmt->as.forStmt.increment);
+      freeStmt(stmt->as.forStmt.body);
+      break;
+    case STMT_FOREACH:
+      freeExpr(stmt->as.foreachStmt.iterable);
+      freeStmt(stmt->as.foreachStmt.body);
+      break;
+    case STMT_SWITCH:
+      freeExpr(stmt->as.switchStmt.value);
+      for (int i = 0; i < stmt->as.switchStmt.cases.count; i++) {
+        SwitchCase* caseEntry = &stmt->as.switchStmt.cases.items[i];
+        freeExpr(caseEntry->value);
+        for (int j = 0; j < caseEntry->statements.count; j++) {
+          freeStmt(caseEntry->statements.items[j]);
+        }
+        freeStmtArray(&caseEntry->statements);
+      }
+      freeSwitchCaseArray(&stmt->as.switchStmt.cases);
+      if (stmt->as.switchStmt.hasDefault) {
+        for (int i = 0; i < stmt->as.switchStmt.defaultStatements.count; i++) {
+          freeStmt(stmt->as.switchStmt.defaultStatements.items[i]);
+        }
+        freeStmtArray(&stmt->as.switchStmt.defaultStatements);
+      } else {
+        freeStmtArray(&stmt->as.switchStmt.defaultStatements);
+      }
+      break;
+    case STMT_BREAK:
+      break;
+    case STMT_CONTINUE:
+      break;
     case STMT_IMPORT:
       freeExpr(stmt->as.importStmt.path);
       break;
     case STMT_FUNCTION:
       for (int i = 0; i < stmt->as.function.params.count; i++) {
-        (void)stmt->as.function.params.items[i];
+        freeExpr(stmt->as.function.params.items[i].defaultValue);
       }
       freeParamArray(&stmt->as.function.params);
       for (int i = 0; i < stmt->as.function.body.count; i++) {

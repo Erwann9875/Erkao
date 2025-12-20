@@ -87,6 +87,7 @@ struct ObjString {
 struct ObjFunction {
   Obj obj;
   int arity;
+  int minArity;
   bool isInitializer;
   ObjString* name;
   Chunk* chunk;
@@ -146,8 +147,9 @@ ObjString* copyStringWithLength(VM* vm, const char* chars, int length);
 ObjString* takeStringWithLength(VM* vm, char* chars, int length);
 ObjString* stringFromToken(VM* vm, Token token);
 
-ObjFunction* newFunction(VM* vm, ObjString* name, int arity, bool isInitializer,
-                         ObjString** params, Chunk* chunk, Env* closure, Program* program);
+ObjFunction* newFunction(VM* vm, ObjString* name, int arity, int minArity,
+                         bool isInitializer, ObjString** params, Chunk* chunk,
+                         Env* closure, Program* program);
 ObjFunction* cloneFunction(VM* vm, ObjFunction* proto, Env* closure);
 ObjNative* newNative(VM* vm, NativeFn function, int arity, ObjString* name);
 ObjClass* newClass(VM* vm, ObjString* name, ObjMap* methods);

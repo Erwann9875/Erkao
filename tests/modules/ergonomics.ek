@@ -1,0 +1,5 @@
+let value = 7;
+
+fun double(x) {
+  return x * 2;
+}

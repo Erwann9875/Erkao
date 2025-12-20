@@ -20,7 +20,12 @@ typedef struct {
 } StmtArray;
 
 typedef struct {
-  Token* items;
+  Token name;
+  Expr* defaultValue;
+} Param;
+
+typedef struct {
+  Param* items;
   int count;
   int capacity;
 } ParamArray;
@@ -51,6 +56,17 @@ typedef struct {
   int count;
   int capacity;
 } MapEntryArray;
+
+typedef struct {
+  Expr* value;
+  StmtArray statements;
+} SwitchCase;
+
+typedef struct {
+  SwitchCase* items;
+  int count;
+  int capacity;
+} SwitchCaseArray;
 
 typedef enum {
   EXPR_LITERAL,
@@ -143,6 +159,11 @@ typedef enum {
   STMT_BLOCK,
   STMT_IF,
   STMT_WHILE,
+  STMT_FOR,
+  STMT_FOREACH,
+  STMT_SWITCH,
+  STMT_BREAK,
+  STMT_CONTINUE,
   STMT_IMPORT,
   STMT_FUNCTION,
   STMT_RETURN,
@@ -175,6 +196,34 @@ struct Stmt {
     } whileStmt;
     struct {
       Token keyword;
+      Stmt* initializer;
+      Expr* condition;
+      Expr* increment;
+      Stmt* body;
+    } forStmt;
+    struct {
+      Token keyword;
+      Token key;
+      Token value;
+      bool hasKey;
+      Expr* iterable;
+      Stmt* body;
+    } foreachStmt;
+    struct {
+      Token keyword;
+      Expr* value;
+      SwitchCaseArray cases;
+      StmtArray defaultStatements;
+      bool hasDefault;
+    } switchStmt;
+    struct {
+      Token keyword;
+    } breakStmt;
+    struct {
+      Token keyword;
+    } continueStmt;
+    struct {
+      Token keyword;
       Expr* path;
       Token alias;
       bool hasAlias;
@@ -204,12 +253,16 @@ void writeStmtArray(StmtArray* array, Stmt* stmt);
 void freeStmtArray(StmtArray* array);
 
 void initParamArray(ParamArray* array);
-void writeParamArray(ParamArray* array, Token param);
+void writeParamArray(ParamArray* array, Param param);
 void freeParamArray(ParamArray* array);
 
 void initMapEntryArray(MapEntryArray* array);
 void writeMapEntryArray(MapEntryArray* array, MapEntry entry);
 void freeMapEntryArray(MapEntryArray* array);
+
+void initSwitchCaseArray(SwitchCaseArray* array);
+void writeSwitchCaseArray(SwitchCaseArray* array, SwitchCase entry);
+void freeSwitchCaseArray(SwitchCaseArray* array);
 
 Expr* newLiteralExpr(Literal literal);
 Expr* newGroupingExpr(Expr* expression);
@@ -232,6 +285,14 @@ Stmt* newVarStmt(Token name, Expr* initializer);
 Stmt* newBlockStmt(StmtArray statements);
 Stmt* newIfStmt(Token keyword, Expr* condition, Stmt* thenBranch, Stmt* elseBranch);
 Stmt* newWhileStmt(Token keyword, Expr* condition, Stmt* body);
+Stmt* newForStmt(Token keyword, Stmt* initializer, Expr* condition,
+                 Expr* increment, Stmt* body);
+Stmt* newForeachStmt(Token keyword, Token key, Token value, bool hasKey,
+                     Expr* iterable, Stmt* body);
+Stmt* newSwitchStmt(Token keyword, Expr* value, SwitchCaseArray cases,
+                    StmtArray defaultStatements, bool hasDefault);
+Stmt* newBreakStmt(Token keyword);
+Stmt* newContinueStmt(Token keyword);
 Stmt* newImportStmt(Token keyword, Expr* path, Token alias, bool hasAlias);
 Stmt* newFunctionStmt(Token name, ParamArray params, StmtArray body);
 Stmt* newReturnStmt(Token keyword, Expr* value);

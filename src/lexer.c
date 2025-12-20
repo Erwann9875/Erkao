@@ -158,14 +158,31 @@ static ErkaoTokenType identifierType(Scanner* scanner) {
         }
       }
       return TOKEN_IDENTIFIER;
+    case 'b':
+      return checkKeyword(scanner, 1, 4, "reak", TOKEN_BREAK);
     case 'c':
-      return checkKeyword(scanner, 1, 4, "lass", TOKEN_CLASS);
+      if ((int)(scanner->current - scanner->start) > 1) {
+        switch (scanner->start[1]) {
+          case 'a': return checkKeyword(scanner, 1, 3, "ase", TOKEN_CASE);
+          case 'l': return checkKeyword(scanner, 1, 4, "lass", TOKEN_CLASS);
+          case 'o': return checkKeyword(scanner, 1, 7, "ontinue", TOKEN_CONTINUE);
+        }
+      }
+      return TOKEN_IDENTIFIER;
+    case 'd':
+      return checkKeyword(scanner, 1, 6, "efault", TOKEN_DEFAULT);
     case 'e':
       return checkKeyword(scanner, 1, 3, "lse", TOKEN_ELSE);
     case 'f':
       if ((int)(scanner->current - scanner->start) > 1) {
         switch (scanner->start[1]) {
           case 'a': return checkKeyword(scanner, 2, 3, "lse", TOKEN_FALSE);
+          case 'o': {
+            ErkaoTokenType type = checkKeyword(scanner, 1, 6, "oreach", TOKEN_FOREACH);
+            if (type != TOKEN_IDENTIFIER) return type;
+            return checkKeyword(scanner, 1, 2, "or", TOKEN_FOR);
+          }
+          case 'r': return checkKeyword(scanner, 1, 3, "rom", TOKEN_FROM);
           case 'u': return checkKeyword(scanner, 2, 1, "n", TOKEN_FUN);
         }
       }
@@ -175,6 +192,7 @@ static ErkaoTokenType identifierType(Scanner* scanner) {
         switch (scanner->start[1]) {
           case 'f': return checkKeyword(scanner, 1, 1, "f", TOKEN_IF);
           case 'm': return checkKeyword(scanner, 2, 4, "port", TOKEN_IMPORT);
+          case 'n': return checkKeyword(scanner, 1, 1, "n", TOKEN_IN);
         }
       }
       return TOKEN_IDENTIFIER;
@@ -186,6 +204,8 @@ static ErkaoTokenType identifierType(Scanner* scanner) {
       return checkKeyword(scanner, 1, 1, "r", TOKEN_OR);
     case 'r':
       return checkKeyword(scanner, 1, 5, "eturn", TOKEN_RETURN);
+    case 's':
+      return checkKeyword(scanner, 1, 5, "witch", TOKEN_SWITCH);
     case 't':
       if ((int)(scanner->current - scanner->start) > 1) {
         switch (scanner->start[1]) {
@@ -363,6 +383,15 @@ const char* tokenTypeName(ErkaoTokenType type) {
     case TOKEN_TRUE: return "TRUE";
     case TOKEN_LET: return "LET";
     case TOKEN_WHILE: return "WHILE";
+    case TOKEN_FOR: return "FOR";
+    case TOKEN_FOREACH: return "FOREACH";
+    case TOKEN_SWITCH: return "SWITCH";
+    case TOKEN_CASE: return "CASE";
+    case TOKEN_DEFAULT: return "DEFAULT";
+    case TOKEN_BREAK: return "BREAK";
+    case TOKEN_CONTINUE: return "CONTINUE";
+    case TOKEN_IN: return "IN";
+    case TOKEN_FROM: return "FROM";
     case TOKEN_ERROR: return "ERROR";
     case TOKEN_EOF: return "EOF";
     default: return "UNKNOWN";

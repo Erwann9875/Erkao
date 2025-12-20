@@ -1,0 +1,28 @@
+fun shout(msg, suffix = "!") {
+  print(msg + suffix);
+}
+
+shout("Hello");
+
+for (let i = 0; i < 3; i = i + 1) {
+  print("i", i);
+}
+
+let items = [1, 2, 3];
+foreach (v in items) {
+  print("item", v);
+}
+
+let scores = { alice: 10, bob: 12 };
+foreach (name, score in scores) {
+  print(name, score);
+}
+
+switch (2) {
+  case 1:
+    print("one");
+  case 2:
+    print("two");
+  default:
+    print("other");
+}

@@ -85,9 +85,17 @@ void synchronize(Parser* parser) {
       case TOKEN_FUN:
       case TOKEN_LET:
       case TOKEN_IMPORT:
+      case TOKEN_FROM:
       case TOKEN_IF:
       case TOKEN_WHILE:
+      case TOKEN_FOR:
+      case TOKEN_FOREACH:
+      case TOKEN_SWITCH:
       case TOKEN_RETURN:
+      case TOKEN_BREAK:
+      case TOKEN_CONTINUE:
+      case TOKEN_CASE:
+      case TOKEN_DEFAULT:
         return;
       default:
         break;
