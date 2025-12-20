@@ -163,7 +163,8 @@ void gcCollect(VM* vm) {
   vm->gcSweepEnv = &vm->envs;
   vm->gcSweeping = true;
 
-  if (sweepOldStep(vm, GC_SWEEP_BATCH)) {
-    finishFullSweep(vm);
+  while (!sweepOldStep(vm, GC_SWEEP_BATCH)) {
+    // Sweep old objects/envs to completion in this collection cycle.
   }
+  finishFullSweep(vm);
 }

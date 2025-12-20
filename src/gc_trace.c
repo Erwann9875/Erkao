@@ -222,6 +222,7 @@ void markRoots(VM* vm) {
   for (int i = 0; i < vm->frameCount; i++) {
     markObject(vm, (Obj*)vm->frames[i].function);
     markValue(vm, vm->frames[i].receiver);
+    markEnv(vm, vm->frames[i].previousEnv);
     if (vm->frames[i].moduleInstance) {
       markObject(vm, (Obj*)vm->frames[i].moduleInstance);
     }
@@ -249,6 +250,7 @@ void markYoungRoots(VM* vm) {
   for (int i = 0; i < vm->frameCount; i++) {
     markYoungObject(vm, (Obj*)vm->frames[i].function);
     markYoungValue(vm, vm->frames[i].receiver);
+    markYoungFromEnv(vm, vm->frames[i].previousEnv);
     if (vm->frames[i].moduleInstance) {
       markYoungObject(vm, (Obj*)vm->frames[i].moduleInstance);
     }
