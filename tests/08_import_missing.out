@@ -1,3 +1,5 @@
 tests/08_import_missing.ek:1:1: RuntimeError at 'import': Failed to read import path.
   import "missing_file.ek";
   ^~~~~~
+Stack trace (most recent call last):
+  #0 <script> (tests/08_import_missing.ek:1:1) -> 'import'

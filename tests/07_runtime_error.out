@@ -1,3 +1,5 @@
 tests/07_runtime_error.ek:1:7: RuntimeError at 'unknown': Undefined variable.
   print(unknown);
         ^~~~~~~
+Stack trace (most recent call last):
+  #0 <script> (tests/07_runtime_error.ek:1:7) -> 'unknown'

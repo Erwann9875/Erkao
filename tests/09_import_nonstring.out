@@ -1,3 +1,5 @@
 tests/09_import_nonstring.ek:1:1: RuntimeError at 'import': Import path must be a string.
   import 123;
   ^~~~~~
+Stack trace (most recent call last):
+  #0 <script> (tests/09_import_nonstring.ek:1:1) -> 'import'
