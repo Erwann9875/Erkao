@@ -20,6 +20,7 @@ add_executable(erkao
   src/exec.c
   src/imports.c
   src/stdlib.c
+  src/package.c
   src/gc_core.c
   src/gc_trace.c
   src/gc_young.c

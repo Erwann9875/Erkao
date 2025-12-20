@@ -41,6 +41,16 @@ Run with bytecode output:
 ./build/Debug/erkao.exe run --bytecode ./examples/hello.ek
 ```
 
+Package manager:
+
+```sh
+./build/Debug/erkao.exe pkg init
+./build/Debug/erkao.exe pkg add ../path/to/pkg
+./build/Debug/erkao.exe pkg add ../path/to/pkg --global
+./build/Debug/erkao.exe pkg install
+./build/Debug/erkao.exe pkg list
+```
+
 Start a REPL:
 
 ```sh
@@ -163,6 +173,46 @@ Semantics:
 - Each file is loaded and executed at most once.
 - `as name` binds the module object; use `name.symbol` to access exports.
 
+## Packaging
+
+Erkao supports versioned packages stored under `packages/<name>/<version>/`.
+
+Example manifest (`erkao.mod`):
+
+```
+module my-app 0.1.0
+require alpha 1.0.0
+```
+
+Lockfile (`erkao.lock`):
+
+```
+lock 1
+alpha 1.0.0
+```
+
+Import resolution order for non-relative paths:
+
+1. `ERKAO_PATH` entries and `--module-path` entries.
+2. `packages/<name>/<version>` (locked if present, otherwise latest installed).
+3. Global cache at `%USERPROFILE%\.erkao\packages` or `~/.erkao/packages`
+   (override with `ERKAO_PACKAGES`).
+
+Package entry points:
+
+- `packages/<name>/<version>/main.ek`
+- `packages/<name>/<version>/index.ek`
+
+`pkg add` expects a folder that contains `erkao.mod` and will copy it into
+`packages/<name>/<version>/`. Use `--global` to also cache it in the global store.
+
+Versioned imports:
+
+```
+import "alpha@1.0.0" as alpha;
+import "alpha/utils" as utils;
+```
+
 ## Keywords
 
 `let`, `fun`, `class`, `if`, `else`, `while`, `import`, `as`, `return`, `true`, `false`, `null`, `this`, `and`, `or`
@@ -245,3 +295,5 @@ Build a plugin with include paths to `include` and `src`.
 - Source and AST programs are freed when no live functions reference them.
 - `http` is currently Windows-only (WinHTTP).
 - `http` responses are maps with `status`, `body`, and `headers`.
+- `ERKAO_PATH` adds module search paths (separated by `;` on Windows, `:` elsewhere).
+- `ERKAO_PACKAGES` overrides the global packages directory.

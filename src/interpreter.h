@@ -76,11 +76,18 @@ typedef struct VM {
   bool gcLogFullActive;
   bool hadError;
   bool debugBytecode;
+  char** modulePaths;
+  int modulePathCount;
+  int modulePathCapacity;
+  char* projectRoot;
+  char* globalPackagesDir;
 } VM;
 
 void vmInit(VM* vm);
 void vmFree(VM* vm);
 void vmSetArgs(VM* vm, int argc, const char** argv);
+void vmAddModulePath(VM* vm, const char* path);
+void vmSetProjectRoot(VM* vm, const char* path);
 void defineNative(VM* vm, const char* name, NativeFn function, int arity);
 void defineGlobal(VM* vm, const char* name, Value value);
 

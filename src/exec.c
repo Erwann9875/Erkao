@@ -605,30 +605,17 @@ static bool run(VM* vm) {
 
         ObjString* pathString = asString(pathValue);
         char* resolvedPath = resolveImportPath(
-            vm->currentProgram ? vm->currentProgram->path : NULL,
+            vm, vm->currentProgram ? vm->currentProgram->path : NULL,
             pathString->chars);
         if (!resolvedPath) {
           runtimeError(vm, currentToken(frame), "Failed to resolve import path.");
           return false;
         }
 
-        char* candidatePath = resolvedPath;
-        if (!hasExtension(candidatePath)) {
-          size_t length = strlen(candidatePath);
-          char* withExt = (char*)malloc(length + 4);
-          if (!withExt) {
-            fprintf(stderr, "Out of memory.\n");
-            exit(1);
-          }
-          memcpy(withExt, candidatePath, length);
-          memcpy(withExt + length, ".ek", 4);
-          candidatePath = withExt;
-        }
-
         Token pathToken;
         memset(&pathToken, 0, sizeof(Token));
-        pathToken.start = candidatePath;
-        pathToken.length = (int)strlen(candidatePath);
+        pathToken.start = resolvedPath;
+        pathToken.length = (int)strlen(resolvedPath);
 
         Value cached;
         if (mapGetByToken(vm->modules, pathToken, &cached)) {
@@ -636,35 +623,33 @@ static bool run(VM* vm) {
             if (hasAlias) {
               envDefine(vm->env, alias, cached);
             }
-            if (candidatePath != resolvedPath) free(candidatePath);
             free(resolvedPath);
             break;
           }
           if (IS_BOOL(cached) && AS_BOOL(cached)) {
             runtimeError(vm, currentToken(frame), "Circular import detected.");
-            if (candidatePath != resolvedPath) free(candidatePath);
             free(resolvedPath);
             return false;
           }
         }
 
-        ObjString* key = copyStringWithLength(vm, candidatePath, pathToken.length);
+        ObjString* key = copyStringWithLength(vm, resolvedPath, pathToken.length);
         mapSet(vm->modules, key, BOOL_VAL(true));
 
         Env* moduleEnv = newEnv(vm, vm->globals);
         Env* previousEnv = vm->env;
         vm->env = moduleEnv;
-        ObjFunction* moduleFunction = loadModuleFunction(vm, currentToken(frame), candidatePath);
+        ObjFunction* moduleFunction =
+            loadModuleFunction(vm, currentToken(frame), resolvedPath);
         vm->env = previousEnv;
 
         if (!moduleFunction) {
           mapSet(vm->modules, key, NULL_VAL);
-          if (candidatePath != resolvedPath) free(candidatePath);
           free(resolvedPath);
           return false;
         }
 
-        ObjClass* klass = newClass(vm, moduleNameFromPath(vm, candidatePath), newMap(vm));
+        ObjClass* klass = newClass(vm, moduleNameFromPath(vm, resolvedPath), newMap(vm));
         ObjInstance* moduleInstance = newInstanceWithFields(vm, klass, moduleEnv->values);
 
         push(vm, OBJ_VAL(moduleFunction));
@@ -693,7 +678,6 @@ static bool run(VM* vm) {
         vm->env = moduleEnv;
         vm->currentProgram = moduleFunction->program;
 
-        if (candidatePath != resolvedPath) free(candidatePath);
         free(resolvedPath);
 
         frame = &vm->frames[vm->frameCount - 1];

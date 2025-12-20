@@ -3,6 +3,7 @@
 #include "interpreter.h"
 #include "program.h"
 #include "tooling.h"
+#include "package.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -453,6 +454,7 @@ static void printHelp(const char* exe) {
           "  %s [--help|-h] [--version|-v]\n"
           "  %s repl\n"
           "  %s run [--bytecode|--disasm] <file> [-- args...]\n"
+          "  %s pkg <command>\n"
           "  %s fmt <file> [--check]\n"
           "  %s lint <file>\n"
           "  %s [--bytecode|--disasm] <file> [args...]\n"
@@ -460,6 +462,7 @@ static void printHelp(const char* exe) {
           "Commands:\n"
           "  run   Run a script file.\n"
           "  repl  Start the interactive REPL.\n"
+          "  pkg   Manage packages.\n"
           "  fmt   Format a source file in-place.\n"
           "  lint  Run simple formatting checks.\n"
           "\n"
@@ -468,8 +471,9 @@ static void printHelp(const char* exe) {
           "  -v, --version  Show the version.\n"
           "  --bytecode     Print bytecode before running.\n"
           "  --disasm       Alias for --bytecode.\n"
+          "  --module-path  Add a module search path.\n"
           "  --check        Check formatting without writing changes.\n",
-          exe, exe, exe, exe, exe, exe);
+          exe, exe, exe, exe, exe, exe, exe);
 }
 
 static void printVersion(void) {
@@ -546,9 +550,23 @@ static int runWithArgs(VM* vm, const char* path, int argc, const char** argv) {
 static int runFileCommand(VM* vm, const char* exe, int argc, const char** argv, int startIndex) {
   int index = startIndex;
   bool debugBytecode = false;
-  while (index < argc && isDebugFlag(argv[index])) {
-    debugBytecode = true;
-    index++;
+  while (index < argc) {
+    if (isDebugFlag(argv[index])) {
+      debugBytecode = true;
+      index++;
+      continue;
+    }
+    if (isFlag(argv[index], "--module-path", "-M")) {
+      if (index + 1 >= argc) {
+        fprintf(stderr, "Missing value for --module-path.\n");
+        printHelp(exe);
+        return 64;
+      }
+      vmAddModulePath(vm, argv[index + 1]);
+      index += 2;
+      continue;
+    }
+    break;
   }
 
   if (index >= argc || isFlag(argv[index], "--help", "-h")) {
@@ -576,6 +594,9 @@ int main(int argc, const char** argv) {
   }
   if (argc > 1 && strcmp(argv[1], "lint") == 0) {
     return runLintCommand(exe, argc, argv);
+  }
+  if (argc > 1 && strcmp(argv[1], "pkg") == 0) {
+    return runPackageCommand(exe, argc, argv);
   }
 
   VM vm;

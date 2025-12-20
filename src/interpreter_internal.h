@@ -13,7 +13,7 @@ bool isTruthy(Value value);
 bool isString(Value value);
 ObjString* asString(Value value);
 
-char* resolveImportPath(const char* currentPath, const char* importPath);
+char* resolveImportPath(VM* vm, const char* currentPath, const char* importPath);
 bool hasExtension(const char* path);
 ObjFunction* loadModuleFunction(VM* vm, Token keyword, const char* path);
 
