@@ -1,6 +1,7 @@
 #include "interpreter_internal.h"
 #include "compiler.h"
 #include "chunk.h"
+#include "disasm.h"
 #include "gc.h"
 #include "program.h"
 
@@ -776,6 +777,9 @@ bool interpret(VM* vm, Program* program) {
     programRunEnd(vm, program);
     vm->currentProgram = previousProgram;
     return false;
+  }
+  if (vm->debugBytecode) {
+    disassembleFunction(function);
   }
 
   resetStack(vm);

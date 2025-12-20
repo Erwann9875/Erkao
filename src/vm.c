@@ -108,6 +108,7 @@ void vmInit(VM* vm) {
   vm->gcLogBeforeEnv = 0;
   vm->gcLogFullActive = false;
   vm->hadError = false;
+  vm->debugBytecode = false;
   vm->frameCount = 0;
   vm->stackTop = vm->stack;
   vm->globals = newEnv(vm, NULL);

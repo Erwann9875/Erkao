@@ -1236,6 +1236,7 @@ static int opcodeSize(uint8_t opcode) {
       return 5;
     case OP_IMPORT:
       return 4;
+    case OP_ARG_COUNT:
     default:
       return 1;
   }

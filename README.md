@@ -35,6 +35,12 @@ Run a file:
 ./build/Debug/erkao.exe run ./examples/hello.ek
 ```
 
+Run with bytecode output:
+
+```sh
+./build/Debug/erkao.exe run --bytecode ./examples/hello.ek
+```
+
 Start a REPL:
 
 ```sh
@@ -53,6 +59,24 @@ Backward-compatible shorthand:
 ./build/Debug/erkao.exe ./examples/hello.ek
 ```
 
+Format a file:
+
+```sh
+./build/Debug/erkao.exe fmt ./examples/hello.ek
+```
+
+Check formatting only:
+
+```sh
+./build/Debug/erkao.exe fmt --check ./examples/hello.ek
+```
+
+Lint a file:
+
+```sh
+./build/Debug/erkao.exe lint ./examples/hello.ek
+```
+
 ## Testing
 
 Run the golden tests from the repo root:
@@ -66,6 +90,21 @@ Run the GC stress test with logging:
 ```powershell
 .\scripts\run-gc-stress.ps1
 ```
+
+Format tests and examples:
+
+```powershell
+.\scripts\format.ps1
+```
+
+Lint tests and examples:
+
+```powershell
+.\scripts\lint.ps1
+```
+
+Lint checks: whitespace/indentation, long lines, unused locals/assignments,
+unreachable code, and break/continue misuse.
 
 ## Language quick tour
 
@@ -186,4 +225,5 @@ Build a plugin with include paths to `include` and `src`.
 - Strings are UTF-8 byte sequences (no unicode processing yet).
 - Mark-and-sweep GC runs at statement boundaries to reclaim runtime objects.
 - Set `ERKAO_GC_LOG=1` to print GC stats to stderr.
+- REPL history is stored in `~/.erkao_history` or `%USERPROFILE%\.erkao_history` (override with `ERKAO_HISTORY`).
 - Source and AST programs are freed when no live functions reference them.

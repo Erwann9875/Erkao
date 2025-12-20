@@ -75,6 +75,7 @@ typedef struct VM {
   size_t gcLogBeforeEnv;
   bool gcLogFullActive;
   bool hadError;
+  bool debugBytecode;
 } VM;
 
 void vmInit(VM* vm);

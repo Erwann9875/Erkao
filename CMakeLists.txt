@@ -13,6 +13,7 @@ add_executable(erkao
   src/ast.c
   src/value.c
   src/chunk.c
+  src/disasm.c
   src/compiler.c
   src/vm.c
   src/runtime.c
@@ -25,6 +26,7 @@ add_executable(erkao
   src/gc_sweep.c
   src/program.c
   src/plugin.c
+  src/tooling.c
 )
 
 target_include_directories(erkao PRIVATE

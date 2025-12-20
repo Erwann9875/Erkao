@@ -177,11 +177,21 @@ function Build-Project {
   cmake --build $buildDir
 }
 
+function Format-Check {
+  Require-RepoRoot
+  $formatScript = Join-Path $PSScriptRoot "format.ps1"
+  if (-not (Test-Path -LiteralPath $formatScript)) {
+    throw "format.ps1 not found at $formatScript"
+  }
+  & $formatScript -Check
+}
+
 function Show-Menu {
   Write-Host ""
   Write-Host "Erkao setup"
   Write-Host "1) Install prerequisites (CMake, compiler)"
   Write-Host "2) Build"
+  Write-Host "3) Format check (tests/examples)"
 }
 
 switch ($Action) {
@@ -189,12 +199,16 @@ switch ($Action) {
   "install" { Install-Prereqs; break }
   "2" { Build-Project; break }
   "build" { Build-Project; break }
+  "3" { Format-Check; break }
+  "format-check" { Format-Check; break }
+  "formatcheck" { Format-Check; break }
   default {
     Show-Menu
     $choice = Read-Host "Choose an option"
     switch ($choice) {
       "1" { Install-Prereqs }
       "2" { Build-Project }
+      "3" { Format-Check }
       default { Write-Host "No action selected." }
     }
   }

@@ -2,13 +2,28 @@
 #include "parser.h"
 #include "interpreter.h"
 #include "program.h"
+#include "tooling.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #ifndef ERKAO_VERSION
 #define ERKAO_VERSION "dev"
 #endif
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+#define HISTORY_LIMIT 1000
+
+typedef struct {
+  char** entries;
+  int count;
+  int capacity;
+  char* path;
+} History;
 
 static char* readFile(const char* path) {
   FILE* file = fopen(path, "rb");
@@ -33,6 +48,314 @@ static char* readFile(const char* path) {
   fclose(file);
   return buffer;
 }
+
+static void historyInit(History* history, char* path) {
+  history->entries = NULL;
+  history->count = 0;
+  history->capacity = 0;
+  history->path = path;
+}
+
+static void historyFree(History* history) {
+  for (int i = 0; i < history->count; i++) {
+    free(history->entries[i]);
+  }
+  free(history->entries);
+  free(history->path);
+  history->entries = NULL;
+  history->count = 0;
+  history->capacity = 0;
+  history->path = NULL;
+}
+
+static void historyAdd(History* history, const char* line) {
+  if (!line || line[0] == '\0') return;
+  if (history->count > 0 && strcmp(history->entries[history->count - 1], line) == 0) {
+    return;
+  }
+  if (history->count >= HISTORY_LIMIT) {
+    free(history->entries[0]);
+    memmove(history->entries, history->entries + 1,
+            sizeof(char*) * (size_t)(history->count - 1));
+    history->count--;
+  }
+  if (history->capacity < history->count + 1) {
+    int oldCapacity = history->capacity;
+    history->capacity = oldCapacity == 0 ? 32 : oldCapacity * 2;
+    history->entries = (char**)realloc(history->entries,
+                                       sizeof(char*) * (size_t)history->capacity);
+    if (!history->entries) {
+      fprintf(stderr, "Out of memory.\n");
+      exit(1);
+    }
+  }
+  size_t length = strlen(line);
+  char* copy = (char*)malloc(length + 1);
+  if (!copy) {
+    fprintf(stderr, "Out of memory.\n");
+    exit(1);
+  }
+  memcpy(copy, line, length + 1);
+  history->entries[history->count++] = copy;
+}
+
+static void historyLoad(History* history) {
+  if (!history->path) return;
+  FILE* file = fopen(history->path, "rb");
+  if (!file) return;
+
+  char buffer[2048];
+  while (fgets(buffer, sizeof(buffer), file)) {
+    size_t length = strlen(buffer);
+    while (length > 0 && (buffer[length - 1] == '\n' || buffer[length - 1] == '\r')) {
+      buffer[--length] = '\0';
+    }
+    historyAdd(history, buffer);
+  }
+
+  fclose(file);
+}
+
+static void historyAppend(History* history, const char* line) {
+  if (!history->path || !line || line[0] == '\0') return;
+  FILE* file = fopen(history->path, "ab");
+  if (!file) return;
+  fwrite(line, 1, strlen(line), file);
+  fwrite("\n", 1, 1, file);
+  fclose(file);
+}
+
+static char* resolveHistoryPath(void) {
+  const char* overridePath = getenv("ERKAO_HISTORY");
+  if (overridePath && overridePath[0] != '\0') {
+    char* copy = (char*)malloc(strlen(overridePath) + 1);
+    if (!copy) {
+      fprintf(stderr, "Out of memory.\n");
+      exit(1);
+    }
+    strcpy(copy, overridePath);
+    return copy;
+  }
+
+#ifdef _WIN32
+  const char* home = getenv("USERPROFILE");
+  char* homeBuffer = NULL;
+  if (!home || home[0] == '\0') {
+    const char* drive = getenv("HOMEDRIVE");
+    const char* path = getenv("HOMEPATH");
+    if (drive && path) {
+      size_t length = strlen(drive) + strlen(path);
+      homeBuffer = (char*)malloc(length + 1);
+      if (!homeBuffer) {
+        fprintf(stderr, "Out of memory.\n");
+        exit(1);
+      }
+      strcpy(homeBuffer, drive);
+      strcat(homeBuffer, path);
+      home = homeBuffer;
+    }
+  }
+  if (!home || home[0] == '\0') {
+    home = ".";
+  }
+  const char* name = "\\.erkao_history";
+  size_t length = strlen(home) + strlen(name);
+  char* path = (char*)malloc(length + 1);
+  if (!path) {
+    fprintf(stderr, "Out of memory.\n");
+    exit(1);
+  }
+  strcpy(path, home);
+  strcat(path, name);
+  free(homeBuffer);
+  return path;
+#else
+  const char* home = getenv("HOME");
+  if (!home || home[0] == '\0') home = ".";
+  const char* name = "/.erkao_history";
+  size_t length = strlen(home) + strlen(name);
+  char* path = (char*)malloc(length + 1);
+  if (!path) {
+    fprintf(stderr, "Out of memory.\n");
+    exit(1);
+  }
+  strcpy(path, home);
+  strcat(path, name);
+  return path;
+#endif
+}
+
+#ifdef _WIN32
+static void redrawLine(const char* prompt, const char* buffer, int* previousLength) {
+  int length = (int)strlen(buffer);
+  printf("\r%s%s", prompt, buffer);
+  if (*previousLength > length) {
+    int diff = *previousLength - length;
+    for (int i = 0; i < diff; i++) {
+      putchar(' ');
+    }
+    printf("\r%s%s", prompt, buffer);
+  }
+  fflush(stdout);
+  *previousLength = length;
+}
+
+static char* readLineWithHistory(const char* prompt, History* history) {
+  HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
+  DWORD mode = 0;
+  if (!GetConsoleMode(input, &mode)) return NULL;
+
+  DWORD rawMode = mode & ~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT);
+  SetConsoleMode(input, rawMode);
+
+  int capacity = 1024;
+  int length = 0;
+  char* buffer = (char*)malloc((size_t)capacity);
+  if (!buffer) {
+    fprintf(stderr, "Out of memory.\n");
+    SetConsoleMode(input, mode);
+    return NULL;
+  }
+  buffer[0] = '\0';
+
+  int previousLength = 0;
+  int historyIndex = history->count;
+
+  printf("%s", prompt);
+  fflush(stdout);
+
+  for (;;) {
+    INPUT_RECORD record;
+    DWORD read = 0;
+    if (!ReadConsoleInput(input, &record, 1, &read)) {
+      free(buffer);
+      SetConsoleMode(input, mode);
+      return NULL;
+    }
+
+    if (record.EventType != KEY_EVENT) continue;
+    KEY_EVENT_RECORD key = record.Event.KeyEvent;
+    if (!key.bKeyDown) continue;
+
+    if ((key.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) &&
+        key.wVirtualKeyCode == 'C') {
+      printf("^C\n");
+      free(buffer);
+      SetConsoleMode(input, mode);
+      return NULL;
+    }
+
+    switch (key.wVirtualKeyCode) {
+      case VK_RETURN:
+        printf("\n");
+        buffer[length] = '\0';
+        SetConsoleMode(input, mode);
+        return buffer;
+      case VK_BACK:
+        if (length > 0) {
+          length--;
+          buffer[length] = '\0';
+          redrawLine(prompt, buffer, &previousLength);
+        }
+        break;
+      case VK_UP:
+        if (history->count > 0) {
+          if (historyIndex > 0) historyIndex--;
+          if (historyIndex >= 0 && historyIndex < history->count) {
+            const char* entry = history->entries[historyIndex];
+            size_t entryLen = strlen(entry);
+            if ((int)entryLen + 1 > capacity) {
+              capacity = (int)entryLen + 32;
+              char* next = (char*)realloc(buffer, (size_t)capacity);
+              if (!next) {
+                fprintf(stderr, "Out of memory.\n");
+                free(buffer);
+                SetConsoleMode(input, mode);
+                return NULL;
+              }
+              buffer = next;
+            }
+            memcpy(buffer, entry, entryLen + 1);
+            length = (int)entryLen;
+            redrawLine(prompt, buffer, &previousLength);
+          }
+        }
+        break;
+      case VK_DOWN:
+        if (history->count > 0) {
+          if (historyIndex < history->count - 1) {
+            historyIndex++;
+            const char* entry = history->entries[historyIndex];
+            size_t entryLen = strlen(entry);
+            if ((int)entryLen + 1 > capacity) {
+              capacity = (int)entryLen + 32;
+              char* next = (char*)realloc(buffer, (size_t)capacity);
+              if (!next) {
+                fprintf(stderr, "Out of memory.\n");
+                free(buffer);
+                SetConsoleMode(input, mode);
+                return NULL;
+              }
+              buffer = next;
+            }
+            memcpy(buffer, entry, entryLen + 1);
+            length = (int)entryLen;
+          } else {
+            historyIndex = history->count;
+            length = 0;
+            buffer[0] = '\0';
+          }
+          redrawLine(prompt, buffer, &previousLength);
+        }
+        break;
+      default: {
+        char c = key.uChar.AsciiChar;
+        if (c >= 32) {
+          if (length + 2 > capacity) {
+            capacity *= 2;
+            char* next = (char*)realloc(buffer, (size_t)capacity);
+            if (!next) {
+              fprintf(stderr, "Out of memory.\n");
+              free(buffer);
+              SetConsoleMode(input, mode);
+              return NULL;
+            }
+            buffer = next;
+          }
+          buffer[length++] = c;
+          buffer[length] = '\0';
+          putchar(c);
+          fflush(stdout);
+          previousLength = length;
+        }
+        break;
+      }
+    }
+  }
+}
+#else
+static char* readLineWithHistory(const char* prompt, History* history) {
+  (void)history;
+  char buffer[1024];
+  printf("%s", prompt);
+  fflush(stdout);
+  if (!fgets(buffer, sizeof(buffer), stdin)) {
+    printf("\n");
+    return NULL;
+  }
+  size_t length = strlen(buffer);
+  if (length > 0 && buffer[length - 1] == '\n') {
+    buffer[length - 1] = '\0';
+  }
+  char* copy = (char*)malloc(length + 1);
+  if (!copy) {
+    fprintf(stderr, "Out of memory.\n");
+    return NULL;
+  }
+  memcpy(copy, buffer, length + 1);
+  return copy;
+}
+#endif
 
 static void freeStatements(StmtArray* statements) {
   for (int i = 0; i < statements->count; i++) {
@@ -75,24 +398,34 @@ static int runFile(VM* vm, const char* path, int argc, const char** argv) {
 }
 
 static void repl(VM* vm) {
-  char line[1024];
+  History history;
+  historyInit(&history, resolveHistoryPath());
+  historyLoad(&history);
+
   vmSetArgs(vm, 0, NULL);
   for (;;) {
-    printf("> ");
-    if (!fgets(line, sizeof(line), stdin)) {
-      printf("\n");
-      break;
+    char* line = readLineWithHistory("> ", &history);
+    if (!line) break;
+
+    if (line[0] != '\0') {
+      historyAdd(&history, line);
+      historyAppend(&history, line);
     }
+
     size_t length = strlen(line);
     char* copy = (char*)malloc(length + 1);
     if (!copy) {
       fprintf(stderr, "Out of memory.\n");
+      free(line);
       break;
     }
     memcpy(copy, line, length + 1);
     runSource(vm, NULL, copy);
+    free(line);
     vm->hadError = false;
   }
+
+  historyFree(&history);
 }
 
 static const char* exeName(const char* path) {
@@ -110,26 +443,96 @@ static bool isFlag(const char* arg, const char* longName, const char* shortName)
   return false;
 }
 
+static bool isDebugFlag(const char* arg) {
+  return isFlag(arg, "--bytecode", "-d") || isFlag(arg, "--disasm", NULL);
+}
+
 static void printHelp(const char* exe) {
   fprintf(stdout,
           "Usage:\n"
           "  %s [--help|-h] [--version|-v]\n"
           "  %s repl\n"
-          "  %s run <file> [-- args...]\n"
-          "  %s <file> [args...]\n"
+          "  %s run [--bytecode|--disasm] <file> [-- args...]\n"
+          "  %s fmt <file> [--check]\n"
+          "  %s lint <file>\n"
+          "  %s [--bytecode|--disasm] <file> [args...]\n"
           "\n"
           "Commands:\n"
           "  run   Run a script file.\n"
           "  repl  Start the interactive REPL.\n"
+          "  fmt   Format a source file in-place.\n"
+          "  lint  Run simple formatting checks.\n"
           "\n"
           "Options:\n"
           "  -h, --help     Show this help.\n"
-          "  -v, --version  Show the version.\n",
-          exe, exe, exe, exe);
+          "  -v, --version  Show the version.\n"
+          "  --bytecode     Print bytecode before running.\n"
+          "  --disasm       Alias for --bytecode.\n"
+          "  --check        Check formatting without writing changes.\n",
+          exe, exe, exe, exe, exe, exe);
 }
 
 static void printVersion(void) {
   fprintf(stdout, "Erkao %s\n", ERKAO_VERSION);
+}
+
+static int runFormatCommand(const char* exe, int argc, const char** argv) {
+  bool checkOnly = false;
+  int files = 0;
+  int exitCode = 0;
+
+  for (int i = 2; i < argc; i++) {
+    if (isFlag(argv[i], "--check", "-c")) {
+      checkOnly = true;
+      continue;
+    }
+    if (argv[i][0] == '-') {
+      fprintf(stderr, "Unknown option for 'fmt': %s\n", argv[i]);
+      printHelp(exe);
+      return 64;
+    }
+    bool changed = false;
+    if (!formatFile(argv[i], checkOnly, &changed)) {
+      return 1;
+    }
+    if (checkOnly && changed) {
+      exitCode = 1;
+    }
+    files++;
+  }
+
+  if (files == 0) {
+    fprintf(stderr, "Missing file for 'fmt'.\n");
+    printHelp(exe);
+    return 64;
+  }
+
+  return exitCode;
+}
+
+static int runLintCommand(const char* exe, int argc, const char** argv) {
+  int files = 0;
+  int issues = 0;
+
+  for (int i = 2; i < argc; i++) {
+    if (argv[i][0] == '-') {
+      fprintf(stderr, "Unknown option for 'lint': %s\n", argv[i]);
+      printHelp(exe);
+      return 64;
+    }
+    int result = lintFile(argv[i]);
+    if (result < 0) return 1;
+    issues += result;
+    files++;
+  }
+
+  if (files == 0) {
+    fprintf(stderr, "Missing file for 'lint'.\n");
+    printHelp(exe);
+    return 64;
+  }
+
+  return issues > 0 ? 1 : 0;
 }
 
 static int runWithArgs(VM* vm, const char* path, int argc, const char** argv) {
@@ -138,6 +541,24 @@ static int runWithArgs(VM* vm, const char* path, int argc, const char** argv) {
     argStart = 1;
   }
   return runFile(vm, path, argc - argStart, argv + argStart);
+}
+
+static int runFileCommand(VM* vm, const char* exe, int argc, const char** argv, int startIndex) {
+  int index = startIndex;
+  bool debugBytecode = false;
+  while (index < argc && isDebugFlag(argv[index])) {
+    debugBytecode = true;
+    index++;
+  }
+
+  if (index >= argc || isFlag(argv[index], "--help", "-h")) {
+    printHelp(exe);
+    return index >= argc ? 64 : 0;
+  }
+
+  vm->debugBytecode = debugBytecode;
+  const char* path = argv[index++];
+  return runWithArgs(vm, path, argc - index, argv + index);
 }
 
 int main(int argc, const char** argv) {
@@ -149,6 +570,12 @@ int main(int argc, const char** argv) {
   if (argc > 1 && isFlag(argv[1], "--version", "-v")) {
     printVersion();
     return 0;
+  }
+  if (argc > 1 && (strcmp(argv[1], "fmt") == 0 || strcmp(argv[1], "format") == 0)) {
+    return runFormatCommand(exe, argc, argv);
+  }
+  if (argc > 1 && strcmp(argv[1], "lint") == 0) {
+    return runLintCommand(exe, argc, argv);
   }
 
   VM vm;
@@ -166,19 +593,20 @@ int main(int argc, const char** argv) {
       repl(&vm);
     }
   } else if (strcmp(argv[1], "run") == 0) {
-    if (argc < 3 || isFlag(argv[2], "--help", "-h")) {
-      printHelp(exe);
-      result = (argc < 3) ? 64 : 0;
-    } else {
-      result = runWithArgs(&vm, argv[2], argc - 3, argv + 3);
-    }
+    result = runFileCommand(&vm, exe, argc, argv, 2);
   } else {
-    if (argv[1][0] == '-' && argv[1][1] != '\0') {
+    int index = 1;
+    while (index < argc && isDebugFlag(argv[index])) {
+      index++;
+    }
+    if (index < argc && strcmp(argv[index], "run") == 0) {
+      result = runFileCommand(&vm, exe, argc, argv, index + 1);
+    } else if (argv[1][0] == '-' && argv[1][1] != '\0') {
       fprintf(stderr, "Unknown option: %s\n", argv[1]);
       printHelp(exe);
       result = 64;
     } else {
-      result = runWithArgs(&vm, argv[1], argc - 2, argv + 2);
+      result = runFileCommand(&vm, exe, argc, argv, 1);
     }
   }
 
