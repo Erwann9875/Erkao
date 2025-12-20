@@ -81,6 +81,7 @@ struct ObjString {
   Obj obj;
   int length;
   char* chars;
+  uint32_t hash;
 };
 
 struct ObjFunction {
@@ -142,6 +143,7 @@ struct ObjBoundMethod {
 
 ObjString* copyString(VM* vm, const char* chars);
 ObjString* copyStringWithLength(VM* vm, const char* chars, int length);
+ObjString* takeStringWithLength(VM* vm, char* chars, int length);
 ObjString* stringFromToken(VM* vm, Token token);
 
 ObjFunction* newFunction(VM* vm, ObjString* name, int arity, bool isInitializer,
@@ -152,7 +154,9 @@ ObjClass* newClass(VM* vm, ObjString* name, ObjMap* methods);
 ObjInstance* newInstance(VM* vm, ObjClass* klass);
 ObjInstance* newInstanceWithFields(VM* vm, ObjClass* klass, ObjMap* fields);
 ObjArray* newArray(VM* vm);
+ObjArray* newArrayWithCapacity(VM* vm, int capacity);
 ObjMap* newMap(VM* vm);
+ObjMap* newMapWithCapacity(VM* vm, int capacity);
 ObjBoundMethod* newBoundMethod(VM* vm, Value receiver, ObjFunction* method);
 
 void arrayWrite(ObjArray* array, Value value);
@@ -160,8 +164,10 @@ bool arrayGet(ObjArray* array, int index, Value* out);
 bool arraySet(ObjArray* array, int index, Value value);
 
 bool mapGet(ObjMap* map, ObjString* key, Value* out);
+bool mapGetIndex(ObjMap* map, ObjString* key, Value* out, int* outIndex);
 bool mapGetByToken(ObjMap* map, Token key, Value* out);
 void mapSet(ObjMap* map, ObjString* key, Value value);
+int mapSetIndex(ObjMap* map, ObjString* key, Value value);
 bool mapSetByTokenIfExists(ObjMap* map, Token key, Value value);
 bool mapSetIfExists(ObjMap* map, ObjString* key, Value value);
 int mapCount(ObjMap* map);

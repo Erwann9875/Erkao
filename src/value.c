@@ -4,6 +4,22 @@
 #include "gc.h"
 #include "program.h"
 
+static uint32_t hashBytes(const char* chars, int length) {
+  uint32_t hash = 2166136261u;
+  for (int i = 0; i < length; i++) {
+    hash ^= (uint8_t)chars[i];
+    hash *= 16777619u;
+  }
+  return hash;
+}
+
+static bool stringsEqual(ObjString* a, ObjString* b);
+static MapEntryValue* mapFindEntry(MapEntryValue* entries, int capacity, ObjString* key);
+static MapEntryValue* mapFindEntryByToken(MapEntryValue* entries, int capacity,
+                                          Token key, uint32_t keyHash);
+static int mapCapacityForCount(int count);
+static void adjustMapCapacity(ObjMap* map, int capacity);
+
 static Obj* allocateObject(VM* vm, size_t size, ObjType type, ObjGen generation) {
   Obj* object = (Obj*)malloc(size);
   if (!object) {
@@ -32,6 +48,7 @@ static ObjString* allocateString(VM* vm, char* chars, int length) {
   ObjString* string = (ObjString*)allocateObject(vm, size, OBJ_STRING, OBJ_GEN_OLD);
   string->length = length;
   string->chars = chars;
+  string->hash = hashBytes(chars, length);
   return string;
 }
 
@@ -44,6 +61,11 @@ ObjString* copyStringWithLength(VM* vm, const char* chars, int length) {
   memcpy(heap, chars, (size_t)length);
   heap[length] = '\0';
   return allocateString(vm, heap, length);
+}
+
+ObjString* takeStringWithLength(VM* vm, char* chars, int length) {
+  if (!chars) return allocateString(vm, NULL, 0);
+  return allocateString(vm, chars, length);
 }
 
 ObjString* copyString(VM* vm, const char* chars) {
@@ -121,20 +143,46 @@ ObjInstance* newInstanceWithFields(VM* vm, ObjClass* klass, ObjMap* fields) {
 }
 
 ObjArray* newArray(VM* vm) {
+  return newArrayWithCapacity(vm, 0);
+}
+
+ObjArray* newArrayWithCapacity(VM* vm, int capacity) {
   ObjArray* array = (ObjArray*)allocateObject(vm, sizeof(ObjArray), OBJ_ARRAY, OBJ_GEN_YOUNG);
   array->vm = vm;
   array->items = NULL;
   array->count = 0;
   array->capacity = 0;
+  if (capacity > 0) {
+    array->items = (Value*)malloc(sizeof(Value) * (size_t)capacity);
+    if (!array->items) {
+      fprintf(stderr, "Out of memory.\n");
+      exit(1);
+    }
+    array->capacity = capacity;
+    size_t oldSize = array->obj.size;
+    size_t extra = sizeof(Value) * (size_t)capacity;
+    array->obj.size = oldSize + extra;
+    if (array->vm) {
+      gcTrackResize(array->vm, (Obj*)array, oldSize, array->obj.size);
+    }
+  }
   return array;
 }
 
 ObjMap* newMap(VM* vm) {
+  return newMapWithCapacity(vm, 0);
+}
+
+ObjMap* newMapWithCapacity(VM* vm, int capacity) {
   ObjMap* map = (ObjMap*)allocateObject(vm, sizeof(ObjMap), OBJ_MAP, OBJ_GEN_YOUNG);
   map->vm = vm;
   map->entries = NULL;
   map->count = 0;
   map->capacity = 0;
+  int target = mapCapacityForCount(capacity);
+  if (target > 0) {
+    adjustMapCapacity(map, target);
+  }
   return map;
 }
 
@@ -189,91 +237,155 @@ bool arraySet(ObjArray* array, int index, Value value) {
 
 static bool stringsEqual(ObjString* a, ObjString* b) {
   if (a->length != b->length) return false;
+  if (a->hash != b->hash) return false;
   return memcmp(a->chars, b->chars, (size_t)a->length) == 0;
 }
 
-static bool stringMatchesToken(ObjString* string, Token token) {
-  if (string->length != token.length) return false;
-  return memcmp(string->chars, token.start, (size_t)token.length) == 0;
+#define MAP_MAX_LOAD 0.75
+
+static MapEntryValue* mapFindEntry(MapEntryValue* entries, int capacity, ObjString* key) {
+  uint32_t index = key->hash & (uint32_t)(capacity - 1);
+  for (;;) {
+    MapEntryValue* entry = &entries[index];
+    if (!entry->key || entry->key == key || stringsEqual(entry->key, key)) {
+      return entry;
+    }
+    index = (index + 1) & (uint32_t)(capacity - 1);
+  }
+}
+
+static MapEntryValue* mapFindEntryByToken(MapEntryValue* entries, int capacity,
+                                          Token key, uint32_t keyHash) {
+  uint32_t index = keyHash & (uint32_t)(capacity - 1);
+  for (;;) {
+    MapEntryValue* entry = &entries[index];
+    if (!entry->key) return entry;
+    if (entry->key->hash == keyHash && entry->key->length == key.length &&
+        memcmp(entry->key->chars, key.start, (size_t)key.length) == 0) {
+      return entry;
+    }
+    index = (index + 1) & (uint32_t)(capacity - 1);
+  }
+}
+
+static int mapCapacityForCount(int count) {
+  if (count <= 0) return 0;
+  int capacity = 8;
+  while ((int)(capacity * MAP_MAX_LOAD) < count) {
+    capacity *= 2;
+  }
+  return capacity;
+}
+
+static void adjustMapCapacity(ObjMap* map, int capacity) {
+  MapEntryValue* entries = (MapEntryValue*)malloc(sizeof(MapEntryValue) * (size_t)capacity);
+  if (!entries) {
+    fprintf(stderr, "Out of memory.\n");
+    exit(1);
+  }
+  for (int i = 0; i < capacity; i++) {
+    entries[i].key = NULL;
+    entries[i].value = NULL_VAL;
+  }
+
+  int oldCapacity = map->capacity;
+  MapEntryValue* oldEntries = map->entries;
+  map->entries = entries;
+  map->capacity = capacity;
+  map->count = 0;
+
+  for (int i = 0; i < oldCapacity; i++) {
+    MapEntryValue* entry = &oldEntries[i];
+    if (!entry->key) continue;
+    MapEntryValue* dest = mapFindEntry(entries, capacity, entry->key);
+    dest->key = entry->key;
+    dest->value = entry->value;
+    map->count++;
+  }
+
+  if (oldEntries) {
+    free(oldEntries);
+  }
+
+  size_t oldSize = map->obj.size;
+  size_t newSize = sizeof(ObjMap) + sizeof(MapEntryValue) * (size_t)capacity;
+  map->obj.size = newSize;
+  if (map->vm) {
+    gcTrackResize(map->vm, (Obj*)map, oldSize, newSize);
+  }
 }
 
 bool mapGet(ObjMap* map, ObjString* key, Value* out) {
-  for (int i = 0; i < map->count; i++) {
-    if (stringsEqual(map->entries[i].key, key)) {
-      *out = map->entries[i].value;
-      return true;
-    }
-  }
-  return false;
+  if (map->count == 0 || map->capacity == 0) return false;
+  MapEntryValue* entry = mapFindEntry(map->entries, map->capacity, key);
+  if (!entry->key) return false;
+  *out = entry->value;
+  return true;
+}
+
+bool mapGetIndex(ObjMap* map, ObjString* key, Value* out, int* outIndex) {
+  if (map->count == 0 || map->capacity == 0) return false;
+  MapEntryValue* entry = mapFindEntry(map->entries, map->capacity, key);
+  if (!entry->key) return false;
+  if (out) *out = entry->value;
+  if (outIndex) *outIndex = (int)(entry - map->entries);
+  return true;
 }
 
 bool mapGetByToken(ObjMap* map, Token key, Value* out) {
-  for (int i = 0; i < map->count; i++) {
-    if (stringMatchesToken(map->entries[i].key, key)) {
-      *out = map->entries[i].value;
-      return true;
-    }
-  }
-  return false;
+  if (map->count == 0 || map->capacity == 0) return false;
+  uint32_t tokenHash = hashBytes(key.start, key.length);
+  MapEntryValue* entry = mapFindEntryByToken(map->entries, map->capacity, key, tokenHash);
+  if (!entry->key) return false;
+  *out = entry->value;
+  return true;
 }
 
 void mapSet(ObjMap* map, ObjString* key, Value value) {
-  for (int i = 0; i < map->count; i++) {
-    if (stringsEqual(map->entries[i].key, key)) {
-      map->entries[i].value = value;
-      if (map->vm) {
-        gcWriteBarrier(map->vm, (Obj*)map, value);
-      }
-      return;
-    }
+  (void)mapSetIndex(map, key, value);
+}
+
+int mapSetIndex(ObjMap* map, ObjString* key, Value value) {
+  if ((map->count + 1) > (int)(map->capacity * MAP_MAX_LOAD)) {
+    int capacity = map->capacity < 8 ? 8 : map->capacity * 2;
+    adjustMapCapacity(map, capacity);
   }
 
-  if (map->capacity < map->count + 1) {
-    int oldCapacity = map->capacity;
-    map->capacity = GROW_CAPACITY(oldCapacity);
-    map->entries = GROW_ARRAY(MapEntryValue, map->entries, oldCapacity, map->capacity);
-    size_t oldSize = map->obj.size;
-    size_t extra = sizeof(MapEntryValue) * (size_t)(map->capacity - oldCapacity);
-    size_t newSize = oldSize + extra;
-    map->obj.size = newSize;
-    if (map->vm) {
-      gcTrackResize(map->vm, (Obj*)map, oldSize, newSize);
-    }
+  MapEntryValue* entry = mapFindEntry(map->entries, map->capacity, key);
+  bool isNewKey = entry->key == NULL;
+  if (isNewKey) {
+    map->count++;
   }
-
-  map->entries[map->count].key = key;
-  map->entries[map->count].value = value;
-  map->count++;
+  entry->key = key;
+  entry->value = value;
   if (map->vm) {
     gcWriteBarrier(map->vm, (Obj*)map, OBJ_VAL(key));
     gcWriteBarrier(map->vm, (Obj*)map, value);
   }
+  return (int)(entry - map->entries);
 }
 
 bool mapSetByTokenIfExists(ObjMap* map, Token key, Value value) {
-  for (int i = 0; i < map->count; i++) {
-    if (stringMatchesToken(map->entries[i].key, key)) {
-      map->entries[i].value = value;
-      if (map->vm) {
-        gcWriteBarrier(map->vm, (Obj*)map, value);
-      }
-      return true;
-    }
+  if (map->count == 0 || map->capacity == 0) return false;
+  uint32_t tokenHash = hashBytes(key.start, key.length);
+  MapEntryValue* entry = mapFindEntryByToken(map->entries, map->capacity, key, tokenHash);
+  if (!entry->key) return false;
+  entry->value = value;
+  if (map->vm) {
+    gcWriteBarrier(map->vm, (Obj*)map, value);
   }
-  return false;
+  return true;
 }
 
 bool mapSetIfExists(ObjMap* map, ObjString* key, Value value) {
-  for (int i = 0; i < map->count; i++) {
-    if (stringsEqual(map->entries[i].key, key)) {
-      map->entries[i].value = value;
-      if (map->vm) {
-        gcWriteBarrier(map->vm, (Obj*)map, value);
-      }
-      return true;
-    }
+  if (map->count == 0 || map->capacity == 0) return false;
+  MapEntryValue* entry = mapFindEntry(map->entries, map->capacity, key);
+  if (!entry->key) return false;
+  entry->value = value;
+  if (map->vm) {
+    gcWriteBarrier(map->vm, (Obj*)map, value);
   }
-  return false;
+  return true;
 }
 
 int mapCount(ObjMap* map) {
@@ -360,10 +472,13 @@ static void printArray(ObjArray* array) {
 
 static void printMap(ObjMap* map) {
   printf("{");
-  for (int i = 0; i < map->count; i++) {
-    if (i > 0) printf(", ");
+  int printed = 0;
+  for (int i = 0; i < map->capacity; i++) {
+    if (!map->entries[i].key) continue;
+    if (printed > 0) printf(", ");
     printf("%s: ", map->entries[i].key->chars);
     printValue(map->entries[i].value);
+    printed++;
   }
   printf("}");
 }

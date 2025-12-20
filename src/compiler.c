@@ -13,6 +13,265 @@ typedef struct {
   bool hadError;
 } Compiler;
 
+typedef enum {
+  CONST_NULL,
+  CONST_BOOL,
+  CONST_NUMBER,
+  CONST_STRING
+} ConstType;
+
+typedef struct {
+  ConstType type;
+  bool ownsString;
+  union {
+    bool boolean;
+    double number;
+    struct {
+      const char* chars;
+      int length;
+    } string;
+  } as;
+} ConstValue;
+
+static void constValueFree(ConstValue* value) {
+  if (value->type == CONST_STRING && value->ownsString) {
+    free((void*)value->as.string.chars);
+    value->ownsString = false;
+  }
+}
+
+static ConstValue constValueTake(ConstValue* value) {
+  ConstValue out = *value;
+  value->ownsString = false;
+  return out;
+}
+
+static bool constValueIsTruthy(const ConstValue* value) {
+  if (value->type == CONST_NULL) return false;
+  if (value->type == CONST_BOOL) return value->as.boolean;
+  return true;
+}
+
+static bool constValuesEqual(const ConstValue* a, const ConstValue* b) {
+  if (a->type != b->type) return false;
+
+  switch (a->type) {
+    case CONST_NULL:
+      return true;
+    case CONST_BOOL:
+      return a->as.boolean == b->as.boolean;
+    case CONST_NUMBER:
+      return a->as.number == b->as.number;
+    case CONST_STRING:
+      if (a->as.string.length != b->as.string.length) return false;
+      return memcmp(a->as.string.chars, b->as.string.chars,
+                    (size_t)a->as.string.length) == 0;
+  }
+  return false;
+}
+
+static bool evalConstExpr(Expr* expr, ConstValue* out) {
+  if (!expr) return false;
+
+  switch (expr->type) {
+    case EXPR_LITERAL: {
+      Literal literal = expr->as.literal.literal;
+      switch (literal.type) {
+        case LIT_NUMBER:
+          out->type = CONST_NUMBER;
+          out->as.number = literal.as.number;
+          return true;
+        case LIT_STRING:
+          out->type = CONST_STRING;
+          out->ownsString = false;
+          out->as.string.chars = literal.as.string;
+          out->as.string.length = (int)strlen(literal.as.string);
+          return true;
+        case LIT_BOOL:
+          out->type = CONST_BOOL;
+          out->as.boolean = literal.as.boolean;
+          return true;
+        case LIT_NULL:
+          out->type = CONST_NULL;
+          return true;
+      }
+      break;
+    }
+    case EXPR_GROUPING:
+      return evalConstExpr(expr->as.grouping.expression, out);
+    case EXPR_UNARY: {
+      ConstValue right;
+      memset(&right, 0, sizeof(ConstValue));
+      if (!evalConstExpr(expr->as.unary.right, &right)) return false;
+
+      bool ok = false;
+      switch (expr->as.unary.op.type) {
+        case TOKEN_MINUS:
+          if (right.type == CONST_NUMBER) {
+            out->type = CONST_NUMBER;
+            out->as.number = -right.as.number;
+            ok = true;
+          }
+          break;
+        case TOKEN_BANG:
+          out->type = CONST_BOOL;
+          out->as.boolean = !constValueIsTruthy(&right);
+          ok = true;
+          break;
+        default:
+          break;
+      }
+
+      constValueFree(&right);
+      return ok;
+    }
+    case EXPR_BINARY: {
+      ConstValue left;
+      ConstValue right;
+      memset(&left, 0, sizeof(ConstValue));
+      memset(&right, 0, sizeof(ConstValue));
+      if (!evalConstExpr(expr->as.binary.left, &left)) return false;
+      if (!evalConstExpr(expr->as.binary.right, &right)) {
+        constValueFree(&left);
+        return false;
+      }
+
+      bool ok = false;
+      switch (expr->as.binary.op.type) {
+        case TOKEN_PLUS:
+          if (left.type == CONST_NUMBER && right.type == CONST_NUMBER) {
+            out->type = CONST_NUMBER;
+            out->as.number = left.as.number + right.as.number;
+            ok = true;
+          } else if (left.type == CONST_STRING && right.type == CONST_STRING) {
+            int length = left.as.string.length + right.as.string.length;
+            char* buffer = (char*)malloc((size_t)length + 1);
+            if (!buffer) {
+              fprintf(stderr, "Out of memory.\n");
+              exit(1);
+            }
+            memcpy(buffer, left.as.string.chars, (size_t)left.as.string.length);
+            memcpy(buffer + left.as.string.length, right.as.string.chars,
+                   (size_t)right.as.string.length);
+            buffer[length] = '\0';
+            out->type = CONST_STRING;
+            out->ownsString = true;
+            out->as.string.chars = buffer;
+            out->as.string.length = length;
+            ok = true;
+          }
+          break;
+        case TOKEN_MINUS:
+          if (left.type == CONST_NUMBER && right.type == CONST_NUMBER) {
+            out->type = CONST_NUMBER;
+            out->as.number = left.as.number - right.as.number;
+            ok = true;
+          }
+          break;
+        case TOKEN_STAR:
+          if (left.type == CONST_NUMBER && right.type == CONST_NUMBER) {
+            out->type = CONST_NUMBER;
+            out->as.number = left.as.number * right.as.number;
+            ok = true;
+          }
+          break;
+        case TOKEN_SLASH:
+          if (left.type == CONST_NUMBER && right.type == CONST_NUMBER) {
+            out->type = CONST_NUMBER;
+            out->as.number = left.as.number / right.as.number;
+            ok = true;
+          }
+          break;
+        case TOKEN_GREATER:
+          if (left.type == CONST_NUMBER && right.type == CONST_NUMBER) {
+            out->type = CONST_BOOL;
+            out->as.boolean = left.as.number > right.as.number;
+            ok = true;
+          }
+          break;
+        case TOKEN_GREATER_EQUAL:
+          if (left.type == CONST_NUMBER && right.type == CONST_NUMBER) {
+            out->type = CONST_BOOL;
+            out->as.boolean = left.as.number >= right.as.number;
+            ok = true;
+          }
+          break;
+        case TOKEN_LESS:
+          if (left.type == CONST_NUMBER && right.type == CONST_NUMBER) {
+            out->type = CONST_BOOL;
+            out->as.boolean = left.as.number < right.as.number;
+            ok = true;
+          }
+          break;
+        case TOKEN_LESS_EQUAL:
+          if (left.type == CONST_NUMBER && right.type == CONST_NUMBER) {
+            out->type = CONST_BOOL;
+            out->as.boolean = left.as.number <= right.as.number;
+            ok = true;
+          }
+          break;
+        case TOKEN_EQUAL_EQUAL:
+          out->type = CONST_BOOL;
+          out->as.boolean = constValuesEqual(&left, &right);
+          ok = true;
+          break;
+        case TOKEN_BANG_EQUAL:
+          out->type = CONST_BOOL;
+          out->as.boolean = !constValuesEqual(&left, &right);
+          ok = true;
+          break;
+        default:
+          break;
+      }
+
+      constValueFree(&left);
+      constValueFree(&right);
+      return ok;
+    }
+    case EXPR_LOGICAL: {
+      ConstValue left;
+      ConstValue right;
+      memset(&left, 0, sizeof(ConstValue));
+      memset(&right, 0, sizeof(ConstValue));
+      if (!evalConstExpr(expr->as.logical.left, &left)) return false;
+      if (!evalConstExpr(expr->as.logical.right, &right)) {
+        constValueFree(&left);
+        return false;
+      }
+
+      bool leftTruthy = constValueIsTruthy(&left);
+      if (expr->as.logical.op.type == TOKEN_OR) {
+        if (leftTruthy) {
+          *out = constValueTake(&left);
+          constValueFree(&right);
+        } else {
+          *out = constValueTake(&right);
+          constValueFree(&left);
+        }
+        return true;
+      }
+      if (expr->as.logical.op.type == TOKEN_AND) {
+        if (leftTruthy) {
+          *out = constValueTake(&right);
+          constValueFree(&left);
+        } else {
+          *out = constValueTake(&left);
+          constValueFree(&right);
+        }
+        return true;
+      }
+
+      constValueFree(&left);
+      constValueFree(&right);
+      return false;
+    }
+    default:
+      break;
+  }
+
+  return false;
+}
+
 static Token noToken(void) {
   Token token;
   memset(&token, 0, sizeof(Token));
@@ -80,6 +339,33 @@ static void emitConstant(Compiler* compiler, Value value, Token token) {
   emitShort(compiler, (uint16_t)constant, token);
 }
 
+static void emitConstValue(Compiler* compiler, ConstValue* value, Token token) {
+  switch (value->type) {
+    case CONST_NULL:
+      emitByte(compiler, OP_NULL, token);
+      break;
+    case CONST_BOOL:
+      emitByte(compiler, value->as.boolean ? OP_TRUE : OP_FALSE, token);
+      break;
+    case CONST_NUMBER:
+      emitConstant(compiler, NUMBER_VAL(value->as.number), token);
+      break;
+    case CONST_STRING: {
+      ObjString* string = NULL;
+      if (value->ownsString) {
+        string = takeStringWithLength(compiler->vm, (char*)value->as.string.chars,
+                                      value->as.string.length);
+        value->ownsString = false;
+      } else {
+        string = copyStringWithLength(compiler->vm, value->as.string.chars,
+                                      value->as.string.length);
+      }
+      emitConstant(compiler, OBJ_VAL(string), token);
+      break;
+    }
+  }
+}
+
 static int emitJump(Compiler* compiler, uint8_t instruction, Token token) {
   emitByte(compiler, instruction, token);
   emitByte(compiler, 0xff, token);
@@ -118,6 +404,7 @@ static void emitGc(Compiler* compiler) {
 
 static void compileExpr(Compiler* compiler, Expr* expr);
 static void compileStmt(Compiler* compiler, Stmt* stmt);
+static void optimizeChunk(Chunk* chunk);
 
 static void compileExprArray(Compiler* compiler, ExprArray* array) {
   for (int i = 0; i < array->count; i++) {
@@ -127,6 +414,14 @@ static void compileExprArray(Compiler* compiler, ExprArray* array) {
 
 static void compileExpr(Compiler* compiler, Expr* expr) {
   if (!expr || compiler->hadError) return;
+
+  ConstValue folded;
+  memset(&folded, 0, sizeof(ConstValue));
+  if (evalConstExpr(expr, &folded)) {
+    emitConstValue(compiler, &folded, noToken());
+    constValueFree(&folded);
+    return;
+  }
 
   switch (expr->type) {
     case EXPR_LITERAL: {
@@ -271,7 +566,12 @@ static void compileExpr(Compiler* compiler, Expr* expr) {
       break;
     }
     case EXPR_ARRAY: {
+      if (expr->as.array.elements.count > UINT16_MAX) {
+        compilerErrorAt(compiler, noToken(), "Array literal too large.");
+        return;
+      }
       emitByte(compiler, OP_ARRAY, noToken());
+      emitShort(compiler, (uint16_t)expr->as.array.elements.count, noToken());
       for (int i = 0; i < expr->as.array.elements.count; i++) {
         compileExpr(compiler, expr->as.array.elements.items[i]);
         emitByte(compiler, OP_ARRAY_APPEND, noToken());
@@ -279,7 +579,12 @@ static void compileExpr(Compiler* compiler, Expr* expr) {
       break;
     }
     case EXPR_MAP: {
+      if (expr->as.map.entries.count > UINT16_MAX) {
+        compilerErrorAt(compiler, noToken(), "Map literal too large.");
+        return;
+      }
       emitByte(compiler, OP_MAP, noToken());
+      emitShort(compiler, (uint16_t)expr->as.map.entries.count, noToken());
       for (int i = 0; i < expr->as.map.entries.count; i++) {
         compileExpr(compiler, expr->as.map.entries.entries[i].key);
         compileExpr(compiler, expr->as.map.entries.entries[i].value);
@@ -347,6 +652,7 @@ static ObjFunction* compileFunction(Compiler* compiler, Stmt* stmt, bool isIniti
     return NULL;
   }
 
+  optimizeChunk(chunk);
   return function;
 }
 
@@ -381,6 +687,19 @@ static void compileStmt(Compiler* compiler, Stmt* stmt) {
       break;
     }
     case STMT_IF: {
+      ConstValue folded;
+      memset(&folded, 0, sizeof(ConstValue));
+      if (evalConstExpr(stmt->as.ifStmt.condition, &folded)) {
+        bool truthy = constValueIsTruthy(&folded);
+        constValueFree(&folded);
+        if (truthy) {
+          compileStmt(compiler, stmt->as.ifStmt.thenBranch);
+        } else if (stmt->as.ifStmt.elseBranch) {
+          compileStmt(compiler, stmt->as.ifStmt.elseBranch);
+        }
+        emitGc(compiler);
+        break;
+      }
       compileExpr(compiler, stmt->as.ifStmt.condition);
       int thenJump = emitJump(compiler, OP_JUMP_IF_FALSE, stmt->as.ifStmt.keyword);
       emitByte(compiler, OP_POP, noToken());
@@ -399,6 +718,16 @@ static void compileStmt(Compiler* compiler, Stmt* stmt) {
       break;
     }
     case STMT_WHILE: {
+      ConstValue folded;
+      memset(&folded, 0, sizeof(ConstValue));
+      if (evalConstExpr(stmt->as.whileStmt.condition, &folded)) {
+        bool truthy = constValueIsTruthy(&folded);
+        constValueFree(&folded);
+        if (!truthy) {
+          emitGc(compiler);
+          break;
+        }
+      }
       int loopStart = compiler->chunk->count;
       compileExpr(compiler, stmt->as.whileStmt.condition);
       int exitJump = emitJump(compiler, OP_JUMP_IF_FALSE, stmt->as.whileStmt.keyword);
@@ -497,5 +826,249 @@ ObjFunction* compileProgram(VM* vm, Program* program) {
     return NULL;
   }
 
+  optimizeChunk(chunk);
   return function;
+}
+
+static int opcodeSize(uint8_t opcode) {
+  switch (opcode) {
+    case OP_CONSTANT:
+    case OP_GET_VAR:
+    case OP_SET_VAR:
+    case OP_DEFINE_VAR:
+    case OP_GET_PROPERTY:
+    case OP_SET_PROPERTY:
+    case OP_GET_THIS:
+    case OP_JUMP:
+    case OP_JUMP_IF_FALSE:
+    case OP_LOOP:
+    case OP_CLOSURE:
+    case OP_ARRAY:
+    case OP_MAP:
+      return 3;
+    case OP_CALL:
+      return 2;
+    case OP_CLASS:
+      return 5;
+    case OP_IMPORT:
+      return 4;
+    default:
+      return 1;
+  }
+}
+
+static uint16_t readShort(const uint8_t* code, int offset) {
+  return (uint16_t)((code[offset + 1] << 8) | code[offset + 2]);
+}
+
+static void markReachable(const Chunk* chunk, const bool* isStart,
+                          bool* reachable, bool* isTarget) {
+  if (chunk->count == 0) return;
+
+  int* stack = (int*)malloc(sizeof(int) * (size_t)chunk->count);
+  if (!stack) {
+    fprintf(stderr, "Out of memory.\n");
+    exit(1);
+  }
+  int stackCount = 0;
+  reachable[0] = true;
+  stack[stackCount++] = 0;
+
+  while (stackCount > 0) {
+    int offset = stack[--stackCount];
+    uint8_t opcode = chunk->code[offset];
+    int size = opcodeSize(opcode);
+    int next = offset + size;
+
+    switch (opcode) {
+      case OP_JUMP: {
+        int target = next + (int)readShort(chunk->code, offset);
+        if (target >= 0 && target < chunk->count && isStart[target]) {
+          isTarget[target] = true;
+          if (!reachable[target]) {
+            reachable[target] = true;
+            stack[stackCount++] = target;
+          }
+        }
+        break;
+      }
+      case OP_JUMP_IF_FALSE: {
+        int target = next + (int)readShort(chunk->code, offset);
+        if (next < chunk->count && isStart[next] && !reachable[next]) {
+          reachable[next] = true;
+          stack[stackCount++] = next;
+        }
+        if (target >= 0 && target < chunk->count && isStart[target]) {
+          isTarget[target] = true;
+          if (!reachable[target]) {
+            reachable[target] = true;
+            stack[stackCount++] = target;
+          }
+        }
+        break;
+      }
+      case OP_LOOP: {
+        int target = next - (int)readShort(chunk->code, offset);
+        if (target >= 0 && target < chunk->count && isStart[target]) {
+          isTarget[target] = true;
+          if (!reachable[target]) {
+            reachable[target] = true;
+            stack[stackCount++] = target;
+          }
+        }
+        break;
+      }
+      case OP_RETURN:
+        break;
+      default:
+        if (next < chunk->count && isStart[next] && !reachable[next]) {
+          reachable[next] = true;
+          stack[stackCount++] = next;
+        }
+        break;
+    }
+  }
+
+  free(stack);
+}
+
+static void peepholePass(const Chunk* chunk, const bool* reachable,
+                         const bool* isTarget, bool* remove) {
+  for (int offset = 0; offset < chunk->count;) {
+    uint8_t opcode = chunk->code[offset];
+    int size = opcodeSize(opcode);
+
+    if (!reachable[offset]) {
+      offset += size;
+      continue;
+    }
+
+    if (!isTarget[offset] &&
+        (opcode == OP_NULL || opcode == OP_TRUE || opcode == OP_FALSE ||
+         opcode == OP_CONSTANT)) {
+      int next = offset + size;
+      if (next < chunk->count && reachable[next] && !isTarget[next] &&
+          chunk->code[next] == OP_POP) {
+        remove[offset] = true;
+        remove[next] = true;
+      }
+    }
+
+    offset += size;
+  }
+}
+
+static void optimizeChunk(Chunk* chunk) {
+  if (!chunk || chunk->count == 0) return;
+
+  int count = chunk->count;
+  bool* isStart = (bool*)calloc((size_t)count, sizeof(bool));
+  bool* reachable = (bool*)calloc((size_t)count, sizeof(bool));
+  bool* isTarget = (bool*)calloc((size_t)count, sizeof(bool));
+  bool* remove = (bool*)calloc((size_t)count, sizeof(bool));
+  int* newOffsets = (int*)malloc(sizeof(int) * (size_t)count);
+
+  if (!isStart || !reachable || !isTarget || !remove || !newOffsets) {
+    fprintf(stderr, "Out of memory.\n");
+    exit(1);
+  }
+
+  for (int offset = 0; offset < count;) {
+    isStart[offset] = true;
+    offset += opcodeSize(chunk->code[offset]);
+  }
+
+  markReachable(chunk, isStart, reachable, isTarget);
+  peepholePass(chunk, reachable, isTarget, remove);
+
+  for (int i = 0; i < count; i++) {
+    newOffsets[i] = -1;
+  }
+
+  int newCount = 0;
+  for (int offset = 0; offset < count;) {
+    int size = opcodeSize(chunk->code[offset]);
+    if (reachable[offset] && !remove[offset]) {
+      newOffsets[offset] = newCount;
+      newCount += size;
+    }
+    offset += size;
+  }
+
+  if (newCount == count) {
+    free(isStart);
+    free(reachable);
+    free(isTarget);
+    free(remove);
+    free(newOffsets);
+    return;
+  }
+
+  uint8_t* newCode = (uint8_t*)malloc((size_t)newCount);
+  Token* newTokens = (Token*)malloc(sizeof(Token) * (size_t)newCount);
+  InlineCache* newCaches = (InlineCache*)malloc(sizeof(InlineCache) * (size_t)newCount);
+  if (!newCode || !newTokens || !newCaches) {
+    fprintf(stderr, "Out of memory.\n");
+    exit(1);
+  }
+  memset(newCaches, 0, sizeof(InlineCache) * (size_t)newCount);
+
+  for (int offset = 0; offset < count;) {
+    int size = opcodeSize(chunk->code[offset]);
+    if (reachable[offset] && !remove[offset]) {
+      int dest = newOffsets[offset];
+      memcpy(newCode + dest, chunk->code + offset, (size_t)size);
+      memcpy(newTokens + dest, chunk->tokens + offset, sizeof(Token) * (size_t)size);
+    }
+    offset += size;
+  }
+
+  for (int offset = 0; offset < count;) {
+    int size = opcodeSize(chunk->code[offset]);
+    if (reachable[offset] && !remove[offset]) {
+      uint8_t opcode = chunk->code[offset];
+      if (opcode == OP_JUMP || opcode == OP_JUMP_IF_FALSE || opcode == OP_LOOP) {
+        int oldNext = offset + size;
+        int oldTarget = 0;
+        if (opcode == OP_LOOP) {
+          oldTarget = oldNext - (int)readShort(chunk->code, offset);
+        } else {
+          oldTarget = oldNext + (int)readShort(chunk->code, offset);
+        }
+        int newOffset = newOffsets[offset];
+        int newTarget = newOffsets[oldTarget];
+        if (newTarget < 0) {
+          fprintf(stderr, "Compile error: invalid jump target after optimization.\n");
+          exit(1);
+        }
+        int newJump = opcode == OP_LOOP
+                          ? (newOffset + size - newTarget)
+                          : (newTarget - (newOffset + size));
+        newCode[newOffset + 1] = (uint8_t)((newJump >> 8) & 0xff);
+        newCode[newOffset + 2] = (uint8_t)(newJump & 0xff);
+      }
+    }
+    offset += size;
+  }
+
+  uint8_t* oldCode = chunk->code;
+  Token* oldTokens = chunk->tokens;
+  InlineCache* oldCaches = chunk->caches;
+  int oldCapacity = chunk->capacity;
+
+  chunk->code = newCode;
+  chunk->tokens = newTokens;
+  chunk->caches = newCaches;
+  chunk->count = newCount;
+  chunk->capacity = newCount;
+
+  FREE_ARRAY(uint8_t, oldCode, oldCapacity);
+  FREE_ARRAY(Token, oldTokens, oldCapacity);
+  FREE_ARRAY(InlineCache, oldCaches, oldCapacity);
+
+  free(isStart);
+  free(reachable);
+  free(isTarget);
+  free(remove);
+  free(newOffsets);
 }

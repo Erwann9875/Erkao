@@ -68,8 +68,7 @@ static Value concatenateStrings(VM* vm, ObjString* a, ObjString* b) {
   memcpy(buffer, a->chars, (size_t)a->length);
   memcpy(buffer + a->length, b->chars, (size_t)b->length);
   buffer[length] = '\0';
-  ObjString* result = copyStringWithLength(vm, buffer, length);
-  free(buffer);
+  ObjString* result = takeStringWithLength(vm, buffer, length);
   return OBJ_VAL(result);
 }
 
@@ -261,6 +260,12 @@ static bool run(VM* vm) {
 
   for (;;) {
     uint8_t instruction = READ_BYTE();
+    size_t instructionOffset = (size_t)(frame->ip - frame->function->chunk->code - 1);
+    InlineCache* cache = NULL;
+    if (frame->function->chunk->caches &&
+        instructionOffset < (size_t)frame->function->chunk->count) {
+      cache = &frame->function->chunk->caches[instructionOffset];
+    }
     switch (instruction) {
       case OP_CONSTANT: {
         Value constant = READ_CONSTANT();
@@ -319,17 +324,54 @@ static bool run(VM* vm) {
         Value object = pop(vm);
         if (isObjType(object, OBJ_INSTANCE)) {
           ObjInstance* instance = (ObjInstance*)AS_OBJ(object);
+          ObjMap* fields = instance->fields;
+          if (cache && cache->kind == IC_FIELD && cache->map == fields) {
+            int index = cache->index;
+            if (index >= 0 && index < fields->capacity &&
+                fields->entries[index].key == name) {
+              push(vm, fields->entries[index].value);
+              break;
+            }
+          }
+
           Value value;
-          if (mapGet(instance->fields, name, &value)) {
+          int index = -1;
+          if (mapGetIndex(fields, name, &value, &index)) {
+            if (cache) {
+              cache->kind = IC_FIELD;
+              cache->map = fields;
+              cache->key = name;
+              cache->index = index;
+              cache->klass = NULL;
+              cache->method = NULL;
+            }
             push(vm, value);
             break;
           }
+
+          if (cache && cache->kind == IC_METHOD &&
+              cache->klass == instance->klass &&
+              cache->key == name && cache->method) {
+            ObjBoundMethod* bound = newBoundMethod(vm, object, cache->method);
+            push(vm, OBJ_VAL(bound));
+            break;
+          }
+
           ObjFunction* method = NULL;
           if (findMethodByName(instance->klass, name, &method)) {
+            if (cache) {
+              cache->kind = IC_METHOD;
+              cache->klass = instance->klass;
+              cache->key = name;
+              cache->method = method;
+              cache->map = NULL;
+              cache->index = -1;
+            }
             ObjBoundMethod* bound = newBoundMethod(vm, object, method);
             push(vm, OBJ_VAL(bound));
             break;
           }
+
           runtimeError(vm, currentToken(frame), "Undefined property.");
           return false;
         }
@@ -345,7 +387,15 @@ static bool run(VM* vm) {
           return false;
         }
         ObjInstance* instance = (ObjInstance*)AS_OBJ(object);
-        mapSet(instance->fields, name, value);
+        int index = mapSetIndex(instance->fields, name, value);
+        if (cache) {
+          cache->kind = IC_FIELD;
+          cache->map = instance->fields;
+          cache->key = name;
+          cache->index = index;
+          cache->klass = NULL;
+          cache->method = NULL;
+        }
         push(vm, value);
         break;
       }
@@ -643,7 +693,8 @@ static bool run(VM* vm) {
         break;
       }
       case OP_ARRAY: {
-        ObjArray* array = newArray(vm);
+        uint16_t capacity = READ_SHORT();
+        ObjArray* array = newArrayWithCapacity(vm, (int)capacity);
         push(vm, OBJ_VAL(array));
         break;
       }
@@ -654,7 +705,8 @@ static bool run(VM* vm) {
         break;
       }
       case OP_MAP: {
-        ObjMap* map = newMap(vm);
+        uint16_t capacity = READ_SHORT();
+        ObjMap* map = newMapWithCapacity(vm, (int)capacity);
         push(vm, OBJ_VAL(map));
         break;
       }

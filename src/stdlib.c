@@ -115,8 +115,9 @@ static Value nativeKeys(VM* vm, int argc, Value* args) {
     return runtimeErrorValue(vm, "keys() expects a map.");
   }
   ObjMap* map = (ObjMap*)AS_OBJ(args[0]);
-  ObjArray* array = newArray(vm);
-  for (int i = 0; i < map->count; i++) {
+  ObjArray* array = newArrayWithCapacity(vm, map->count);
+  for (int i = 0; i < map->capacity; i++) {
+    if (!map->entries[i].key) continue;
     arrayWrite(array, OBJ_VAL(map->entries[i].key));
   }
   return OBJ_VAL(array);
@@ -128,8 +129,9 @@ static Value nativeValues(VM* vm, int argc, Value* args) {
     return runtimeErrorValue(vm, "values() expects a map.");
   }
   ObjMap* map = (ObjMap*)AS_OBJ(args[0]);
-  ObjArray* array = newArray(vm);
-  for (int i = 0; i < map->count; i++) {
+  ObjArray* array = newArrayWithCapacity(vm, map->count);
+  for (int i = 0; i < map->capacity; i++) {
+    if (!map->entries[i].key) continue;
     arrayWrite(array, map->entries[i].value);
   }
   return OBJ_VAL(array);

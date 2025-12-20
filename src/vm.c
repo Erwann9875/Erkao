@@ -162,7 +162,7 @@ void vmFree(VM* vm) {
 }
 
 void vmSetArgs(VM* vm, int argc, const char** argv) {
-  ObjArray* array = newArray(vm);
+  ObjArray* array = newArrayWithCapacity(vm, argc);
   for (int i = 0; i < argc; i++) {
     ObjString* arg = copyString(vm, argv[i]);
     arrayWrite(array, OBJ_VAL(arg));

@@ -104,7 +104,8 @@ static void blackenObject(VM* vm, Obj* object) {
     }
     case OBJ_MAP: {
       ObjMap* map = (ObjMap*)object;
-      for (int i = 0; i < map->count; i++) {
+      for (int i = 0; i < map->capacity; i++) {
+        if (!map->entries[i].key) continue;
         markObject(vm, (Obj*)map->entries[i].key);
         markValue(vm, map->entries[i].value);
       }
@@ -180,7 +181,8 @@ void blackenYoungObject(VM* vm, Obj* object) {
     }
     case OBJ_MAP: {
       ObjMap* map = (ObjMap*)object;
-      for (int i = 0; i < map->count; i++) {
+      for (int i = 0; i < map->capacity; i++) {
+        if (!map->entries[i].key) continue;
         markYoungObject(vm, (Obj*)map->entries[i].key);
         markYoungValue(vm, map->entries[i].value);
       }
@@ -341,11 +343,9 @@ bool gcObjectHasYoungRefs(Obj* object) {
     }
     case OBJ_MAP: {
       ObjMap* map = (ObjMap*)object;
-      for (int i = 0; i < map->count; i++) {
-        if (map->entries[i].key &&
-            map->entries[i].key->obj.generation == OBJ_GEN_YOUNG) {
-          return true;
-        }
+      for (int i = 0; i < map->capacity; i++) {
+        if (!map->entries[i].key) continue;
+        if (map->entries[i].key->obj.generation == OBJ_GEN_YOUNG) return true;
         if (valueHasYoung(map->entries[i].value)) return true;
       }
       return false;

@@ -4,6 +4,21 @@
 #include "value.h"
 
 typedef enum {
+  IC_NONE,
+  IC_FIELD,
+  IC_METHOD
+} InlineCacheKind;
+
+typedef struct {
+  InlineCacheKind kind;
+  ObjMap* map;
+  ObjString* key;
+  ObjClass* klass;
+  ObjFunction* method;
+  int index;
+} InlineCache;
+
+typedef enum {
   OP_CONSTANT,
   OP_NULL,
   OP_TRUE,
@@ -50,6 +65,7 @@ typedef struct Chunk {
   int capacity;
   uint8_t* code;
   Token* tokens;
+  InlineCache* caches;
   int constantsCount;
   int constantsCapacity;
   Value* constants;
