@@ -62,10 +62,18 @@ typedef enum {
   OBJ_BOUND_METHOD
 } ObjType;
 
+typedef enum {
+  OBJ_GEN_YOUNG = 0,
+  OBJ_GEN_OLD = 1
+} ObjGen;
+
 struct Obj {
   ObjType type;
   Obj* next;
   bool marked;
+  ObjGen generation;
+  uint8_t age;
+  size_t size;
 };
 
 struct ObjString {
@@ -98,6 +106,7 @@ typedef struct {
 
 struct ObjMap {
   Obj obj;
+  VM* vm;
   MapEntryValue* entries;
   int count;
   int capacity;
@@ -117,6 +126,7 @@ struct ObjInstance {
 
 struct ObjArray {
   Obj obj;
+  VM* vm;
   Value* items;
   int count;
   int capacity;

@@ -10,15 +10,19 @@ static Obj* allocateObject(VM* vm, size_t size, ObjType type) {
     exit(1);
   }
   object->type = type;
-  object->next = vm->objects;
   object->marked = false;
-  vm->objects = object;
-  gcTrackAlloc(vm);
+  object->generation = OBJ_GEN_YOUNG;
+  object->age = 0;
+  object->size = size;
+  object->next = vm->youngObjects;
+  vm->youngObjects = object;
+  gcTrackAlloc(vm, object);
   return object;
 }
 
 static ObjString* allocateString(VM* vm, char* chars, int length) {
-  ObjString* string = (ObjString*)allocateObject(vm, sizeof(ObjString), OBJ_STRING);
+  size_t size = sizeof(ObjString) + (size_t)length + 1;
+  ObjString* string = (ObjString*)allocateObject(vm, size, OBJ_STRING);
   string->length = length;
   string->chars = chars;
   return string;
@@ -87,6 +91,7 @@ ObjInstance* newInstanceWithFields(VM* vm, ObjClass* klass, ObjMap* fields) {
 
 ObjArray* newArray(VM* vm) {
   ObjArray* array = (ObjArray*)allocateObject(vm, sizeof(ObjArray), OBJ_ARRAY);
+  array->vm = vm;
   array->items = NULL;
   array->count = 0;
   array->capacity = 0;
@@ -95,6 +100,7 @@ ObjArray* newArray(VM* vm) {
 
 ObjMap* newMap(VM* vm) {
   ObjMap* map = (ObjMap*)allocateObject(vm, sizeof(ObjMap), OBJ_MAP);
+  map->vm = vm;
   map->entries = NULL;
   map->count = 0;
   map->capacity = 0;
@@ -113,6 +119,13 @@ void arrayWrite(ObjArray* array, Value value) {
     int oldCapacity = array->capacity;
     array->capacity = GROW_CAPACITY(oldCapacity);
     array->items = GROW_ARRAY(Value, array->items, oldCapacity, array->capacity);
+    size_t oldSize = array->obj.size;
+    size_t extra = sizeof(Value) * (size_t)(array->capacity - oldCapacity);
+    size_t newSize = oldSize + extra;
+    array->obj.size = newSize;
+    if (array->vm) {
+      gcTrackResize(array->vm, (Obj*)array, oldSize, newSize);
+    }
   }
   array->items[array->count++] = value;
 }
@@ -178,6 +191,13 @@ void mapSet(ObjMap* map, ObjString* key, Value value) {
     int oldCapacity = map->capacity;
     map->capacity = GROW_CAPACITY(oldCapacity);
     map->entries = GROW_ARRAY(MapEntryValue, map->entries, oldCapacity, map->capacity);
+    size_t oldSize = map->obj.size;
+    size_t extra = sizeof(MapEntryValue) * (size_t)(map->capacity - oldCapacity);
+    size_t newSize = oldSize + extra;
+    map->obj.size = newSize;
+    if (map->vm) {
+      gcTrackResize(map->vm, (Obj*)map, oldSize, newSize);
+    }
   }
 
   map->entries[map->count].key = key;

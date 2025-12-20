@@ -17,7 +17,8 @@ typedef struct VM {
   Env* globals;
   Env* env;
   Env* envs;
-  Obj* objects;
+  Obj* youngObjects;
+  Obj* oldObjects;
   ObjArray* args;
   ObjMap* modules;
   Program* programs;
@@ -25,9 +26,14 @@ typedef struct VM {
   void** pluginHandles;
   int pluginCount;
   int pluginCapacity;
-  size_t gcAllocCount;
+  size_t gcYoungBytes;
+  size_t gcOldBytes;
+  size_t gcEnvBytes;
+  size_t gcYoungNext;
   size_t gcNext;
-  bool gcPending;
+  bool gcPendingYoung;
+  bool gcPendingFull;
+  bool gcSweeping;
   bool gcLog;
   Obj** gcGrayObjects;
   size_t gcGrayObjectCount;
@@ -35,6 +41,13 @@ typedef struct VM {
   Env** gcGrayEnvs;
   size_t gcGrayEnvCount;
   size_t gcGrayEnvCapacity;
+  Obj** gcSweepOld;
+  Env** gcSweepEnv;
+  clock_t gcLogStart;
+  size_t gcLogBeforeYoung;
+  size_t gcLogBeforeOld;
+  size_t gcLogBeforeEnv;
+  bool gcLogFullActive;
   bool hadError;
 } VM;
 

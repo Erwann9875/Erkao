@@ -3,7 +3,16 @@
 
 #include "interpreter.h"
 
-void gcTrackAlloc(VM* vm);
+#define GC_MIN_HEAP_BYTES (1024 * 1024)
+#define GC_MIN_YOUNG_HEAP_BYTES (256 * 1024)
+#define GC_HEAP_GROW_FACTOR 2
+#define GC_YOUNG_GROW_FACTOR 2
+#define GC_SWEEP_BATCH 256
+#define GC_PROMOTION_AGE 2
+
+void gcTrackAlloc(VM* vm, Obj* object);
+void gcTrackResize(VM* vm, Obj* object, size_t oldSize, size_t newSize);
+void gcTrackEnvAlloc(VM* vm, size_t size);
 void gcMaybe(VM* vm);
 void gcCollect(VM* vm);
 void freeObject(VM* vm, Obj* object);

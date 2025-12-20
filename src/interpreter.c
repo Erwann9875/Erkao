@@ -236,7 +236,7 @@ static Env* newEnv(VM* vm, Env* enclosing) {
   env->next = vm->envs;
   env->marked = false;
   vm->envs = env;
-  gcTrackAlloc(vm);
+  gcTrackEnvAlloc(vm, sizeof(Env));
   return env;
 }
 
@@ -306,16 +306,22 @@ void defineGlobal(VM* vm, const char* name, Value value) {
 }
 
 void vmInit(VM* vm) {
-  vm->objects = NULL;
+  vm->youngObjects = NULL;
+  vm->oldObjects = NULL;
   vm->envs = NULL;
   vm->programs = NULL;
   vm->currentProgram = NULL;
   vm->pluginHandles = NULL;
   vm->pluginCount = 0;
   vm->pluginCapacity = 0;
-  vm->gcAllocCount = 0;
-  vm->gcNext = 1024;
-  vm->gcPending = false;
+  vm->gcYoungBytes = 0;
+  vm->gcOldBytes = 0;
+  vm->gcEnvBytes = 0;
+  vm->gcYoungNext = GC_MIN_YOUNG_HEAP_BYTES;
+  vm->gcNext = GC_MIN_HEAP_BYTES;
+  vm->gcPendingYoung = false;
+  vm->gcPendingFull = false;
+  vm->gcSweeping = false;
   vm->gcLog = envFlagEnabled("ERKAO_GC_LOG");
   vm->gcGrayObjects = NULL;
   vm->gcGrayObjectCount = 0;
@@ -323,6 +329,13 @@ void vmInit(VM* vm) {
   vm->gcGrayEnvs = NULL;
   vm->gcGrayEnvCount = 0;
   vm->gcGrayEnvCapacity = 0;
+  vm->gcSweepOld = NULL;
+  vm->gcSweepEnv = NULL;
+  vm->gcLogStart = 0;
+  vm->gcLogBeforeYoung = 0;
+  vm->gcLogBeforeOld = 0;
+  vm->gcLogBeforeEnv = 0;
+  vm->gcLogFullActive = false;
   vm->hadError = false;
   vm->globals = newEnv(vm, NULL);
   vm->env = vm->globals;
@@ -344,13 +357,21 @@ void vmFree(VM* vm) {
   vm->gcGrayEnvCount = 0;
   vm->gcGrayEnvCapacity = 0;
 
-  Obj* object = vm->objects;
+  Obj* object = vm->youngObjects;
   while (object) {
     Obj* next = object->next;
     freeObject(vm, object);
     object = next;
   }
-  vm->objects = NULL;
+  vm->youngObjects = NULL;
+
+  object = vm->oldObjects;
+  while (object) {
+    Obj* next = object->next;
+    freeObject(vm, object);
+    object = next;
+  }
+  vm->oldObjects = NULL;
 
   Env* env = vm->envs;
   while (env) {
