@@ -120,7 +120,7 @@ Semantics:
 
 ## Keywords
 
-`let`, `fun`, `class`, `if`, `else`, `while`, `import`, `return`, `true`, `false`, `null`, `this`, `and`, `or`
+`let`, `fun`, `class`, `if`, `else`, `while`, `import`, `as`, `return`, `true`, `false`, `null`, `this`, `and`, `or`
 
 ## Built-in functions
 
