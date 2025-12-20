@@ -179,4 +179,5 @@ Build a plugin with include paths to `include` and `src`.
 
 - Strings are UTF-8 byte sequences (no unicode processing yet).
 - Mark-and-sweep GC runs at statement boundaries to reclaim runtime objects.
+- Set `ERKAO_GC_LOG=1` to print GC stats to stderr.
 - Source and AST programs are freed when no live functions reference them.

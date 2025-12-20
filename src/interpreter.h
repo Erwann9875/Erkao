@@ -28,6 +28,7 @@ typedef struct VM {
   size_t gcAllocCount;
   size_t gcNext;
   bool gcPending;
+  bool gcLog;
   bool hadError;
 } VM;
 

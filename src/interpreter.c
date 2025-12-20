@@ -39,6 +39,26 @@ static ExecResult execError(void) {
   return result;
 }
 
+static bool envFlagEnabled(const char* name) {
+  const char* value = getenv(name);
+  if (!value || value[0] == '\0') return false;
+
+  char lower[6];
+  size_t i = 0;
+  while (value[i] && i < sizeof(lower) - 1) {
+    lower[i] = (char)tolower((unsigned char)value[i]);
+    i++;
+  }
+  lower[i] = '\0';
+
+  if (strcmp(lower, "0") == 0 || strcmp(lower, "no") == 0 ||
+      strcmp(lower, "off") == 0 || strcmp(lower, "false") == 0) {
+    return false;
+  }
+
+  return true;
+}
+
 static Env* newEnv(VM* vm, Env* enclosing);
 static void runtimeError(VM* vm, Token token, const char* message);
 
@@ -296,6 +316,7 @@ void vmInit(VM* vm) {
   vm->gcAllocCount = 0;
   vm->gcNext = 1024;
   vm->gcPending = false;
+  vm->gcLog = envFlagEnabled("ERKAO_GC_LOG");
   vm->hadError = false;
   vm->globals = newEnv(vm, NULL);
   vm->env = vm->globals;

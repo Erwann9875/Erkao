@@ -5,9 +5,29 @@ static void markValue(VM* vm, Value value);
 static void markObject(VM* vm, Obj* object);
 static void markEnv(VM* vm, Env* env);
 
+static size_t countObjects(const VM* vm) {
+  size_t count = 0;
+  for (Obj* object = vm->objects; object; object = object->next) {
+    count++;
+  }
+  return count;
+}
+
+static size_t countEnvs(const VM* vm) {
+  size_t count = 0;
+  for (Env* env = vm->envs; env; env = env->next) {
+    count++;
+  }
+  return count;
+}
+
 void gcTrackAlloc(VM* vm) {
   vm->gcAllocCount++;
   if (vm->gcAllocCount > vm->gcNext) {
+    if (!vm->gcPending && vm->gcLog) {
+      fprintf(stderr, "[gc] threshold reached: alloc=%zu next=%zu\n",
+              vm->gcAllocCount, vm->gcNext);
+    }
     vm->gcPending = true;
   }
 }
@@ -189,6 +209,17 @@ void gcCollect(VM* vm) {
   if (!vm) return;
   vm->gcPending = false;
 
+  size_t beforeObjects = 0;
+  size_t beforeEnvs = 0;
+  clock_t start = 0;
+  if (vm->gcLog) {
+    beforeObjects = countObjects(vm);
+    beforeEnvs = countEnvs(vm);
+    start = clock();
+    fprintf(stderr, "[gc] begin: objects=%zu envs=%zu alloc=%zu next=%zu\n",
+            beforeObjects, beforeEnvs, vm->gcAllocCount, vm->gcNext);
+  }
+
   markRoots(vm);
 
   size_t aliveObjects = sweepObjects(vm);
@@ -198,5 +229,17 @@ void gcCollect(VM* vm) {
   vm->gcNext = vm->gcAllocCount * 2;
   if (vm->gcNext < 1024) {
     vm->gcNext = 1024;
+  }
+
+  if (vm->gcLog) {
+    clock_t end = clock();
+    size_t freedObjects = beforeObjects > aliveObjects ? beforeObjects - aliveObjects : 0;
+    size_t freedEnvs = beforeEnvs > aliveEnvs ? beforeEnvs - aliveEnvs : 0;
+    double ms = (double)(end - start) * 1000.0 / (double)CLOCKS_PER_SEC;
+    fprintf(stderr,
+            "[gc] end: objects=%zu->%zu (-%zu) envs=%zu->%zu (-%zu) next=%zu time=%.2fms\n",
+            beforeObjects, aliveObjects, freedObjects,
+            beforeEnvs, aliveEnvs, freedEnvs,
+            vm->gcNext, ms);
   }
 }
