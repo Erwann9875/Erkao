@@ -1,0 +1,5 @@
+let buildDir = path.join(fs.cwd(), "build");
+let tmp = path.join(buildDir, "erkao_test_tmp.txt");
+
+print("write", fs.writeText(tmp, "hello"));
+print("read", fs.readText(tmp));

@@ -1,0 +1,3 @@
+[line 1:10] Error at '1': Expect ';' after variable declaration.
+  let x = 1
+           ^

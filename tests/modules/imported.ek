@@ -1,0 +1,5 @@
+let answer = 42;
+
+fun greet(name) {
+  return "Hi " + name;
+}

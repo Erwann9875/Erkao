@@ -1,0 +1,5 @@
+exists true
+join a/b
+dirname a/b
+basename c.txt
+ext .txt

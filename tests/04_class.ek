@@ -1,0 +1,15 @@
+class Counter {
+  fun init(start) {
+    this.value = start;
+  }
+
+  fun inc() {
+    this.value = this.value + 1;
+    return this.value;
+  }
+}
+
+let counter = Counter(5);
+print("value", counter.value);
+print("inc", counter.inc());
+print("value", counter.value);

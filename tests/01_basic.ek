@@ -1,0 +1,9 @@
+print("sum", 2 + 3);
+print("bool", true and false);
+
+let nums = [1, 2, 3];
+print("len", len(nums));
+
+let map = { a: 1, "b": 2 };
+print("keys", keys(map));
+print("values", values(map));

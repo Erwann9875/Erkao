@@ -1,0 +1,3 @@
+[line 1:7] RuntimeError at 'unknown': Undefined variable.
+  print(unknown);
+        ^

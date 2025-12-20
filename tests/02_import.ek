@@ -1,0 +1,4 @@
+import "./modules/imported.ek";
+
+print("answer", answer);
+print(greet("Erkao"));

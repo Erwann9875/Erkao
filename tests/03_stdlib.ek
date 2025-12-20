@@ -1,0 +1,5 @@
+print("exists", fs.exists("README.md"));
+print("join", path.join("a", "b"));
+print("dirname", path.dirname("a/b/c.txt"));
+print("basename", path.basename("a/b/c.txt"));
+print("ext", path.extname("a/b/c.txt"));

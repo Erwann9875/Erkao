@@ -1,0 +1,3 @@
+[line 1:1] RuntimeError at 'import': Import path must be a string.
+  import 123;
+  ^

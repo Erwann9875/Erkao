@@ -1,5 +1,7 @@
 # Erkao
 
+[![tests](https://github.com/Erwann9875/Erkao/actions/workflows/tests.yml/badge.svg)](https://github.com/Erwann9875/Erkao/actions/workflows/tests.yml)
+
 Erkao is a small, fun, dynamic language written in C. It starts as an AST interpreter with classes, functions, arrays, and maps. The goal is to keep the core tiny but expressive so you can grow it into a full Windows-first language later.
 
 ## Build
@@ -49,6 +51,14 @@ Backward-compatible shorthand:
 
 ```sh
 ./build/Debug/erkao.exe ./examples/hello.ek
+```
+
+## Testing
+
+Run the golden tests from the repo root:
+
+```powershell
+.\scripts\run-tests.ps1
 ```
 
 ## Language quick tour
