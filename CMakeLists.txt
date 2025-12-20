@@ -38,5 +38,5 @@ target_include_directories(erkao PRIVATE
 if(WIN32)
   target_link_libraries(erkao winhttp)
 else()
-  target_link_libraries(erkao dl)
+  target_link_libraries(erkao dl m)
 endif()
