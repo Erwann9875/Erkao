@@ -63,7 +63,7 @@ static void printStackTrace(VM* vm, const char* fallbackPath) {
 
 static bool stackTraceEnabled(void) {
   const char* value = getenv("ERKAO_STACK_TRACE");
-  if (!value || value[0] == '\0') return true;
+  if (!value || value[0] == '\0') return false;
 
   char lower[6];
   size_t i = 0;
