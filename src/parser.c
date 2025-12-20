@@ -81,6 +81,7 @@ static void synchronize(Parser* parser) {
       case TOKEN_CLASS:
       case TOKEN_FUN:
       case TOKEN_LET:
+      case TOKEN_IMPORT:
       case TOKEN_IF:
       case TOKEN_WHILE:
       case TOKEN_RETURN:
@@ -171,6 +172,7 @@ static Stmt* functionDeclaration(Parser* parser, const char* kind);
 static Stmt* varDeclaration(Parser* parser);
 static Stmt* ifStatement(Parser* parser);
 static Stmt* whileStatement(Parser* parser);
+static Stmt* importStatement(Parser* parser);
 static Stmt* returnStatement(Parser* parser);
 static Stmt* expressionStatement(Parser* parser);
 static StmtArray block(Parser* parser);
@@ -191,6 +193,7 @@ static Stmt* declaration(Parser* parser) {
   if (match(parser, TOKEN_CLASS)) return classDeclaration(parser);
   if (match(parser, TOKEN_FUN)) return functionDeclaration(parser, "function");
   if (match(parser, TOKEN_LET)) return varDeclaration(parser);
+  if (match(parser, TOKEN_IMPORT)) return importStatement(parser);
 
   Stmt* stmt = statement(parser);
   if (parser->panicMode) synchronize(parser);
@@ -286,6 +289,13 @@ static Stmt* whileStatement(Parser* parser) {
   consume(parser, TOKEN_RIGHT_PAREN, "Expect ')' after condition.");
   Stmt* body = statement(parser);
   return newWhileStmt(condition, body);
+}
+
+static Stmt* importStatement(Parser* parser) {
+  Token keyword = previous(parser);
+  Expr* path = expression(parser);
+  consume(parser, TOKEN_SEMICOLON, "Expect ';' after import.");
+  return newImportStmt(keyword, path);
 }
 
 static Stmt* returnStatement(Parser* parser) {

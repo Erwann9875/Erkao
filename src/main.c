@@ -41,7 +41,7 @@ static void freeStatements(StmtArray* statements) {
   freeStmtArray(statements);
 }
 
-static bool runSource(VM* vm, char* source) {
+static bool runSource(VM* vm, const char* path, char* source) {
   bool lexError = false;
   TokenArray tokens = scanTokens(source, &lexError);
   if (lexError) {
@@ -59,7 +59,7 @@ static bool runSource(VM* vm, char* source) {
     return false;
   }
 
-  Program* program = programCreate(vm, source, statements);
+  Program* program = programCreate(vm, source, path, statements);
   return interpret(vm, program);
 }
 
@@ -68,7 +68,7 @@ static int runFile(VM* vm, const char* path, int argc, const char** argv) {
   if (!source) return 74;
 
   vmSetArgs(vm, argc, argv);
-  bool ok = runSource(vm, source);
+  bool ok = runSource(vm, path, source);
 
   return ok ? 0 : 65;
 }
@@ -89,7 +89,7 @@ static void repl(VM* vm) {
       break;
     }
     memcpy(copy, line, length + 1);
-    runSource(vm, copy);
+    runSource(vm, NULL, copy);
     vm->hadError = false;
   }
 }

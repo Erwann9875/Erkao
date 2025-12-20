@@ -1,0 +1,10 @@
+import "./imported.ek";
+
+print("add", add(2, 3));
+print("pi", PI);
+
+let greeter = Greeter("Erkao");
+print(greeter.hello());
+
+let nums = [1, 2, 3];
+print("len", len(nums));

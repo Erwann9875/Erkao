@@ -19,6 +19,7 @@ typedef struct VM {
   Env* envs;
   Obj* objects;
   ObjArray* args;
+  ObjMap* modules;
   Program* programs;
   Program* currentProgram;
   void** pluginHandles;

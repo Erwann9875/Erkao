@@ -86,14 +86,30 @@ print(greet(name));
 
 - Variables: `let x = 3;`
 - Control flow: `if (...) { ... } else { ... }`, `while (...) { ... }`
+- Imports: `import "path/to/file.ek";`
 - Functions: `fun name(a, b) { return a + b; }`
 - Classes: `class Name { fun init(...) { ... } fun method(...) { ... } }`
 - Arrays: `[1, 2, 3]`, indexing with `arr[0]`
 - Maps: `{ key: value, "other": value }`, indexing with `map["key"]`
 
+## Imports
+
+Use `import` to load and execute another `.ek` file once.
+
+```ek
+import "./examples/hello.ek";
+```
+
+Semantics:
+
+- The import path must be a string.
+- Relative paths resolve from the importing file's directory.
+- If the path has no extension, `.ek` is appended.
+- Each file is loaded and executed at most once.
+
 ## Keywords
 
-`let`, `fun`, `class`, `if`, `else`, `while`, `return`, `true`, `false`, `null`, `this`, `and`, `or`
+`let`, `fun`, `class`, `if`, `else`, `while`, `import`, `return`, `true`, `false`, `null`, `this`, `and`, `or`
 
 ## Built-in functions
 

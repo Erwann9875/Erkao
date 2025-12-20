@@ -27,16 +27,28 @@ static void programFree(VM* vm, Program* program) {
   }
   freeStmtArray(&program->statements);
   free(program->source);
+  free(program->path);
   free(program);
 }
 
-Program* programCreate(VM* vm, char* source, StmtArray statements) {
+Program* programCreate(VM* vm, char* source, const char* path, StmtArray statements) {
   Program* program = (Program*)malloc(sizeof(Program));
   if (!program) {
     fprintf(stderr, "Out of memory.\n");
     exit(1);
   }
   program->source = source;
+  if (path) {
+    size_t length = strlen(path);
+    program->path = (char*)malloc(length + 1);
+    if (!program->path) {
+      fprintf(stderr, "Out of memory.\n");
+      exit(1);
+    }
+    memcpy(program->path, path, length + 1);
+  } else {
+    program->path = NULL;
+  }
   program->statements = statements;
   program->refCount = 0;
   program->running = 0;
@@ -84,6 +96,7 @@ void programFreeAll(VM* vm) {
     }
     freeStmtArray(&current->statements);
     free(current->source);
+    free(current->path);
     free(current);
     current = next;
   }

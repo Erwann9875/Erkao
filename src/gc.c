@@ -91,6 +91,9 @@ static void markRoots(VM* vm) {
   if (vm->args) {
     markObject(vm, (Obj*)vm->args);
   }
+  if (vm->modules) {
+    markObject(vm, (Obj*)vm->modules);
+  }
 }
 
 void freeObject(VM* vm, Obj* object) {

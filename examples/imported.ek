@@ -1,0 +1,15 @@
+let PI = 3.14159;
+
+fun add(a, b) {
+  return a + b;
+}
+
+class Greeter {
+  fun init(name) {
+    this.name = name;
+  }
+
+  fun hello() {
+    return "Hello " + this.name;
+  }
+}

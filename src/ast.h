@@ -143,6 +143,7 @@ typedef enum {
   STMT_BLOCK,
   STMT_IF,
   STMT_WHILE,
+  STMT_IMPORT,
   STMT_FUNCTION,
   STMT_RETURN,
   STMT_CLASS
@@ -170,6 +171,10 @@ struct Stmt {
       Expr* condition;
       Stmt* body;
     } whileStmt;
+    struct {
+      Token keyword;
+      Expr* path;
+    } importStmt;
     struct {
       Token name;
       ParamArray params;
@@ -223,6 +228,7 @@ Stmt* newVarStmt(Token name, Expr* initializer);
 Stmt* newBlockStmt(StmtArray statements);
 Stmt* newIfStmt(Expr* condition, Stmt* thenBranch, Stmt* elseBranch);
 Stmt* newWhileStmt(Expr* condition, Stmt* body);
+Stmt* newImportStmt(Token keyword, Expr* path);
 Stmt* newFunctionStmt(Token name, ParamArray params, StmtArray body);
 Stmt* newReturnStmt(Token keyword, Expr* value);
 Stmt* newClassStmt(Token name, StmtArray methods);

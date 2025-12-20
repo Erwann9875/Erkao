@@ -250,6 +250,14 @@ Stmt* newWhileStmt(Expr* condition, Stmt* body) {
   return stmt;
 }
 
+Stmt* newImportStmt(Token keyword, Expr* path) {
+  Stmt* stmt = (Stmt*)allocateNode(sizeof(Stmt));
+  stmt->type = STMT_IMPORT;
+  stmt->as.importStmt.keyword = keyword;
+  stmt->as.importStmt.path = path;
+  return stmt;
+}
+
 Stmt* newFunctionStmt(Token name, ParamArray params, StmtArray body) {
   Stmt* stmt = (Stmt*)allocateNode(sizeof(Stmt));
   stmt->type = STMT_FUNCTION;
@@ -375,6 +383,9 @@ void freeStmt(Stmt* stmt) {
     case STMT_WHILE:
       freeExpr(stmt->as.whileStmt.condition);
       freeStmt(stmt->as.whileStmt.body);
+      break;
+    case STMT_IMPORT:
+      freeExpr(stmt->as.importStmt.path);
       break;
     case STMT_FUNCTION:
       for (int i = 0; i < stmt->as.function.params.count; i++) {

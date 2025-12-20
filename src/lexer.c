@@ -164,7 +164,13 @@ static ErkaoTokenType identifierType(Scanner* scanner) {
       }
       break;
     case 'i':
-      return checkKeyword(scanner, 1, 1, "f", TOKEN_IF);
+      if ((int)(scanner->current - scanner->start) > 1) {
+        switch (scanner->start[1]) {
+          case 'f': return checkKeyword(scanner, 1, 1, "f", TOKEN_IF);
+          case 'm': return checkKeyword(scanner, 2, 4, "port", TOKEN_IMPORT);
+        }
+      }
+      return TOKEN_IDENTIFIER;
     case 'l':
       return checkKeyword(scanner, 1, 2, "et", TOKEN_LET);
     case 'n':
@@ -340,6 +346,7 @@ const char* tokenTypeName(ErkaoTokenType type) {
     case TOKEN_FALSE: return "FALSE";
     case TOKEN_FUN: return "FUN";
     case TOKEN_IF: return "IF";
+    case TOKEN_IMPORT: return "IMPORT";
     case TOKEN_NULL: return "NULL";
     case TOKEN_OR: return "OR";
     case TOKEN_RETURN: return "RETURN";

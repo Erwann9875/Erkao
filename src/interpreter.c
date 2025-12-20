@@ -3,6 +3,7 @@
 #include "gc.h"
 #include "plugin.h"
 #include "program.h"
+#include "parser.h"
 
 #include <math.h>
 
@@ -36,6 +37,152 @@ static ExecResult execError(void) {
   result.type = EXEC_ERROR;
   result.value = NULL_VAL;
   return result;
+}
+
+static void runtimeError(VM* vm, Token token, const char* message);
+
+static void freeStatements(StmtArray* statements) {
+  for (int i = 0; i < statements->count; i++) {
+    freeStmt(statements->items[i]);
+  }
+  freeStmtArray(statements);
+}
+
+static char* readFilePath(const char* path) {
+  FILE* file = fopen(path, "rb");
+  if (!file) return NULL;
+
+  fseek(file, 0L, SEEK_END);
+  long size = ftell(file);
+  rewind(file);
+
+  if (size < 0) {
+    fclose(file);
+    return NULL;
+  }
+
+  char* buffer = (char*)malloc((size_t)size + 1);
+  if (!buffer) {
+    fclose(file);
+    fprintf(stderr, "Out of memory.\n");
+    exit(1);
+  }
+
+  size_t read = fread(buffer, 1, (size_t)size, file);
+  buffer[read] = '\0';
+  fclose(file);
+  return buffer;
+}
+
+static bool isAbsolutePath(const char* path) {
+  if (!path || path[0] == '\0') return false;
+  if (path[0] == '/' || path[0] == '\\') return true;
+  if (((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) &&
+      path[1] == ':' && (path[2] == '\\' || path[2] == '/')) {
+    return true;
+  }
+  return false;
+}
+
+static char* copyCString(const char* src, size_t length) {
+  char* out = (char*)malloc(length + 1);
+  if (!out) {
+    fprintf(stderr, "Out of memory.\n");
+    exit(1);
+  }
+  memcpy(out, src, length);
+  out[length] = '\0';
+  return out;
+}
+
+static char* pathDirname(const char* path) {
+  const char* lastSlash = strrchr(path, '/');
+  const char* lastBackslash = strrchr(path, '\\');
+  const char* sep = lastSlash;
+  if (lastBackslash && (!sep || lastBackslash > sep)) {
+    sep = lastBackslash;
+  }
+
+  if (!sep) {
+    return copyCString(".", 1);
+  }
+
+  size_t length = (size_t)(sep - path);
+  if (length == 0) {
+    return copyCString(path, 1);
+  }
+  return copyCString(path, length);
+}
+
+static char* joinPaths(const char* dir, const char* rel) {
+  if (!dir || dir[0] == '\0' || strcmp(dir, ".") == 0) {
+    return copyCString(rel, strlen(rel));
+  }
+  char sep = '/';
+  if (strchr(dir, '\\')) sep = '\\';
+  size_t dirLen = strlen(dir);
+  size_t relLen = strlen(rel);
+  bool needsSep = dir[dirLen - 1] != '/' && dir[dirLen - 1] != '\\';
+  size_t total = dirLen + (needsSep ? 1 : 0) + relLen;
+  char* out = (char*)malloc(total + 1);
+  if (!out) {
+    fprintf(stderr, "Out of memory.\n");
+    exit(1);
+  }
+  memcpy(out, dir, dirLen);
+  size_t offset = dirLen;
+  if (needsSep) out[offset++] = sep;
+  memcpy(out + offset, rel, relLen);
+  out[total] = '\0';
+  return out;
+}
+
+static bool hasExtension(const char* path) {
+  const char* lastSlash = strrchr(path, '/');
+  const char* lastBackslash = strrchr(path, '\\');
+  const char* base = path;
+  if (lastSlash && lastSlash + 1 > base) base = lastSlash + 1;
+  if (lastBackslash && lastBackslash + 1 > base) base = lastBackslash + 1;
+  return strchr(base, '.') != NULL;
+}
+
+static char* resolveImportPath(const char* currentPath, const char* importPath) {
+  if (isAbsolutePath(importPath) || !currentPath) {
+    return copyCString(importPath, strlen(importPath));
+  }
+
+  char* base = pathDirname(currentPath);
+  char* joined = joinPaths(base, importPath);
+  free(base);
+  return joined;
+}
+
+static bool loadModule(VM* vm, Token keyword, const char* path) {
+  char* source = readFilePath(path);
+  if (!source) {
+    runtimeError(vm, keyword, "Failed to read import path.");
+    return false;
+  }
+
+  bool lexError = false;
+  TokenArray tokens = scanTokens(source, &lexError);
+  if (lexError) {
+    freeTokenArray(&tokens);
+    free(source);
+    return false;
+  }
+
+  StmtArray statements;
+  bool parseOk = parseTokens(&tokens, source, &statements);
+  freeTokenArray(&tokens);
+  if (!parseOk) {
+    freeStatements(&statements);
+    free(source);
+    return false;
+  }
+
+  Program* program = programCreate(vm, source, path, statements);
+  return interpret(vm, program);
 }
 
 static Env* newEnv(VM* vm, Env* enclosing) {
@@ -123,6 +270,7 @@ void vmInit(VM* vm) {
   vm->globals = newEnv(vm, NULL);
   vm->env = vm->globals;
   vm->args = newArray(vm);
+  vm->modules = newMap(vm);
 
   defineStdlib(vm);
 }
@@ -656,6 +804,58 @@ static ExecResult execute(VM* vm, Stmt* stmt) {
         gcMaybe(vm);
       }
       return execOk();
+    }
+    case STMT_IMPORT: {
+      Value pathValue = evaluate(vm, stmt->as.importStmt.path);
+      if (vm->hadError) return execError();
+      if (!isString(pathValue)) {
+        runtimeError(vm, stmt->as.importStmt.keyword, "Import path must be a string.");
+        return execError();
+      }
+
+      ObjString* pathString = asString(pathValue);
+      char* resolvedPath = resolveImportPath(
+          vm->currentProgram ? vm->currentProgram->path : NULL,
+          pathString->chars);
+      if (!resolvedPath) {
+        runtimeError(vm, stmt->as.importStmt.keyword, "Failed to resolve import path.");
+        return execError();
+      }
+
+      char* candidatePath = resolvedPath;
+      if (!hasExtension(candidatePath)) {
+        size_t length = strlen(candidatePath);
+        char* withExt = (char*)malloc(length + 4);
+        if (!withExt) {
+          fprintf(stderr, "Out of memory.\n");
+          exit(1);
+        }
+        memcpy(withExt, candidatePath, length);
+        memcpy(withExt + length, ".ek", 4);
+        candidatePath = withExt;
+      }
+
+      Token pathToken;
+      memset(&pathToken, 0, sizeof(Token));
+      pathToken.start = candidatePath;
+      pathToken.length = (int)strlen(candidatePath);
+
+      Value unused;
+      if (mapGetByToken(vm->modules, pathToken, &unused)) {
+        if (candidatePath != resolvedPath) free(candidatePath);
+        free(resolvedPath);
+        return execOk();
+      }
+
+      bool ok = loadModule(vm, stmt->as.importStmt.keyword, candidatePath);
+      if (ok) {
+        ObjString* key = copyStringWithLength(vm, candidatePath, pathToken.length);
+        mapSet(vm->modules, key, BOOL_VAL(true));
+      }
+
+      if (candidatePath != resolvedPath) free(candidatePath);
+      free(resolvedPath);
+      return ok ? execOk() : execError();
     }
     case STMT_FUNCTION: {
       ObjString* name = stringFromToken(vm, stmt->as.function.name);
