@@ -189,6 +189,22 @@ Semantics:
 - `path.dirname(path)`
 - `path.basename(path)`
 - `path.extname(path)`
+- `json.parse(text)`
+- `json.stringify(value)`
+- `math.abs(x)`
+- `math.floor(x)`
+- `math.ceil(x)`
+- `math.round(x)`
+- `math.sqrt(x)`
+- `math.pow(x, y)`
+- `math.min(...)`
+- `math.max(...)`
+- `math.clamp(value, min, max)`
+- `math.PI`
+- `math.E`
+- `http.get(url)`
+- `http.post(url, body)`
+- `http.request(method, url, body)`
 - `proc.run(cmd)`
 - `time.now()`
 - `time.sleep(seconds)`
@@ -227,3 +243,5 @@ Build a plugin with include paths to `include` and `src`.
 - Set `ERKAO_GC_LOG=1` to print GC stats to stderr.
 - REPL history is stored in `~/.erkao_history` or `%USERPROFILE%\.erkao_history` (override with `ERKAO_HISTORY`).
 - Source and AST programs are freed when no live functions reference them.
+- `http` is currently Windows-only (WinHTTP).
+- `http` responses are maps with `status`, `body`, and `headers`.

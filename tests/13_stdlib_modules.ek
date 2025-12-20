@@ -1,0 +1,18 @@
+let data = { name: "Ada", age: 42, ok: true, items: [1, 2, 3], empty: null };
+let text = json.stringify(data);
+print(text);
+
+let parsed = json.parse(text);
+print(parsed["name"]);
+print(parsed["age"]);
+print(parsed["ok"]);
+print(parsed["items"][1]);
+print(parsed["empty"]);
+
+print("abs", math.abs(-3));
+print("floor", math.floor(2.9));
+print("ceil", math.ceil(2.1));
+print("round", math.round(2.5));
+print("min", math.min(3, -1, 4));
+print("max", math.max(3, -1, 4));
+print("clamp", math.clamp(5, 0, 3));

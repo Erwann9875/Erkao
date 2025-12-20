@@ -1,0 +1,13 @@
+{"age":42,"empty":null,"items":[1,2,3],"name":"Ada","ok":true}
+Ada
+42
+true
+2
+null
+abs 3
+floor 2
+ceil 3
+round 3
+min -1
+max 4
+clamp 3

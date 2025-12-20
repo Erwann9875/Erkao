@@ -34,6 +34,8 @@ target_include_directories(erkao PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-if(NOT WIN32)
+if(WIN32)
+  target_link_libraries(erkao winhttp)
+else()
   target_link_libraries(erkao dl)
 endif()
