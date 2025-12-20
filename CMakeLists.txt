@@ -7,12 +7,21 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 add_executable(erkao
   src/main.c
   src/lexer.c
-  src/parser.c
+  src/parser_core.c
+  src/parser_expr.c
+  src/parser_stmt.c
   src/ast.c
   src/value.c
-  src/interpreter.c
+  src/vm.c
+  src/runtime.c
+  src/eval.c
+  src/exec.c
+  src/imports.c
   src/stdlib.c
-  src/gc.c
+  src/gc_core.c
+  src/gc_trace.c
+  src/gc_young.c
+  src/gc_sweep.c
   src/program.c
   src/plugin.c
 )
