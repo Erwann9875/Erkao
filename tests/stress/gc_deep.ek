@@ -1,0 +1,21 @@
+let depth = 50000;
+let node = null;
+let i = 0;
+
+while (i < depth) {
+  node = [node];
+  i = i + 1;
+}
+
+print("chain depth", depth);
+
+let extra = 0;
+let extraLimit = 25000;
+while (extra < extraLimit) {
+  let tmp = [extra, extra + 1, extra + 2];
+  let map = { idx: extra, payload: tmp };
+  extra = extra + 1;
+}
+
+print("extra done", extraLimit);
+print("root len", len(node));

@@ -61,6 +61,12 @@ Run the golden tests from the repo root:
 .\scripts\run-tests.ps1
 ```
 
+Run the GC stress test with logging:
+
+```powershell
+.\scripts\run-gc-stress.ps1
+```
+
 ## Language quick tour
 
 ```ek
