@@ -1,9 +1,9 @@
-import "./imported.ek";
+import "./imported.ek" as demo;
 
-print("add", add(2, 3));
-print("pi", PI);
+print("add", demo.add(2, 3));
+print("pi", demo.PI);
 
-let greeter = Greeter("Erkao");
+let greeter = demo.Greeter("Erkao");
 print(greeter.hello());
 
 let nums = [1, 2, 3];

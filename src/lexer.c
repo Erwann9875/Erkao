@@ -150,7 +150,13 @@ static ErkaoTokenType checkKeyword(Scanner* scanner, int start, int length,
 static ErkaoTokenType identifierType(Scanner* scanner) {
   switch (scanner->start[0]) {
     case 'a':
-      return checkKeyword(scanner, 1, 2, "nd", TOKEN_AND);
+      if ((int)(scanner->current - scanner->start) > 1) {
+        switch (scanner->start[1]) {
+          case 'n': return checkKeyword(scanner, 1, 2, "nd", TOKEN_AND);
+          case 's': return checkKeyword(scanner, 1, 1, "s", TOKEN_AS);
+        }
+      }
+      return TOKEN_IDENTIFIER;
     case 'c':
       return checkKeyword(scanner, 1, 4, "lass", TOKEN_CLASS);
     case 'e':
@@ -341,6 +347,7 @@ const char* tokenTypeName(ErkaoTokenType type) {
     case TOKEN_STRING: return "STRING";
     case TOKEN_NUMBER: return "NUMBER";
     case TOKEN_AND: return "AND";
+    case TOKEN_AS: return "AS";
     case TOKEN_CLASS: return "CLASS";
     case TOKEN_ELSE: return "ELSE";
     case TOKEN_FALSE: return "FALSE";

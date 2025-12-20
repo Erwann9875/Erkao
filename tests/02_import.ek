@@ -1,4 +1,4 @@
-import "./modules/imported.ek";
+import "./modules/imported.ek" as mod;
 
-print("answer", answer);
-print(greet("Erkao"));
+print("answer", mod.answer);
+print(mod.greet("Erkao"));

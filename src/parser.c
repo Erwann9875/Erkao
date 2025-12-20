@@ -294,8 +294,15 @@ static Stmt* whileStatement(Parser* parser) {
 static Stmt* importStatement(Parser* parser) {
   Token keyword = previous(parser);
   Expr* path = expression(parser);
+  Token alias;
+  memset(&alias, 0, sizeof(Token));
+  bool hasAlias = false;
+  if (match(parser, TOKEN_AS)) {
+    alias = consume(parser, TOKEN_IDENTIFIER, "Expect name after 'as'.");
+    hasAlias = true;
+  }
   consume(parser, TOKEN_SEMICOLON, "Expect ';' after import.");
-  return newImportStmt(keyword, path);
+  return newImportStmt(keyword, path, alias, hasAlias);
 }
 
 static Stmt* returnStatement(Parser* parser) {

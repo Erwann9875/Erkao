@@ -78,6 +78,13 @@ ObjInstance* newInstance(VM* vm, ObjClass* klass) {
   return instance;
 }
 
+ObjInstance* newInstanceWithFields(VM* vm, ObjClass* klass, ObjMap* fields) {
+  ObjInstance* instance = (ObjInstance*)allocateObject(vm, sizeof(ObjInstance), OBJ_INSTANCE);
+  instance->klass = klass;
+  instance->fields = fields;
+  return instance;
+}
+
 ObjArray* newArray(VM* vm) {
   ObjArray* array = (ObjArray*)allocateObject(vm, sizeof(ObjArray), OBJ_ARRAY);
   array->items = NULL;

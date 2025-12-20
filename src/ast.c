@@ -250,11 +250,13 @@ Stmt* newWhileStmt(Expr* condition, Stmt* body) {
   return stmt;
 }
 
-Stmt* newImportStmt(Token keyword, Expr* path) {
+Stmt* newImportStmt(Token keyword, Expr* path, Token alias, bool hasAlias) {
   Stmt* stmt = (Stmt*)allocateNode(sizeof(Stmt));
   stmt->type = STMT_IMPORT;
   stmt->as.importStmt.keyword = keyword;
   stmt->as.importStmt.path = path;
+  stmt->as.importStmt.alias = alias;
+  stmt->as.importStmt.hasAlias = hasAlias;
   return stmt;
 }
 

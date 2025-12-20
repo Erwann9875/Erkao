@@ -137,6 +137,7 @@ ObjFunction* newFunction(VM* vm, Stmt* declaration, ObjString* name, int arity,
 ObjNative* newNative(VM* vm, NativeFn function, int arity, ObjString* name);
 ObjClass* newClass(VM* vm, ObjString* name, ObjMap* methods);
 ObjInstance* newInstance(VM* vm, ObjClass* klass);
+ObjInstance* newInstanceWithFields(VM* vm, ObjClass* klass, ObjMap* fields);
 ObjArray* newArray(VM* vm);
 ObjMap* newMap(VM* vm);
 ObjBoundMethod* newBoundMethod(VM* vm, Value receiver, ObjFunction* method);

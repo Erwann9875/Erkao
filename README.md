@@ -96,7 +96,7 @@ print(greet(name));
 
 - Variables: `let x = 3;`
 - Control flow: `if (...) { ... } else { ... }`, `while (...) { ... }`
-- Imports: `import "path/to/file.ek";`
+- Imports: `import "path/to/file.ek" as name;`
 - Functions: `fun name(a, b) { return a + b; }`
 - Classes: `class Name { fun init(...) { ... } fun method(...) { ... } }`
 - Arrays: `[1, 2, 3]`, indexing with `arr[0]`
@@ -107,7 +107,7 @@ print(greet(name));
 Use `import` to load and execute another `.ek` file once.
 
 ```ek
-import "./examples/hello.ek";
+import "./examples/hello.ek" as hello;
 ```
 
 Semantics:
@@ -116,6 +116,7 @@ Semantics:
 - Relative paths resolve from the importing file's directory.
 - If the path has no extension, `.ek` is appended.
 - Each file is loaded and executed at most once.
+- `as name` binds the module object; use `name.symbol` to access exports.
 
 ## Keywords
 

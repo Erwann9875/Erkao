@@ -39,6 +39,7 @@ static ExecResult execError(void) {
   return result;
 }
 
+static Env* newEnv(VM* vm, Env* enclosing);
 static void runtimeError(VM* vm, Token token, const char* message);
 
 static void freeStatements(StmtArray* statements) {
@@ -146,6 +147,17 @@ static bool hasExtension(const char* path) {
   return strchr(base, '.') != NULL;
 }
 
+static ObjString* moduleNameFromPath(VM* vm, const char* path) {
+  const char* lastSlash = strrchr(path, '/');
+  const char* lastBackslash = strrchr(path, '\\');
+  const char* base = path;
+  if (lastSlash && lastSlash + 1 > base) base = lastSlash + 1;
+  if (lastBackslash && lastBackslash + 1 > base) base = lastBackslash + 1;
+  const char* dot = strrchr(base, '.');
+  int length = dot && dot > base ? (int)(dot - base) : (int)strlen(base);
+  return copyStringWithLength(vm, base, length);
+}
+
 static char* resolveImportPath(const char* currentPath, const char* importPath) {
   if (isAbsolutePath(importPath) || !currentPath) {
     return copyCString(importPath, strlen(importPath));
@@ -157,11 +169,11 @@ static char* resolveImportPath(const char* currentPath, const char* importPath) 
   return joined;
 }
 
-static bool loadModule(VM* vm, Token keyword, const char* path) {
+static ObjInstance* loadModule(VM* vm, Token keyword, const char* path) {
   char* source = readFilePath(path);
   if (!source) {
     runtimeError(vm, keyword, "Failed to read import path.");
-    return false;
+    return NULL;
   }
 
   bool lexError = false;
@@ -169,7 +181,7 @@ static bool loadModule(VM* vm, Token keyword, const char* path) {
   if (lexError) {
     freeTokenArray(&tokens);
     free(source);
-    return false;
+    return NULL;
   }
 
   StmtArray statements;
@@ -178,11 +190,19 @@ static bool loadModule(VM* vm, Token keyword, const char* path) {
   if (!parseOk) {
     freeStatements(&statements);
     free(source);
-    return false;
+    return NULL;
   }
 
   Program* program = programCreate(vm, source, path, statements);
-  return interpret(vm, program);
+  Env* moduleEnv = newEnv(vm, vm->globals);
+  Env* previousEnv = vm->env;
+  vm->env = moduleEnv;
+  bool ok = interpret(vm, program);
+  vm->env = previousEnv;
+  if (!ok) return NULL;
+
+  ObjClass* klass = newClass(vm, moduleNameFromPath(vm, path), newMap(vm));
+  return newInstanceWithFields(vm, klass, moduleEnv->values);
 }
 
 static Env* newEnv(VM* vm, Env* enclosing) {
@@ -840,22 +860,42 @@ static ExecResult execute(VM* vm, Stmt* stmt) {
       pathToken.start = candidatePath;
       pathToken.length = (int)strlen(candidatePath);
 
-      Value unused;
-      if (mapGetByToken(vm->modules, pathToken, &unused)) {
-        if (candidatePath != resolvedPath) free(candidatePath);
-        free(resolvedPath);
-        return execOk();
+      Value cached;
+      if (mapGetByToken(vm->modules, pathToken, &cached)) {
+        if (IS_OBJ(cached)) {
+          if (stmt->as.importStmt.hasAlias) {
+            ObjString* name = stringFromToken(vm, stmt->as.importStmt.alias);
+            envDefine(vm->env, name, cached);
+          }
+          if (candidatePath != resolvedPath) free(candidatePath);
+          free(resolvedPath);
+          return execOk();
+        }
+        if (IS_BOOL(cached) && AS_BOOL(cached)) {
+          runtimeError(vm, stmt->as.importStmt.keyword, "Circular import detected.");
+          if (candidatePath != resolvedPath) free(candidatePath);
+          free(resolvedPath);
+          return execError();
+        }
       }
 
-      bool ok = loadModule(vm, stmt->as.importStmt.keyword, candidatePath);
-      if (ok) {
-        ObjString* key = copyStringWithLength(vm, candidatePath, pathToken.length);
-        mapSet(vm->modules, key, BOOL_VAL(true));
+      ObjString* key = copyStringWithLength(vm, candidatePath, pathToken.length);
+      mapSet(vm->modules, key, BOOL_VAL(true));
+
+      ObjInstance* module = loadModule(vm, stmt->as.importStmt.keyword, candidatePath);
+      if (module) {
+        mapSet(vm->modules, key, OBJ_VAL(module));
+        if (stmt->as.importStmt.hasAlias) {
+          ObjString* name = stringFromToken(vm, stmt->as.importStmt.alias);
+          envDefine(vm->env, name, OBJ_VAL(module));
+        }
+      } else {
+        mapSet(vm->modules, key, NULL_VAL);
       }
 
       if (candidatePath != resolvedPath) free(candidatePath);
       free(resolvedPath);
-      return ok ? execOk() : execError();
+      return module ? execOk() : execError();
     }
     case STMT_FUNCTION: {
       ObjString* name = stringFromToken(vm, stmt->as.function.name);

@@ -174,6 +174,8 @@ struct Stmt {
     struct {
       Token keyword;
       Expr* path;
+      Token alias;
+      bool hasAlias;
     } importStmt;
     struct {
       Token name;
@@ -228,7 +230,7 @@ Stmt* newVarStmt(Token name, Expr* initializer);
 Stmt* newBlockStmt(StmtArray statements);
 Stmt* newIfStmt(Expr* condition, Stmt* thenBranch, Stmt* elseBranch);
 Stmt* newWhileStmt(Expr* condition, Stmt* body);
-Stmt* newImportStmt(Token keyword, Expr* path);
+Stmt* newImportStmt(Token keyword, Expr* path, Token alias, bool hasAlias);
 Stmt* newFunctionStmt(Token name, ParamArray params, StmtArray body);
 Stmt* newReturnStmt(Token keyword, Expr* value);
 Stmt* newClassStmt(Token name, StmtArray methods);
