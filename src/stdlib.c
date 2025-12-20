@@ -1,4 +1,5 @@
 #include "erkao_stdlib.h"
+#include "interpreter_internal.h"
 #include "plugin.h"
 
 #ifdef _WIN32
@@ -9,8 +10,9 @@
 #endif
 
 static Value runtimeErrorValue(VM* vm, const char* message) {
-  fprintf(stderr, "RuntimeError: %s\n", message);
-  vm->hadError = true;
+  Token token;
+  memset(&token, 0, sizeof(Token));
+  runtimeError(vm, token, message);
   return NULL_VAL;
 }
 

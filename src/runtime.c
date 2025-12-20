@@ -1,5 +1,85 @@
 #include "interpreter_internal.h"
+#include "chunk.h"
 #include "program.h"
+
+#include <ctype.h>
+
+static const char* frameFunctionName(const CallFrame* frame) {
+  if (!frame || !frame->function) return "<unknown>";
+  if (frame->function->name && frame->function->name->chars) {
+    return frame->function->name->chars;
+  }
+  if (frame->isModule) return "<module>";
+  return "<script>";
+}
+
+static const char* framePath(const CallFrame* frame, const char* fallback) {
+  if (frame && frame->function && frame->function->program && frame->function->program->path) {
+    return frame->function->program->path;
+  }
+  return fallback ? fallback : "<repl>";
+}
+
+static Token frameToken(const CallFrame* frame) {
+  Token token;
+  memset(&token, 0, sizeof(Token));
+  if (!frame || !frame->function || !frame->function->chunk) return token;
+
+  Chunk* chunk = frame->function->chunk;
+  if (!chunk->code || !chunk->tokens || chunk->count <= 0) return token;
+
+  size_t offset = 0;
+  if (frame->ip > chunk->code) {
+    offset = (size_t)(frame->ip - chunk->code - 1);
+  }
+  if (offset < (size_t)chunk->count) {
+    token = chunk->tokens[offset];
+  }
+  return token;
+}
+
+static void printStackTrace(VM* vm, const char* fallbackPath) {
+  if (!vm || vm->frameCount <= 0) return;
+
+  fprintf(stderr, "Stack trace (most recent call last):\n");
+  int depth = 0;
+  for (int i = vm->frameCount - 1; i >= 0; i--, depth++) {
+    CallFrame* frame = &vm->frames[i];
+    const char* name = frameFunctionName(frame);
+    const char* path = framePath(frame, fallbackPath);
+    Token token = frameToken(frame);
+    if (token.line > 0 && token.column > 0) {
+      fprintf(stderr, "  #%d %s (%s:%d:%d)", depth, name, path, token.line, token.column);
+    } else {
+      fprintf(stderr, "  #%d %s (%s)", depth, name, path);
+    }
+    if (token.length > 0) {
+      fprintf(stderr, " -> '%.*s'\n", token.length, token.start);
+    } else {
+      fputc('\n', stderr);
+    }
+  }
+}
+
+static bool stackTraceEnabled(void) {
+  const char* value = getenv("ERKAO_STACK_TRACE");
+  if (!value || value[0] == '\0') return true;
+
+  char lower[6];
+  size_t i = 0;
+  while (value[i] && i < sizeof(lower) - 1) {
+    lower[i] = (char)tolower((unsigned char)value[i]);
+    i++;
+  }
+  lower[i] = '\0';
+
+  if (strcmp(lower, "0") == 0 || strcmp(lower, "no") == 0 ||
+      strcmp(lower, "off") == 0 || strcmp(lower, "false") == 0) {
+    return false;
+  }
+
+  return true;
+}
 
 void runtimeError(VM* vm, Token token, const char* message) {
   const char* displayPath = "<repl>";
@@ -19,6 +99,9 @@ void runtimeError(VM* vm, Token token, const char* message) {
     }
   } else {
     fprintf(stderr, "%s: RuntimeError: %s\n", displayPath, message);
+  }
+  if (stackTraceEnabled()) {
+    printStackTrace(vm, displayPath);
   }
   vm->hadError = true;
 }

@@ -163,11 +163,13 @@ struct Stmt {
       StmtArray statements;
     } block;
     struct {
+      Token keyword;
       Expr* condition;
       Stmt* thenBranch;
       Stmt* elseBranch;
     } ifStmt;
     struct {
+      Token keyword;
       Expr* condition;
       Stmt* body;
     } whileStmt;
@@ -228,8 +230,8 @@ Expr* newSetIndexExpr(Expr* object, Expr* index, Expr* value, Token equals);
 Stmt* newExprStmt(Expr* expression);
 Stmt* newVarStmt(Token name, Expr* initializer);
 Stmt* newBlockStmt(StmtArray statements);
-Stmt* newIfStmt(Expr* condition, Stmt* thenBranch, Stmt* elseBranch);
-Stmt* newWhileStmt(Expr* condition, Stmt* body);
+Stmt* newIfStmt(Token keyword, Expr* condition, Stmt* thenBranch, Stmt* elseBranch);
+Stmt* newWhileStmt(Token keyword, Expr* condition, Stmt* body);
 Stmt* newImportStmt(Token keyword, Expr* path, Token alias, bool hasAlias);
 Stmt* newFunctionStmt(Token name, ParamArray params, StmtArray body);
 Stmt* newReturnStmt(Token keyword, Expr* value);

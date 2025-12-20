@@ -19,10 +19,36 @@ static Token noToken(void) {
   return token;
 }
 
-static void compilerError(Compiler* compiler, const char* message) {
+static void compilerErrorAt(Compiler* compiler, Token token, const char* message) {
   if (compiler->hadError) return;
   compiler->hadError = true;
-  fprintf(stderr, "Compile error: %s\n", message);
+
+  const char* displayPath = "<repl>";
+  const char* source = NULL;
+  if (compiler->program) {
+    if (compiler->program->path) {
+      displayPath = compiler->program->path;
+    }
+    source = compiler->program->source;
+  }
+
+  if (token.line > 0 && token.column > 0) {
+    fprintf(stderr, "%s:%d:%d: CompileError", displayPath, token.line, token.column);
+    if (token.length > 0) {
+      fprintf(stderr, " at '%.*s'", token.length, token.start);
+    }
+    fprintf(stderr, ": %s\n", message);
+    if (source) {
+      int length = token.length > 0 ? token.length : 1;
+      printErrorContext(source, token.line, token.column, length);
+    }
+  } else {
+    fprintf(stderr, "%s: CompileError: %s\n", displayPath, message);
+  }
+}
+
+static void compilerError(Compiler* compiler, const char* message) {
+  compilerErrorAt(compiler, noToken(), message);
 }
 
 static void emitByte(Compiler* compiler, uint8_t byte, Token token) {
@@ -39,17 +65,17 @@ static void emitShort(Compiler* compiler, uint16_t value, Token token) {
   emitByte(compiler, (uint8_t)(value & 0xff), token);
 }
 
-static int makeConstant(Compiler* compiler, Value value) {
+static int makeConstant(Compiler* compiler, Value value, Token token) {
   int index = addConstant(compiler->chunk, value);
   if (index > UINT16_MAX) {
-    compilerError(compiler, "Too many constants in chunk.");
+    compilerErrorAt(compiler, token, "Too many constants in chunk.");
     return 0;
   }
   return index;
 }
 
 static void emitConstant(Compiler* compiler, Value value, Token token) {
-  int constant = makeConstant(compiler, value);
+  int constant = makeConstant(compiler, value, token);
   emitByte(compiler, OP_CONSTANT, token);
   emitShort(compiler, (uint16_t)constant, token);
 }
@@ -61,10 +87,10 @@ static int emitJump(Compiler* compiler, uint8_t instruction, Token token) {
   return compiler->chunk->count - 2;
 }
 
-static void patchJump(Compiler* compiler, int offset) {
+static void patchJump(Compiler* compiler, int offset, Token token) {
   int jump = compiler->chunk->count - offset - 2;
   if (jump > UINT16_MAX) {
-    compilerError(compiler, "Too much code to jump over.");
+    compilerErrorAt(compiler, token, "Too much code to jump over.");
     return;
   }
   compiler->chunk->code[offset] = (uint8_t)((jump >> 8) & 0xff);
@@ -75,7 +101,7 @@ static void emitLoop(Compiler* compiler, int loopStart, Token token) {
   emitByte(compiler, OP_LOOP, token);
   int offset = compiler->chunk->count - loopStart + 2;
   if (offset > UINT16_MAX) {
-    compilerError(compiler, "Loop body too large.");
+    compilerErrorAt(compiler, token, "Loop body too large.");
     return;
   }
   emitShort(compiler, (uint16_t)offset, token);
@@ -83,7 +109,7 @@ static void emitLoop(Compiler* compiler, int loopStart, Token token) {
 
 static int emitStringConstant(Compiler* compiler, Token token) {
   ObjString* name = stringFromToken(compiler->vm, token);
-  return makeConstant(compiler, OBJ_VAL(name));
+  return makeConstant(compiler, OBJ_VAL(name), token);
 }
 
 static void emitGc(Compiler* compiler) {
@@ -199,15 +225,15 @@ static void compileExpr(Compiler* compiler, Expr* expr) {
       if (expr->as.logical.op.type == TOKEN_OR) {
         int jumpIfFalse = emitJump(compiler, OP_JUMP_IF_FALSE, expr->as.logical.op);
         int jumpToEnd = emitJump(compiler, OP_JUMP, expr->as.logical.op);
-        patchJump(compiler, jumpIfFalse);
+        patchJump(compiler, jumpIfFalse, expr->as.logical.op);
         emitByte(compiler, OP_POP, noToken());
         compileExpr(compiler, expr->as.logical.right);
-        patchJump(compiler, jumpToEnd);
+        patchJump(compiler, jumpToEnd, expr->as.logical.op);
       } else {
         int jumpIfFalse = emitJump(compiler, OP_JUMP_IF_FALSE, expr->as.logical.op);
         emitByte(compiler, OP_POP, noToken());
         compileExpr(compiler, expr->as.logical.right);
-        patchJump(compiler, jumpIfFalse);
+        patchJump(compiler, jumpIfFalse, expr->as.logical.op);
       }
       break;
     }
@@ -356,17 +382,17 @@ static void compileStmt(Compiler* compiler, Stmt* stmt) {
     }
     case STMT_IF: {
       compileExpr(compiler, stmt->as.ifStmt.condition);
-      int thenJump = emitJump(compiler, OP_JUMP_IF_FALSE, noToken());
+      int thenJump = emitJump(compiler, OP_JUMP_IF_FALSE, stmt->as.ifStmt.keyword);
       emitByte(compiler, OP_POP, noToken());
       compileStmt(compiler, stmt->as.ifStmt.thenBranch);
       if (stmt->as.ifStmt.elseBranch) {
-        int elseJump = emitJump(compiler, OP_JUMP, noToken());
-        patchJump(compiler, thenJump);
+        int elseJump = emitJump(compiler, OP_JUMP, stmt->as.ifStmt.keyword);
+        patchJump(compiler, thenJump, stmt->as.ifStmt.keyword);
         emitByte(compiler, OP_POP, noToken());
         compileStmt(compiler, stmt->as.ifStmt.elseBranch);
-        patchJump(compiler, elseJump);
+        patchJump(compiler, elseJump, stmt->as.ifStmt.keyword);
       } else {
-        patchJump(compiler, thenJump);
+        patchJump(compiler, thenJump, stmt->as.ifStmt.keyword);
         emitByte(compiler, OP_POP, noToken());
       }
       emitGc(compiler);
@@ -375,12 +401,12 @@ static void compileStmt(Compiler* compiler, Stmt* stmt) {
     case STMT_WHILE: {
       int loopStart = compiler->chunk->count;
       compileExpr(compiler, stmt->as.whileStmt.condition);
-      int exitJump = emitJump(compiler, OP_JUMP_IF_FALSE, noToken());
+      int exitJump = emitJump(compiler, OP_JUMP_IF_FALSE, stmt->as.whileStmt.keyword);
       emitByte(compiler, OP_POP, noToken());
       compileStmt(compiler, stmt->as.whileStmt.body);
       emitGc(compiler);
-      emitLoop(compiler, loopStart, noToken());
-      patchJump(compiler, exitJump);
+      emitLoop(compiler, loopStart, stmt->as.whileStmt.keyword);
+      patchJump(compiler, exitJump, stmt->as.whileStmt.keyword);
       emitByte(compiler, OP_POP, noToken());
       emitGc(compiler);
       break;
@@ -400,7 +426,7 @@ static void compileStmt(Compiler* compiler, Stmt* stmt) {
     case STMT_FUNCTION: {
       ObjFunction* function = compileFunction(compiler, stmt, false);
       if (!function) return;
-      int constant = makeConstant(compiler, OBJ_VAL(function));
+      int constant = makeConstant(compiler, OBJ_VAL(function), stmt->as.function.name);
       emitByte(compiler, OP_CLOSURE, stmt->as.function.name);
       emitShort(compiler, (uint16_t)constant, stmt->as.function.name);
       int name = emitStringConstant(compiler, stmt->as.function.name);
@@ -430,7 +456,7 @@ static void compileStmt(Compiler* compiler, Stmt* stmt) {
                              memcmp(methodStmt->as.function.name.start, "init", 4) == 0;
         ObjFunction* method = compileFunction(compiler, methodStmt, isInitializer);
         if (!method) return;
-        int constant = makeConstant(compiler, OBJ_VAL(method));
+        int constant = makeConstant(compiler, OBJ_VAL(method), methodStmt->as.function.name);
         emitByte(compiler, OP_CLOSURE, methodStmt->as.function.name);
         emitShort(compiler, (uint16_t)constant, methodStmt->as.function.name);
       }

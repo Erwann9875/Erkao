@@ -95,6 +95,7 @@ static Stmt* statement(Parser* parser) {
 }
 
 static Stmt* ifStatement(Parser* parser) {
+  Token keyword = previous(parser);
   consume(parser, TOKEN_LEFT_PAREN, "Expect '(' after 'if'.");
   Expr* condition = expression(parser);
   consume(parser, TOKEN_RIGHT_PAREN, "Expect ')' after if condition.");
@@ -105,15 +106,16 @@ static Stmt* ifStatement(Parser* parser) {
     elseBranch = statement(parser);
   }
 
-  return newIfStmt(condition, thenBranch, elseBranch);
+  return newIfStmt(keyword, condition, thenBranch, elseBranch);
 }
 
 static Stmt* whileStatement(Parser* parser) {
+  Token keyword = previous(parser);
   consume(parser, TOKEN_LEFT_PAREN, "Expect '(' after 'while'.");
   Expr* condition = expression(parser);
   consume(parser, TOKEN_RIGHT_PAREN, "Expect ')' after condition.");
   Stmt* body = statement(parser);
-  return newWhileStmt(condition, body);
+  return newWhileStmt(keyword, condition, body);
 }
 
 static Stmt* importStatement(Parser* parser) {

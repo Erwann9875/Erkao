@@ -233,18 +233,20 @@ Stmt* newBlockStmt(StmtArray statements) {
   return stmt;
 }
 
-Stmt* newIfStmt(Expr* condition, Stmt* thenBranch, Stmt* elseBranch) {
+Stmt* newIfStmt(Token keyword, Expr* condition, Stmt* thenBranch, Stmt* elseBranch) {
   Stmt* stmt = (Stmt*)allocateNode(sizeof(Stmt));
   stmt->type = STMT_IF;
+  stmt->as.ifStmt.keyword = keyword;
   stmt->as.ifStmt.condition = condition;
   stmt->as.ifStmt.thenBranch = thenBranch;
   stmt->as.ifStmt.elseBranch = elseBranch;
   return stmt;
 }
 
-Stmt* newWhileStmt(Expr* condition, Stmt* body) {
+Stmt* newWhileStmt(Token keyword, Expr* condition, Stmt* body) {
   Stmt* stmt = (Stmt*)allocateNode(sizeof(Stmt));
   stmt->type = STMT_WHILE;
+  stmt->as.whileStmt.keyword = keyword;
   stmt->as.whileStmt.condition = condition;
   stmt->as.whileStmt.body = body;
   return stmt;
