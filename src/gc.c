@@ -4,6 +4,34 @@
 static void markValue(VM* vm, Value value);
 static void markObject(VM* vm, Obj* object);
 static void markEnv(VM* vm, Env* env);
+static void blackenObject(VM* vm, Obj* object);
+static void blackenEnv(VM* vm, Env* env);
+
+static void grayPushObject(VM* vm, Obj* object) {
+  if (vm->gcGrayObjectCapacity < vm->gcGrayObjectCount + 1) {
+    size_t oldCapacity = vm->gcGrayObjectCapacity;
+    vm->gcGrayObjectCapacity = GROW_CAPACITY(oldCapacity);
+    vm->gcGrayObjects = GROW_ARRAY(Obj*, vm->gcGrayObjects, oldCapacity, vm->gcGrayObjectCapacity);
+  }
+  vm->gcGrayObjects[vm->gcGrayObjectCount++] = object;
+}
+
+static void grayPushEnv(VM* vm, Env* env) {
+  if (vm->gcGrayEnvCapacity < vm->gcGrayEnvCount + 1) {
+    size_t oldCapacity = vm->gcGrayEnvCapacity;
+    vm->gcGrayEnvCapacity = GROW_CAPACITY(oldCapacity);
+    vm->gcGrayEnvs = GROW_ARRAY(Env*, vm->gcGrayEnvs, oldCapacity, vm->gcGrayEnvCapacity);
+  }
+  vm->gcGrayEnvs[vm->gcGrayEnvCount++] = env;
+}
+
+static Obj* grayPopObject(VM* vm) {
+  return vm->gcGrayObjects[--vm->gcGrayObjectCount];
+}
+
+static Env* grayPopEnv(VM* vm) {
+  return vm->gcGrayEnvs[--vm->gcGrayEnvCount];
+}
 
 static size_t countObjects(const VM* vm) {
   size_t count = 0;
@@ -41,8 +69,7 @@ void gcMaybe(VM* vm) {
 static void markEnv(VM* vm, Env* env) {
   if (!env || env->marked) return;
   env->marked = true;
-  markObject(vm, (Obj*)env->values);
-  markEnv(vm, env->enclosing);
+  grayPushEnv(vm, env);
 }
 
 static void markValue(VM* vm, Value value) {
@@ -54,7 +81,15 @@ static void markValue(VM* vm, Value value) {
 static void markObject(VM* vm, Obj* object) {
   if (!object || object->marked) return;
   object->marked = true;
+  grayPushObject(vm, object);
+}
 
+static void blackenEnv(VM* vm, Env* env) {
+  markObject(vm, (Obj*)env->values);
+  markEnv(vm, env->enclosing);
+}
+
+static void blackenObject(VM* vm, Obj* object) {
   switch (object->type) {
     case OBJ_STRING:
       break;
@@ -208,6 +243,8 @@ static size_t sweepEnvs(VM* vm) {
 void gcCollect(VM* vm) {
   if (!vm) return;
   vm->gcPending = false;
+  vm->gcGrayObjectCount = 0;
+  vm->gcGrayEnvCount = 0;
 
   size_t beforeObjects = 0;
   size_t beforeEnvs = 0;
@@ -221,6 +258,14 @@ void gcCollect(VM* vm) {
   }
 
   markRoots(vm);
+
+  while (vm->gcGrayObjectCount > 0 || vm->gcGrayEnvCount > 0) {
+    if (vm->gcGrayObjectCount > 0) {
+      blackenObject(vm, grayPopObject(vm));
+    } else {
+      blackenEnv(vm, grayPopEnv(vm));
+    }
+  }
 
   size_t aliveObjects = sweepObjects(vm);
   size_t aliveEnvs = sweepEnvs(vm);

@@ -29,6 +29,12 @@ typedef struct VM {
   size_t gcNext;
   bool gcPending;
   bool gcLog;
+  Obj** gcGrayObjects;
+  size_t gcGrayObjectCount;
+  size_t gcGrayObjectCapacity;
+  Env** gcGrayEnvs;
+  size_t gcGrayEnvCount;
+  size_t gcGrayEnvCapacity;
   bool hadError;
 } VM;
 

@@ -317,6 +317,12 @@ void vmInit(VM* vm) {
   vm->gcNext = 1024;
   vm->gcPending = false;
   vm->gcLog = envFlagEnabled("ERKAO_GC_LOG");
+  vm->gcGrayObjects = NULL;
+  vm->gcGrayObjectCount = 0;
+  vm->gcGrayObjectCapacity = 0;
+  vm->gcGrayEnvs = NULL;
+  vm->gcGrayEnvCount = 0;
+  vm->gcGrayEnvCapacity = 0;
   vm->hadError = false;
   vm->globals = newEnv(vm, NULL);
   vm->env = vm->globals;
@@ -328,6 +334,15 @@ void vmInit(VM* vm) {
 
 void vmFree(VM* vm) {
   pluginUnloadAll(vm);
+
+  FREE_ARRAY(Obj*, vm->gcGrayObjects, vm->gcGrayObjectCapacity);
+  FREE_ARRAY(Env*, vm->gcGrayEnvs, vm->gcGrayEnvCapacity);
+  vm->gcGrayObjects = NULL;
+  vm->gcGrayEnvs = NULL;
+  vm->gcGrayObjectCount = 0;
+  vm->gcGrayObjectCapacity = 0;
+  vm->gcGrayEnvCount = 0;
+  vm->gcGrayEnvCapacity = 0;
 
   Obj* object = vm->objects;
   while (object) {
