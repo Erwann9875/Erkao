@@ -20,7 +20,7 @@
 #define FREE_ARRAY(type, pointer, oldCount) \
   do { (void)(oldCount); free(pointer); } while (0)
 
-static inline void printErrorContext(const char* source, int line, int column) {
+static inline void printErrorContext(const char* source, int line, int column, int length) {
   if (!source || line <= 0 || column <= 0) return;
 
   const char* lineStart = source;
@@ -37,12 +37,25 @@ static inline void printErrorContext(const char* source, int line, int column) {
   if (lineEnd > lineStart && lineEnd[-1] == '\r') lineEnd--;
 
   int lineLength = (int)(lineEnd - lineStart);
-  int caretColumn = column;
-  if (caretColumn < 1) caretColumn = 1;
-  if (caretColumn > lineLength + 1) caretColumn = lineLength + 1;
+  int underlineStart = column;
+  if (underlineStart < 1) underlineStart = 1;
+  if (underlineStart > lineLength + 1) underlineStart = lineLength + 1;
+
+  int underlineLength = length > 0 ? length : 1;
+  if (lineLength == 0) {
+    underlineLength = 1;
+  } else if (underlineStart + underlineLength - 1 > lineLength) {
+    underlineLength = lineLength - underlineStart + 1;
+    if (underlineLength < 1) underlineLength = 1;
+  }
 
   fprintf(stderr, "  %.*s\n", lineLength, lineStart);
-  fprintf(stderr, "  %*s^\n", caretColumn - 1, "");
+  fprintf(stderr, "  %*s", underlineStart - 1, "");
+  fputc('^', stderr);
+  for (int i = 1; i < underlineLength; i++) {
+    fputc('~', stderr);
+  }
+  fputc('\n', stderr);
 }
 
 #endif

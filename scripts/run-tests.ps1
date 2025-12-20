@@ -32,7 +32,16 @@ foreach ($test in $tests) {
   }
 
   $escapedExe = $Exe.Replace('"', '""')
-  $escapedTest = $test.FullName.Replace('"', '""')
+  $relativeTest = Resolve-Path -LiteralPath $test.FullName -Relative
+  if ($relativeTest.StartsWith('.\')) {
+    $relativeTest = $relativeTest.Substring(2)
+  }
+  if ($relativeTest.StartsWith("./")) {
+    $relativeTest = $relativeTest.Substring(2)
+  }
+  $relativeTest = $relativeTest -replace "\\", "/"
+
+  $escapedTest = $relativeTest.Replace('"', '""')
   $cmd = "`"$escapedExe`" run `"$escapedTest`""
   $output = cmd /c "$cmd 2>&1" | Out-String
   $output = $output -replace "`r`n", "`n"

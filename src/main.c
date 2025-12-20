@@ -42,8 +42,9 @@ static void freeStatements(StmtArray* statements) {
 }
 
 static bool runSource(VM* vm, const char* path, char* source) {
+  const char* displayPath = path ? path : "<repl>";
   bool lexError = false;
-  TokenArray tokens = scanTokens(source, &lexError);
+  TokenArray tokens = scanTokens(source, displayPath, &lexError);
   if (lexError) {
     freeTokenArray(&tokens);
     free(source);
@@ -51,7 +52,7 @@ static bool runSource(VM* vm, const char* path, char* source) {
   }
 
   StmtArray statements;
-  bool parseOk = parseTokens(&tokens, source, &statements);
+  bool parseOk = parseTokens(&tokens, source, displayPath, &statements);
   freeTokenArray(&tokens);
   if (!parseOk) {
     freeStatements(&statements);

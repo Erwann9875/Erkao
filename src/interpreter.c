@@ -177,7 +177,7 @@ static ObjInstance* loadModule(VM* vm, Token keyword, const char* path) {
   }
 
   bool lexError = false;
-  TokenArray tokens = scanTokens(source, &lexError);
+  TokenArray tokens = scanTokens(source, path, &lexError);
   if (lexError) {
     freeTokenArray(&tokens);
     free(source);
@@ -185,7 +185,7 @@ static ObjInstance* loadModule(VM* vm, Token keyword, const char* path) {
   }
 
   StmtArray statements;
-  bool parseOk = parseTokens(&tokens, source, &statements);
+  bool parseOk = parseTokens(&tokens, source, path, &statements);
   freeTokenArray(&tokens);
   if (!parseOk) {
     freeStatements(&statements);
@@ -221,13 +221,23 @@ static Env* newEnv(VM* vm, Env* enclosing) {
 }
 
 static void runtimeError(VM* vm, Token token, const char* message) {
-  fprintf(stderr, "[line %d:%d] RuntimeError", token.line, token.column);
-  if (token.length > 0) {
-    fprintf(stderr, " at '%.*s'", token.length, token.start);
+  const char* displayPath = "<repl>";
+  if (vm->currentProgram && vm->currentProgram->path) {
+    displayPath = vm->currentProgram->path;
   }
-  fprintf(stderr, ": %s\n", message);
-  if (vm->currentProgram) {
-    printErrorContext(vm->currentProgram->source, token.line, token.column);
+
+  if (token.line > 0 && token.column > 0) {
+    fprintf(stderr, "%s:%d:%d: RuntimeError", displayPath, token.line, token.column);
+    if (token.length > 0) {
+      fprintf(stderr, " at '%.*s'", token.length, token.start);
+    }
+    fprintf(stderr, ": %s\n", message);
+    if (vm->currentProgram) {
+      int length = token.length > 0 ? token.length : 1;
+      printErrorContext(vm->currentProgram->source, token.line, token.column, length);
+    }
+  } else {
+    fprintf(stderr, "%s: RuntimeError: %s\n", displayPath, message);
   }
   vm->hadError = true;
 }

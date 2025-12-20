@@ -3,6 +3,7 @@
 typedef struct {
   const TokenArray* tokens;
   const char* source;
+  const char* path;
   int current;
   bool hadError;
   bool panicMode;
@@ -36,12 +37,14 @@ static bool match(Parser* parser, ErkaoTokenType type) {
   return true;
 }
 
-static void errorAt(Parser* parser, Token token, const char* message) {
+static void errorAtInternal(Parser* parser, Token token, const char* message,
+                            int underlineLength) {
   if (parser->panicMode) return;
   parser->panicMode = true;
   parser->hadError = true;
 
-  fprintf(stderr, "[line %d:%d] Error", token.line, token.column);
+  const char* displayPath = parser->path ? parser->path : "<repl>";
+  fprintf(stderr, "%s:%d:%d: Error", displayPath, token.line, token.column);
   if (token.type == TOKEN_EOF) {
     fprintf(stderr, " at end");
   } else if (token.type == TOKEN_ERROR) {
@@ -50,7 +53,12 @@ static void errorAt(Parser* parser, Token token, const char* message) {
     fprintf(stderr, " at '%.*s'", token.length, token.start);
   }
   fprintf(stderr, ": %s\n", message);
-  printErrorContext(parser->source, token.line, token.column);
+  int length = underlineLength > 0 ? underlineLength : (token.length > 0 ? token.length : 1);
+  printErrorContext(parser->source, token.line, token.column, length);
+}
+
+static void errorAt(Parser* parser, Token token, const char* message) {
+  errorAtInternal(parser, token, message, token.length);
 }
 
 static void errorAtCurrent(Parser* parser, const char* message) {
@@ -64,7 +72,7 @@ static Token consume(Parser* parser, ErkaoTokenType type, const char* message) {
     if (token.length > 0) {
       token.column += token.length;
     }
-    errorAt(parser, token, message);
+    errorAtInternal(parser, token, message, 1);
   } else {
     errorAtCurrent(parser, message);
   }
@@ -564,13 +572,16 @@ static Expr* primary(Parser* parser) {
   }
 
   errorAtCurrent(parser, "Expect expression.");
+  if (!isAtEnd(parser)) advance(parser);
   return newLiteralExpr(makeNullLiteral());
 }
 
-bool parseTokens(const TokenArray* tokens, const char* source, StmtArray* outStatements) {
+bool parseTokens(const TokenArray* tokens, const char* source, const char* path,
+                 StmtArray* outStatements) {
   Parser parser;
   parser.tokens = tokens;
   parser.source = source;
+  parser.path = path;
   parser.current = 0;
   parser.hadError = false;
   parser.panicMode = false;

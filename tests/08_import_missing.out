@@ -1,3 +1,3 @@
-[line 1:1] RuntimeError at 'import': Failed to read import path.
+tests/08_import_missing.ek:1:1: RuntimeError at 'import': Failed to read import path.
   import "missing_file.ek";
-  ^
+  ^~~~~~

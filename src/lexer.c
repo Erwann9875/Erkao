@@ -83,7 +83,8 @@ static Token errorToken(Scanner* scanner, const char* message) {
   Token token;
   token.type = TOKEN_ERROR;
   token.start = message;
-  token.length = (int)strlen(message);
+  token.length = (int)(scanner->current - scanner->start);
+  if (token.length <= 0) token.length = 1;
   token.line = scanner->startLine;
   token.column = scanner->startColumn;
   return token;
@@ -293,7 +294,7 @@ static Token scanToken(Scanner* scanner) {
   return errorToken(scanner, "Unexpected character.");
 }
 
-TokenArray scanTokens(const char* source, bool* hadError) {
+TokenArray scanTokens(const char* source, const char* path, bool* hadError) {
   Scanner scanner;
   initScanner(&scanner, source);
 
@@ -305,9 +306,10 @@ TokenArray scanTokens(const char* source, bool* hadError) {
   for (;;) {
     Token token = scanToken(&scanner);
     if (token.type == TOKEN_ERROR) {
-      fprintf(stderr, "[line %d:%d] Error: %.*s\n",
-              token.line, token.column, token.length, token.start);
-      printErrorContext(source, token.line, token.column);
+      const char* displayPath = path ? path : "<repl>";
+      fprintf(stderr, "%s:%d:%d: Error: %s\n",
+              displayPath, token.line, token.column, token.start);
+      printErrorContext(source, token.line, token.column, token.length);
       *hadError = true;
       continue;
     }

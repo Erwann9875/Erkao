@@ -74,7 +74,7 @@ void initTokenArray(TokenArray* array);
 void writeTokenArray(TokenArray* array, Token token);
 void freeTokenArray(TokenArray* array);
 
-TokenArray scanTokens(const char* source, bool* hadError);
+TokenArray scanTokens(const char* source, const char* path, bool* hadError);
 
 const char* tokenTypeName(ErkaoTokenType type);
 
