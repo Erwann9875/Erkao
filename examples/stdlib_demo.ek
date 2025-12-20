@@ -1,0 +1,12 @@
+let cwd = fs.cwd();
+print("cwd", cwd);
+
+let readme = path.join(cwd, "README.md");
+print("readme exists", fs.exists(readme));
+print("dirname", path.dirname(readme));
+print("basename", path.basename(readme));
+print("extname", path.extname(readme));
+
+let text = fs.readText(readme);
+print("readme bytes", len(text));
+print("now", time.now());

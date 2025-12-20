@@ -3,6 +3,9 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 static Value runtimeErrorValue(VM* vm, const char* message) {
@@ -22,6 +25,29 @@ static void moduleAdd(VM* vm, ObjInstance* module, const char* name, NativeFn fn
   ObjString* fieldName = copyString(vm, name);
   ObjNative* native = newNative(vm, fn, arity, fieldName);
   mapSet(module->fields, fieldName, OBJ_VAL(native));
+}
+
+static const char* findLastSeparator(const char* path) {
+  const char* lastSlash = strrchr(path, '/');
+  const char* lastBackslash = strrchr(path, '\\');
+  if (!lastSlash) return lastBackslash;
+  if (!lastBackslash) return lastSlash;
+  return lastSlash > lastBackslash ? lastSlash : lastBackslash;
+}
+
+static bool isAbsolutePathString(const char* path) {
+  if (!path || path[0] == '\0') return false;
+  if (path[0] == '/' || path[0] == '\\') return true;
+  if (((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) &&
+      path[1] == ':' && (path[2] == '\\' || path[2] == '/')) {
+    return true;
+  }
+  return false;
+}
+
+static char pickSeparator(const char* left, const char* right) {
+  if ((left && strchr(left, '\\')) || (right && strchr(right, '\\'))) return '\\';
+  return '/';
 }
 
 static Value nativePrint(VM* vm, int argc, Value* args) {
@@ -162,6 +188,51 @@ static Value nativeFsWriteText(VM* vm, int argc, Value* args) {
   return BOOL_VAL(true);
 }
 
+static Value nativeFsExists(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "fs.exists expects a path string.");
+  }
+  ObjString* path = (ObjString*)AS_OBJ(args[0]);
+#ifdef _WIN32
+  DWORD attrs = GetFileAttributesA(path->chars);
+  return BOOL_VAL(attrs != INVALID_FILE_ATTRIBUTES);
+#else
+  struct stat st;
+  return BOOL_VAL(stat(path->chars, &st) == 0);
+#endif
+}
+
+static Value nativeFsCwd(VM* vm, int argc, Value* args) {
+  (void)argc;
+  (void)args;
+#ifdef _WIN32
+  DWORD length = GetCurrentDirectoryA(0, NULL);
+  if (length == 0) {
+    return runtimeErrorValue(vm, "fs.cwd failed to read current directory.");
+  }
+  char* buffer = (char*)malloc((size_t)length);
+  if (!buffer) {
+    return runtimeErrorValue(vm, "fs.cwd out of memory.");
+  }
+  if (GetCurrentDirectoryA(length, buffer) == 0) {
+    free(buffer);
+    return runtimeErrorValue(vm, "fs.cwd failed to read current directory.");
+  }
+  ObjString* result = copyString(vm, buffer);
+  free(buffer);
+  return OBJ_VAL(result);
+#else
+  char* buffer = getcwd(NULL, 0);
+  if (!buffer) {
+    return runtimeErrorValue(vm, "fs.cwd failed to read current directory.");
+  }
+  ObjString* result = copyString(vm, buffer);
+  free(buffer);
+  return OBJ_VAL(result);
+#endif
+}
+
 static Value nativeFsListDir(VM* vm, int argc, Value* args) {
   (void)argc;
   if (!isObjType(args[0], OBJ_STRING)) {
@@ -199,6 +270,125 @@ static Value nativeFsListDir(VM* vm, int argc, Value* args) {
   (void)path;
   return runtimeErrorValue(vm, "fs.listDir is only supported on Windows.");
 #endif
+}
+
+static Value nativePathJoin(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_STRING) || !isObjType(args[1], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "path.join expects (left, right) strings.");
+  }
+  ObjString* left = (ObjString*)AS_OBJ(args[0]);
+  ObjString* right = (ObjString*)AS_OBJ(args[1]);
+  if (isAbsolutePathString(right->chars)) {
+    return OBJ_VAL(copyStringWithLength(vm, right->chars, right->length));
+  }
+
+  char sep = pickSeparator(left->chars, right->chars);
+  bool needSep = left->length > 0 &&
+                 left->chars[left->length - 1] != '/' &&
+                 left->chars[left->length - 1] != '\\';
+  size_t total = (size_t)left->length + (needSep ? 1 : 0) + (size_t)right->length;
+  char* buffer = (char*)malloc(total + 1);
+  if (!buffer) {
+    return runtimeErrorValue(vm, "path.join out of memory.");
+  }
+  memcpy(buffer, left->chars, (size_t)left->length);
+  size_t offset = (size_t)left->length;
+  if (needSep) {
+    buffer[offset++] = sep;
+  }
+  memcpy(buffer + offset, right->chars, (size_t)right->length);
+  buffer[total] = '\0';
+
+  ObjString* result = copyStringWithLength(vm, buffer, (int)total);
+  free(buffer);
+  return OBJ_VAL(result);
+}
+
+static Value nativePathDirname(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "path.dirname expects a path string.");
+  }
+  ObjString* path = (ObjString*)AS_OBJ(args[0]);
+  const char* sep = findLastSeparator(path->chars);
+  if (!sep) {
+    return OBJ_VAL(copyString(vm, "."));
+  }
+
+  size_t length = (size_t)(sep - path->chars);
+  if (length == 0) {
+    length = 1;
+  } else if (length == 2 && path->chars[1] == ':' &&
+             (path->chars[2] == '\\' || path->chars[2] == '/')) {
+    length = 3;
+  }
+
+  if (length > (size_t)path->length) {
+    length = (size_t)path->length;
+  }
+
+  return OBJ_VAL(copyStringWithLength(vm, path->chars, (int)length));
+}
+
+static Value nativePathBasename(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "path.basename expects a path string.");
+  }
+  ObjString* path = (ObjString*)AS_OBJ(args[0]);
+  const char* sep = findLastSeparator(path->chars);
+  const char* base = sep ? sep + 1 : path->chars;
+  return OBJ_VAL(copyString(vm, base));
+}
+
+static Value nativePathExtname(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "path.extname expects a path string.");
+  }
+  ObjString* path = (ObjString*)AS_OBJ(args[0]);
+  const char* sep = findLastSeparator(path->chars);
+  const char* base = sep ? sep + 1 : path->chars;
+  const char* dot = strrchr(base, '.');
+  if (!dot || dot == base) {
+    return OBJ_VAL(copyString(vm, ""));
+  }
+  return OBJ_VAL(copyStringWithLength(vm, dot, (int)strlen(dot)));
+}
+
+static Value nativeTimeNow(VM* vm, int argc, Value* args) {
+  (void)argc;
+  (void)args;
+  time_t now = time(NULL);
+  if (now == (time_t)-1) {
+    return runtimeErrorValue(vm, "time.now failed.");
+  }
+  return NUMBER_VAL((double)now);
+}
+
+static Value nativeTimeSleep(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!IS_NUMBER(args[0])) {
+    return runtimeErrorValue(vm, "time.sleep expects seconds as a number.");
+  }
+  double seconds = AS_NUMBER(args[0]);
+  if (seconds < 0) {
+    return runtimeErrorValue(vm, "time.sleep expects a non-negative number.");
+  }
+#ifdef _WIN32
+  DWORD ms = (DWORD)(seconds * 1000.0);
+  Sleep(ms);
+#else
+  struct timespec ts;
+  ts.tv_sec = (time_t)seconds;
+  ts.tv_nsec = (long)((seconds - (double)ts.tv_sec) * 1000000000.0);
+  if (ts.tv_nsec < 0) ts.tv_nsec = 0;
+  if (nanosleep(&ts, NULL) != 0) {
+    return runtimeErrorValue(vm, "time.sleep failed.");
+  }
+#endif
+  return NULL_VAL;
 }
 
 static Value nativeProcRun(VM* vm, int argc, Value* args) {
@@ -254,8 +444,22 @@ void defineStdlib(VM* vm) {
   ObjInstance* fs = makeModule(vm, "fs");
   moduleAdd(vm, fs, "readText", nativeFsReadText, 1);
   moduleAdd(vm, fs, "writeText", nativeFsWriteText, 2);
+  moduleAdd(vm, fs, "exists", nativeFsExists, 1);
+  moduleAdd(vm, fs, "cwd", nativeFsCwd, 0);
   moduleAdd(vm, fs, "listDir", nativeFsListDir, 1);
   defineGlobal(vm, "fs", OBJ_VAL(fs));
+
+  ObjInstance* path = makeModule(vm, "path");
+  moduleAdd(vm, path, "join", nativePathJoin, 2);
+  moduleAdd(vm, path, "dirname", nativePathDirname, 1);
+  moduleAdd(vm, path, "basename", nativePathBasename, 1);
+  moduleAdd(vm, path, "extname", nativePathExtname, 1);
+  defineGlobal(vm, "path", OBJ_VAL(path));
+
+  ObjInstance* timeModule = makeModule(vm, "time");
+  moduleAdd(vm, timeModule, "now", nativeTimeNow, 0);
+  moduleAdd(vm, timeModule, "sleep", nativeTimeSleep, 1);
+  defineGlobal(vm, "time", OBJ_VAL(timeModule));
 
   ObjInstance* proc = makeModule(vm, "proc");
   moduleAdd(vm, proc, "run", nativeProcRun, 1);

@@ -124,10 +124,18 @@ Semantics:
 
 ## Stdlib modules
 
+- `fs.exists(path)`
 - `fs.readText(path)`
 - `fs.writeText(path, text)`
 - `fs.listDir(path)`
+- `fs.cwd()`
+- `path.join(left, right)`
+- `path.dirname(path)`
+- `path.basename(path)`
+- `path.extname(path)`
 - `proc.run(cmd)`
+- `time.now()`
+- `time.sleep(seconds)`
 - `env.get(name)`
 - `env.args()`
 - `plugin.load(path)`
