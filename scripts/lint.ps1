@@ -1,5 +1,5 @@
 param(
-  [string]$Exe = ".\\build\\Debug\\erkao.exe",
+  [string]$Exe = $(if ($IsWindows) { ".\\build\\Debug\\erkao.exe" } else { "./build/erkao" }),
   [string[]]$Dirs = @("tests", "examples")
 )
 

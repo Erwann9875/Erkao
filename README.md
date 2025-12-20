@@ -14,11 +14,11 @@ cmake --build build
 On Windows, you can use the setup script:
 
 ```powershell
-.\scripts\erkao.ps1
+./scripts/erkao.ps1
 ```
 
 If you install Visual Studio Build Tools or Visual Studio, make sure **Desktop development with C++** is selected.
-You can also specify a generator: `.\scripts\erkao.ps1 build -Generator "Ninja"`.
+You can also specify a generator: `./scripts/erkao.ps1 build -Generator "Ninja"`.
 
 ## CLI
 
@@ -50,6 +50,8 @@ Package manager:
 ./build/Debug/erkao.exe pkg install
 ./build/Debug/erkao.exe pkg list
 ```
+
+On macOS/Linux, use `./build/erkao` instead of `./build/Debug/erkao.exe`.
 
 Start a REPL:
 
@@ -92,25 +94,25 @@ Lint a file:
 Run the golden tests from the repo root:
 
 ```powershell
-.\scripts\run-tests.ps1
+./scripts/run-tests.ps1
 ```
 
 Run the GC stress test with logging:
 
 ```powershell
-.\scripts\run-gc-stress.ps1
+./scripts/run-gc-stress.ps1
 ```
 
 Format tests and examples:
 
 ```powershell
-.\scripts\format.ps1
+./scripts/format.ps1
 ```
 
 Lint tests and examples:
 
 ```powershell
-.\scripts\lint.ps1
+./scripts/lint.ps1
 ```
 
 Lint checks: whitespace/indentation, long lines, unused locals/assignments,

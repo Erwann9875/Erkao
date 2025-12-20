@@ -11,6 +11,7 @@
 #include <windows.h>
 #include <winhttp.h>
 #else
+#include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -1203,8 +1204,21 @@ static Value nativeFsListDir(VM* vm, int argc, Value* args) {
   FindClose(handle);
   return OBJ_VAL(array);
 #else
-  (void)path;
-  return runtimeErrorValue(vm, "fs.listDir is only supported on Windows.");
+  DIR* dir = opendir(path->chars);
+  if (!dir) {
+    return runtimeErrorValue(vm, "fs.listDir failed to open directory.");
+  }
+
+  ObjArray* array = newArray(vm);
+  struct dirent* entry;
+  while ((entry = readdir(dir)) != NULL) {
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+      continue;
+    }
+    arrayWrite(array, OBJ_VAL(copyString(vm, entry->d_name)));
+  }
+  closedir(dir);
+  return OBJ_VAL(array);
 #endif
 }
 

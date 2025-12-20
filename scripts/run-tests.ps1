@@ -1,5 +1,5 @@
 param(
-  [string]$Exe = ".\\build\\Debug\\erkao.exe",
+  [string]$Exe = $(if ($IsWindows) { ".\\build\\Debug\\erkao.exe" } else { "./build/erkao" }),
   [string]$TestsDir = "tests"
 )
 
@@ -32,7 +32,6 @@ foreach ($test in $tests) {
     continue
   }
 
-  $escapedExe = $Exe.Replace('"', '""')
   $relativeTest = Resolve-Path -LiteralPath $test.FullName -Relative
   if ($relativeTest.StartsWith('.\')) {
     $relativeTest = $relativeTest.Substring(2)
@@ -42,9 +41,7 @@ foreach ($test in $tests) {
   }
   $relativeTest = $relativeTest -replace "\\", "/"
 
-  $escapedTest = $relativeTest.Replace('"', '""')
-  $cmd = "`"$escapedExe`" run `"$escapedTest`""
-  $output = cmd /c "$cmd 2>&1" | Out-String
+  $output = & $Exe run $relativeTest 2>&1 | Out-String
   $output = $output -replace "`r`n", "`n"
   $output = $output.TrimEnd()
 
