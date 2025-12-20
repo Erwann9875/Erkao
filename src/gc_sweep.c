@@ -1,4 +1,5 @@
 #include "gc_internal.h"
+#include "chunk.h"
 #include "program.h"
 
 void freeObject(VM* vm, Obj* object) {
@@ -11,6 +12,11 @@ void freeObject(VM* vm, Obj* object) {
     }
     case OBJ_FUNCTION: {
       ObjFunction* function = (ObjFunction*)object;
+      if (function->chunk) {
+        freeChunk(function->chunk);
+        free(function->chunk);
+      }
+      FREE_ARRAY(ObjString*, function->params, function->arity);
       programRelease(vm, function->program);
       free(function);
       return;

@@ -1,4 +1,5 @@
 #include "value.h"
+#include "chunk.h"
 #include "interpreter.h"
 #include "gc.h"
 #include "program.h"
@@ -47,17 +48,35 @@ ObjString* stringFromToken(VM* vm, Token token) {
   return copyStringWithLength(vm, token.start, token.length);
 }
 
-ObjFunction* newFunction(VM* vm, Stmt* declaration, ObjString* name, int arity,
-                         bool isInitializer, Env* closure, Program* program) {
+ObjFunction* newFunction(VM* vm, ObjString* name, int arity, bool isInitializer,
+                         ObjString** params, Chunk* chunk, Env* closure, Program* program) {
   ObjFunction* function = (ObjFunction*)allocateObject(vm, sizeof(ObjFunction), OBJ_FUNCTION);
   function->arity = arity;
   function->isInitializer = isInitializer;
   function->name = name;
-  function->declaration = declaration;
+  function->chunk = chunk;
+  function->params = params;
   function->closure = closure;
   function->program = program;
   programRetain(program);
   return function;
+}
+
+ObjFunction* cloneFunction(VM* vm, ObjFunction* proto, Env* closure) {
+  Chunk* chunk = cloneChunk(proto->chunk);
+  ObjString** params = NULL;
+  if (proto->arity > 0) {
+    params = (ObjString**)malloc(sizeof(ObjString*) * (size_t)proto->arity);
+    if (!params) {
+      fprintf(stderr, "Out of memory.\n");
+      exit(1);
+    }
+    for (int i = 0; i < proto->arity; i++) {
+      params[i] = proto->params[i];
+    }
+  }
+  return newFunction(vm, proto->name, proto->arity, proto->isInitializer,
+                     params, chunk, closure, proto->program);
 }
 
 ObjNative* newNative(VM* vm, NativeFn function, int arity, ObjString* name) {
@@ -208,6 +227,16 @@ void mapSet(ObjMap* map, ObjString* key, Value value) {
 bool mapSetByTokenIfExists(ObjMap* map, Token key, Value value) {
   for (int i = 0; i < map->count; i++) {
     if (stringMatchesToken(map->entries[i].key, key)) {
+      map->entries[i].value = value;
+      return true;
+    }
+  }
+  return false;
+}
+
+bool mapSetIfExists(ObjMap* map, ObjString* key, Value value) {
+  for (int i = 0; i < map->count; i++) {
+    if (stringsEqual(map->entries[i].key, key)) {
       map->entries[i].value = value;
       return true;
     }

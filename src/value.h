@@ -13,10 +13,10 @@ typedef struct ObjInstance ObjInstance;
 typedef struct ObjArray ObjArray;
 typedef struct ObjMap ObjMap;
 typedef struct ObjBoundMethod ObjBoundMethod;
+typedef struct Chunk Chunk;
 
 typedef struct VM VM;
 typedef struct Env Env;
-typedef struct Stmt Stmt;
 typedef struct Program Program;
 
 typedef enum {
@@ -87,7 +87,8 @@ struct ObjFunction {
   int arity;
   bool isInitializer;
   ObjString* name;
-  Stmt* declaration;
+  Chunk* chunk;
+  ObjString** params;
   Env* closure;
   Program* program;
 };
@@ -142,8 +143,9 @@ ObjString* copyString(VM* vm, const char* chars);
 ObjString* copyStringWithLength(VM* vm, const char* chars, int length);
 ObjString* stringFromToken(VM* vm, Token token);
 
-ObjFunction* newFunction(VM* vm, Stmt* declaration, ObjString* name, int arity,
-                         bool isInitializer, Env* closure, Program* program);
+ObjFunction* newFunction(VM* vm, ObjString* name, int arity, bool isInitializer,
+                         ObjString** params, Chunk* chunk, Env* closure, Program* program);
+ObjFunction* cloneFunction(VM* vm, ObjFunction* proto, Env* closure);
 ObjNative* newNative(VM* vm, NativeFn function, int arity, ObjString* name);
 ObjClass* newClass(VM* vm, ObjString* name, ObjMap* methods);
 ObjInstance* newInstance(VM* vm, ObjClass* klass);
@@ -160,6 +162,7 @@ bool mapGet(ObjMap* map, ObjString* key, Value* out);
 bool mapGetByToken(ObjMap* map, Token key, Value* out);
 void mapSet(ObjMap* map, ObjString* key, Value value);
 bool mapSetByTokenIfExists(ObjMap* map, Token key, Value value);
+bool mapSetIfExists(ObjMap* map, ObjString* key, Value value);
 int mapCount(ObjMap* map);
 
 bool isObjType(Value value, ObjType type);

@@ -6,6 +6,24 @@
 
 typedef struct Program Program;
 
+#define FRAMES_MAX 64
+#define STACK_MAX (FRAMES_MAX * 256)
+
+typedef struct {
+  ObjFunction* function;
+  uint8_t* ip;
+  Value* slots;
+  Env* previousEnv;
+  Program* previousProgram;
+  Value receiver;
+  bool isModule;
+  bool discardResult;
+  ObjInstance* moduleInstance;
+  ObjString* moduleAlias;
+  ObjString* moduleKey;
+  bool moduleHasAlias;
+} CallFrame;
+
 typedef struct Env {
   struct Env* enclosing;
   ObjMap* values;
@@ -23,6 +41,10 @@ typedef struct VM {
   ObjMap* modules;
   Program* programs;
   Program* currentProgram;
+  CallFrame frames[FRAMES_MAX];
+  int frameCount;
+  Value stack[STACK_MAX];
+  Value* stackTop;
   void** pluginHandles;
   int pluginCount;
   int pluginCapacity;

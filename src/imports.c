@@ -1,4 +1,5 @@
 #include "interpreter_internal.h"
+#include "compiler.h"
 #include "parser.h"
 #include "program.h"
 
@@ -111,17 +112,6 @@ bool hasExtension(const char* path) {
   return strchr(base, '.') != NULL;
 }
 
-static ObjString* moduleNameFromPath(VM* vm, const char* path) {
-  const char* lastSlash = strrchr(path, '/');
-  const char* lastBackslash = strrchr(path, '\\');
-  const char* base = path;
-  if (lastSlash && lastSlash + 1 > base) base = lastSlash + 1;
-  if (lastBackslash && lastBackslash + 1 > base) base = lastBackslash + 1;
-  const char* dot = strrchr(base, '.');
-  int length = dot && dot > base ? (int)(dot - base) : (int)strlen(base);
-  return copyStringWithLength(vm, base, length);
-}
-
 char* resolveImportPath(const char* currentPath, const char* importPath) {
   if (isAbsolutePath(importPath) || !currentPath) {
     return copyCString(importPath, strlen(importPath));
@@ -133,7 +123,7 @@ char* resolveImportPath(const char* currentPath, const char* importPath) {
   return joined;
 }
 
-ObjInstance* loadModule(VM* vm, Token keyword, const char* path) {
+ObjFunction* loadModuleFunction(VM* vm, Token keyword, const char* path) {
   char* source = readFilePath(path);
   if (!source) {
     runtimeError(vm, keyword, "Failed to read import path.");
@@ -158,13 +148,7 @@ ObjInstance* loadModule(VM* vm, Token keyword, const char* path) {
   }
 
   Program* program = programCreate(vm, source, path, statements);
-  Env* moduleEnv = newEnv(vm, vm->globals);
-  Env* previousEnv = vm->env;
-  vm->env = moduleEnv;
-  bool ok = interpret(vm, program);
-  vm->env = previousEnv;
-  if (!ok) return NULL;
-
-  ObjClass* klass = newClass(vm, moduleNameFromPath(vm, path), newMap(vm));
-  return newInstanceWithFields(vm, klass, moduleEnv->values);
+  ObjFunction* function = compileProgram(vm, program);
+  if (!function) return NULL;
+  return function;
 }

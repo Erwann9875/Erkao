@@ -12,9 +12,10 @@ add_executable(erkao
   src/parser_stmt.c
   src/ast.c
   src/value.c
+  src/chunk.c
+  src/compiler.c
   src/vm.c
   src/runtime.c
-  src/eval.c
   src/exec.c
   src/imports.c
   src/stdlib.c

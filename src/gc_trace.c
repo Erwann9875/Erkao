@@ -1,14 +1,17 @@
 #include "gc_internal.h"
+#include "chunk.h"
 
 static void markValue(VM* vm, Value value);
 static void markObject(VM* vm, Obj* object);
 static void markEnv(VM* vm, Env* env);
 static void blackenObject(VM* vm, Obj* object);
 static void blackenEnv(VM* vm, Env* env);
+static void markChunk(VM* vm, Chunk* chunk);
 
 static void markYoungValue(VM* vm, Value value);
 static void markYoungObject(VM* vm, Obj* object);
 static void markYoungFromEnv(VM* vm, Env* env);
+static void markYoungChunk(VM* vm, Chunk* chunk);
 
 static void grayPushObject(VM* vm, Obj* object) {
   if (vm->gcGrayObjectCapacity < vm->gcGrayObjectCount + 1) {
@@ -66,7 +69,11 @@ static void blackenObject(VM* vm, Obj* object) {
     case OBJ_FUNCTION: {
       ObjFunction* function = (ObjFunction*)object;
       markObject(vm, (Obj*)function->name);
+      for (int i = 0; i < function->arity; i++) {
+        markObject(vm, (Obj*)function->params[i]);
+      }
       markEnv(vm, function->closure);
+      markChunk(vm, function->chunk);
       break;
     }
     case OBJ_NATIVE: {
@@ -138,7 +145,11 @@ void blackenYoungObject(VM* vm, Obj* object) {
     case OBJ_FUNCTION: {
       ObjFunction* function = (ObjFunction*)object;
       markYoungObject(vm, (Obj*)function->name);
+      for (int i = 0; i < function->arity; i++) {
+        markYoungObject(vm, (Obj*)function->params[i]);
+      }
       markYoungFromEnv(vm, function->closure);
+      markYoungChunk(vm, function->chunk);
       break;
     }
     case OBJ_NATIVE: {
@@ -182,6 +193,20 @@ void blackenYoungObject(VM* vm, Obj* object) {
   }
 }
 
+static void markChunk(VM* vm, Chunk* chunk) {
+  if (!chunk) return;
+  for (int i = 0; i < chunk->constantsCount; i++) {
+    markValue(vm, chunk->constants[i]);
+  }
+}
+
+static void markYoungChunk(VM* vm, Chunk* chunk) {
+  if (!chunk) return;
+  for (int i = 0; i < chunk->constantsCount; i++) {
+    markYoungValue(vm, chunk->constants[i]);
+  }
+}
+
 void markRoots(VM* vm) {
   markEnv(vm, vm->globals);
   markEnv(vm, vm->env);
@@ -190,6 +215,22 @@ void markRoots(VM* vm) {
   }
   if (vm->modules) {
     markObject(vm, (Obj*)vm->modules);
+  }
+  for (Value* slot = vm->stack; slot < vm->stackTop; slot++) {
+    markValue(vm, *slot);
+  }
+  for (int i = 0; i < vm->frameCount; i++) {
+    markObject(vm, (Obj*)vm->frames[i].function);
+    markValue(vm, vm->frames[i].receiver);
+    if (vm->frames[i].moduleInstance) {
+      markObject(vm, (Obj*)vm->frames[i].moduleInstance);
+    }
+    if (vm->frames[i].moduleKey) {
+      markObject(vm, (Obj*)vm->frames[i].moduleKey);
+    }
+    if (vm->frames[i].moduleAlias) {
+      markObject(vm, (Obj*)vm->frames[i].moduleAlias);
+    }
   }
 }
 
@@ -202,6 +243,22 @@ void markYoungRoots(VM* vm) {
   }
   markYoungFromEnv(vm, vm->globals);
   markYoungFromEnv(vm, vm->env);
+  for (Value* slot = vm->stack; slot < vm->stackTop; slot++) {
+    markYoungValue(vm, *slot);
+  }
+  for (int i = 0; i < vm->frameCount; i++) {
+    markYoungObject(vm, (Obj*)vm->frames[i].function);
+    markYoungValue(vm, vm->frames[i].receiver);
+    if (vm->frames[i].moduleInstance) {
+      markYoungObject(vm, (Obj*)vm->frames[i].moduleInstance);
+    }
+    if (vm->frames[i].moduleKey) {
+      markYoungObject(vm, (Obj*)vm->frames[i].moduleKey);
+    }
+    if (vm->frames[i].moduleAlias) {
+      markYoungObject(vm, (Obj*)vm->frames[i].moduleAlias);
+    }
+  }
 }
 
 void traceFull(VM* vm) {

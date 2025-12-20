@@ -44,16 +44,16 @@ Env* newEnv(VM* vm, Env* enclosing) {
   return env;
 }
 
-bool envGet(Env* env, Token name, Value* out) {
+bool envGetByName(Env* env, ObjString* name, Value* out) {
   for (Env* current = env; current != NULL; current = current->enclosing) {
-    if (mapGetByToken(current->values, name, out)) return true;
+    if (mapGet(current->values, name, out)) return true;
   }
   return false;
 }
 
-bool envAssign(Env* env, Token name, Value value) {
+bool envAssignByName(Env* env, ObjString* name, Value value) {
   for (Env* current = env; current != NULL; current = current->enclosing) {
-    if (mapSetByTokenIfExists(current->values, name, value)) return true;
+    if (mapSetIfExists(current->values, name, value)) return true;
   }
   return false;
 }
@@ -105,6 +105,8 @@ void vmInit(VM* vm) {
   vm->gcLogBeforeEnv = 0;
   vm->gcLogFullActive = false;
   vm->hadError = false;
+  vm->frameCount = 0;
+  vm->stackTop = vm->stack;
   vm->globals = newEnv(vm, NULL);
   vm->env = vm->globals;
   vm->args = newArray(vm);
