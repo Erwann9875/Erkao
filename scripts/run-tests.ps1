@@ -4,12 +4,12 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$isWindows = $env:OS -eq "Windows_NT"
-if (-not $isWindows -and $PSVersionTable.PSEdition -eq "Desktop") {
-  $isWindows = $true
+$isWin = $env:OS -eq "Windows_NT"
+if (-not $isWin -and $PSVersionTable.PSEdition -eq "Desktop") {
+  $isWin = $true
 }
 if (-not $Exe) {
-  if ($isWindows) {
+  if ($isWin) {
     $Exe = ".\\build\\Debug\\erkao.exe"
   } else {
     $Exe = "./build/erkao"
@@ -26,8 +26,8 @@ if ($env:ERKAO_HTTP_TEST) {
 $httpServer = $null
 
 function Find-Python {
-  param([bool]$IsWindows)
-  $candidates = if ($IsWindows) { @("py", "python", "python3") } else { @("python3", "python") }
+  param([bool]$IsWin)
+  $candidates = if ($IsWin) { @("py", "python", "python3") } else { @("python3", "python") }
   foreach ($candidate in $candidates) {
     $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
     if ($cmd) {
@@ -86,7 +86,7 @@ if ($httpTestEnabled) {
     $httpPort = "18421"
     $env:ERKAO_HTTP_TEST_PORT = $httpPort
   }
-  $pythonInfo = Find-Python -IsWindows:$isWindows
+  $pythonInfo = Find-Python -IsWin:$isWin
   if (-not $pythonInfo) {
     Write-Error "Python is required for HTTP tests (ERKAO_HTTP_TEST=1)."
     exit 1

@@ -6,11 +6,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 if (-not $Exe) {
-  $isWindows = $env:OS -eq "Windows_NT"
-  if (-not $isWindows -and $PSVersionTable.PSEdition -eq "Desktop") {
-    $isWindows = $true
+  $isWin = $env:OS -eq "Windows_NT"
+  if (-not $isWin -and $PSVersionTable.PSEdition -eq "Desktop") {
+    $isWin = $true
   }
-  if ($isWindows) {
+  if ($isWin) {
     $Exe = ".\\build\\Debug\\erkao.exe"
   } else {
     $Exe = "./build/erkao"
