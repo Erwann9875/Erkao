@@ -158,8 +158,7 @@ if ($httpTestEnabled) {
     Write-Error ("HTTP test server failed to start.{0}" -f $suffix)
     exit 1
   }
-    exit 1
-  }
+
   $env:ERKAO_HTTP_TEST_PORT = "$httpPort"
 
   if (-not (Wait-HttpServer -Port ([int]$httpPort) -Process $httpServer)) {
