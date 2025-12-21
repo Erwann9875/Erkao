@@ -2,6 +2,11 @@ import os
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+print(f"DEBUG: Starting http_server.py with args: {sys.argv}", file=sys.stderr)
+sys.stderr.flush()
+print(f"DEBUG: Python executable: {sys.executable}", file=sys.stderr)
+sys.stderr.flush()
+
 
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code, body):
