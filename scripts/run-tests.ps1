@@ -68,7 +68,7 @@ function Wait-HttpServerPort {
       } catch {
       }
     }
-    Start-Sleep -Milliseconds 200
+    Start-Sleep -Milliseconds 500
   }
   return $null
 }
@@ -102,6 +102,7 @@ if ($httpTestEnabled) {
     $startProcessArgs.NoNewWindow = $true
   }
   $httpServer = Start-Process @startProcessArgs
+  Start-Sleep -Milliseconds 500
   $httpPort = Wait-HttpServerPort -Process $httpServer -StdoutPath $httpServerStdout
   if (-not $httpPort) {
     if ($httpServer -and -not $httpServer.HasExited) {
