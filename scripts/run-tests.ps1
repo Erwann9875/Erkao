@@ -29,7 +29,7 @@ $httpServerStderr = $null
 
 function Wait-HttpServer {
   param([int]$Port, [System.Diagnostics.Process]$Process)
-  for ($i = 0; $i -lt 60; $i++) {
+  for ($i = 0; $i -lt 120; $i++) {
     if ($Process -and $Process.HasExited) {
       return $false
     }
@@ -44,7 +44,7 @@ function Wait-HttpServer {
       $client.Close()
     } catch {
     }
-    Start-Sleep -Milliseconds 200
+    Start-Sleep -Milliseconds 800
   }
   return $false
 }
@@ -52,7 +52,7 @@ function Wait-HttpServer {
 function Wait-HttpServerPort {
   param([System.Diagnostics.Process]$Process, [string]$StdoutPath)
   $pattern = [regex]"http\\.serve listening on http://127\\.0\\.0\\.1:(\\d+)"
-  for ($i = 0; $i -lt 60; $i++) {
+  for ($i = 0; $i -lt 120; $i++) {
     if ($Process -and $Process.HasExited) {
       return $null
     }
@@ -68,7 +68,7 @@ function Wait-HttpServerPort {
       } catch {
       }
     }
-    Start-Sleep -Milliseconds 200
+    Start-Sleep -Milliseconds 800
   }
   return $null
 }
