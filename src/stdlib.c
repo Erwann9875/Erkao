@@ -1192,6 +1192,7 @@ static bool httpBindServerSocket(ErkaoSocket* out, int port, int* outPort, bool*
     return false;
   }
 
+  printf("DEBUG: Socket bound to port %d\n", boundPort);
   *out = server;
   *outPort = boundPort;
   return true;
@@ -1504,8 +1505,14 @@ static Value nativeHttpServe(VM* vm, int argc, Value* args) {
 #endif
     ErkaoSocket client = accept(server, (struct sockaddr*)&clientAddr, &addrLen);
     if (client == ERKAO_INVALID_SOCKET) {
+      if (errno != EAGAIN && errno != EWOULDBLOCK) {
+         printf("DEBUG: accept failed: %d\n", errno);
+         fflush(stdout);
+      }
       continue;
     }
+    printf("DEBUG: Connection accepted from client\n");
+    fflush(stdout);
 
     ByteBuffer request;
     bufferInit(&request);

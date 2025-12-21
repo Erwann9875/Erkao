@@ -27,9 +27,32 @@ $httpServer = $null
 $httpServerStdout = $null
 $httpServerStderr = $null
 
+function Wait-HttpServer {
+  param([int]$Port, [System.Diagnostics.Process]$Process)
+  for ($i = 0; $i -lt 10; $i++) {
+    if ($Process -and $Process.HasExited) {
+      return $false
+    }
+    try {
+      $client = [System.Net.Sockets.TcpClient]::new()
+      $async = $client.BeginConnect("127.0.0.1", $Port, $null, $null)
+      $ready = $async.AsyncWaitHandle.WaitOne(1000)
+      if ($ready -and $client.Connected) {
+        $client.Close()
+        return $true
+      }
+      $client.Close()
+    } catch {
+       Write-Host "DEBUG: Connection attempt $i to $Port failed: $_"
+    }
+    Start-Sleep -Milliseconds 500
+  }
+  return $false
+}
+
 function Wait-HttpServerPort {
   param([System.Diagnostics.Process]$Process, [string]$StdoutPath)
-  $pattern = [regex]"http\\.serve listening on http://127\\.0\\.0\\.1:(\\d+)"
+  $pattern = [regex]"http\.serve listening on\s+http://127\.0\.0\.1:(\d+)"
   for ($i = 0; $i -lt 60; $i++) {
     if ($Process -and $Process.HasExited) {
       return $null
@@ -45,6 +68,21 @@ function Wait-HttpServerPort {
         }
       } catch {
       }
+    }
+
+    if ($Process -and $Process.HasExited) {
+       if ($StdoutPath -and (Test-Path -LiteralPath $StdoutPath)) {
+         try {
+           $text = Get-Content -LiteralPath $StdoutPath -Raw
+           if ($text) {
+             $match = $pattern.Match($text)
+             if ($match.Success) {
+                return [int]$match.Groups[1].Value
+             }
+           }
+         } catch {}
+       }
+       return $null
     }
     Start-Sleep -Milliseconds 800
   }
@@ -120,7 +158,15 @@ if ($httpTestEnabled) {
     Write-Error ("HTTP test server failed to start.{0}" -f $suffix)
     exit 1
   }
+    exit 1
+  }
   $env:ERKAO_HTTP_TEST_PORT = "$httpPort"
+
+  if (-not (Wait-HttpServer -Port ([int]$httpPort) -Process $httpServer)) {
+    Write-Error "HTTP test server started on port $httpPort but refused connection."
+    Stop-Process -Id $httpServer.Id -Force
+    exit 1
+  }
 }
 
 $exitCode = 0
