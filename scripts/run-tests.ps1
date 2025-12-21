@@ -27,28 +27,6 @@ $httpServer = $null
 $httpServerStdout = $null
 $httpServerStderr = $null
 
-function Wait-HttpServer {
-  param([int]$Port, [System.Diagnostics.Process]$Process)
-  for ($i = 0; $i -lt 60; $i++) {
-    if ($Process -and $Process.HasExited) {
-      return $false
-    }
-    try {
-      $client = [System.Net.Sockets.TcpClient]::new()
-      $async = $client.BeginConnect("127.0.0.1", $Port, $null, $null)
-      $ready = $async.AsyncWaitHandle.WaitOne(1000)
-      if ($ready -and $client.Connected) {
-        $client.Close()
-        return $true
-      }
-      $client.Close()
-    } catch {
-    }
-    Start-Sleep -Milliseconds 200
-  }
-  return $false
-}
-
 function Wait-HttpServerPort {
   param([System.Diagnostics.Process]$Process, [string]$StdoutPath)
   $pattern = [regex]"http\\.serve listening on http://127\\.0\\.0\\.1:(\\d+)"
@@ -68,7 +46,7 @@ function Wait-HttpServerPort {
       } catch {
       }
     }
-    Start-Sleep -Milliseconds 200
+    Start-Sleep -Milliseconds 800
   }
   return $null
 }
@@ -143,45 +121,6 @@ if ($httpTestEnabled) {
     exit 1
   }
   $env:ERKAO_HTTP_TEST_PORT = "$httpPort"
-  if (-not (Wait-HttpServer -Port ([int]$httpPort) -Process $httpServer)) {
-    if ($httpServer -and -not $httpServer.HasExited) {
-      Stop-Process -Id $httpServer.Id -Force
-    }
-    $details = @()
-    if ($httpServer -and $httpServer.HasExited) {
-      $details += ("exit code {0}" -f $httpServer.ExitCode)
-    }
-    if ($httpServerStdout -and (Test-Path -LiteralPath $httpServerStdout)) {
-      try {
-        $stdout = Get-Content -LiteralPath $httpServerStdout -Raw
-        if ($stdout) {
-          $stdout = $stdout.TrimEnd()
-        }
-        if ($stdout) {
-          $details += ("stdout:`n{0}" -f $stdout)
-        }
-      } catch {
-      }
-    }
-    if ($httpServerStderr -and (Test-Path -LiteralPath $httpServerStderr)) {
-      try {
-        $stderr = Get-Content -LiteralPath $httpServerStderr -Raw
-        if ($stderr) {
-          $stderr = $stderr.TrimEnd()
-        }
-        if ($stderr) {
-          $details += ("stderr:`n{0}" -f $stderr)
-        }
-      } catch {
-      }
-    }
-    $suffix = ""
-    if ($details.Count -gt 0) {
-      $suffix = " `n" + ($details -join "`n")
-    }
-    Write-Error ("HTTP test server failed to start.{0}" -f $suffix)
-    exit 1
-  }
 }
 
 $exitCode = 0
