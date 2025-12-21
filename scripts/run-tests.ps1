@@ -123,7 +123,18 @@ if ($httpTestEnabled) {
   }
   $httpServerStdout = New-TemporaryFile
   $httpServerStderr = New-TemporaryFile
-  $httpServer = Start-Process -FilePath $pythonInfo.Path -ArgumentList @($pythonInfo.Args + @($serverPath, $httpPort)) -NoNewWindow -PassThru -RedirectStandardOutput $httpServerStdout -RedirectStandardError $httpServerStderr
+  $startProcessArgs = @{
+    FilePath = $pythonInfo.Path
+    ArgumentList = @($pythonInfo.Args + @($serverPath, $httpPort))
+    PassThru = $true
+    RedirectStandardOutput = $httpServerStdout
+    RedirectStandardError = $httpServerStderr
+  }
+  if ($isWin) {
+    $startProcessArgs.NoNewWindow = $true
+  }
+  $httpServer = Start-Process @startProcessArgs
+  Start-Sleep -Milliseconds 500
   if (-not (Wait-HttpServer -Port ([int]$httpPort) -Process $httpServer)) {
     if ($httpServer -and -not $httpServer.HasExited) {
       Stop-Process -Id $httpServer.Id -Force
