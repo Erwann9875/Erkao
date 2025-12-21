@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -9,10 +10,10 @@ sys.stderr.flush()
 
 
 class Handler(BaseHTTPRequestHandler):
-    def _send(self, code, body):
+    def _send(self, code, body, content_type="text/plain; charset=utf-8"):
         body_bytes = body.encode("utf-8")
         self.send_response(code)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body_bytes)))
         self.end_headers()
         self.wfile.write(body_bytes)
@@ -28,6 +29,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/hello":
             self._send(200, "hello")
+        elif self.path == "/json":
+            payload = json.dumps({"message": "hello", "count": 2})
+            self._send(200, payload, "application/json; charset=utf-8")
         else:
             self._send(404, "not found")
 

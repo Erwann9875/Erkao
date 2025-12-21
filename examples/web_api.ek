@@ -1,0 +1,11 @@
+let routes = {
+  "/": "hello from erkao",
+  "/health": "ok",
+  "GET /json": {
+    status: 200,
+    body: json.stringify({ message: "hello", count: 2 }),
+    headers: { "Content-Type": "application/json; charset=utf-8" }
+  }
+};
+
+http.serve(0, routes);

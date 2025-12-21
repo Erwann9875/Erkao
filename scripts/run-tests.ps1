@@ -27,39 +27,9 @@ $httpServer = $null
 $httpServerStdout = $null
 $httpServerStderr = $null
 
-function Find-Python {
-  param([bool]$IsWin)
-  $candidates = if ($IsWin) { @("py", "python", "python3") } else { @("python3", "python") }
-  foreach ($candidate in $candidates) {
-    $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
-    if ($cmd) {
-      if ($cmd.Path -match "WindowsApps") {
-        continue
-      }
-      $args = @("-u")
-      if ($candidate -eq "py") {
-        $args += "-3"
-      }
-      & $cmd.Path @($args + @("-c", "import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)")) 2>$null | Out-String | Out-Null
-      if ($LASTEXITCODE -ne 0) {
-        continue
-      }
-      & $cmd.Path @($args + @("-c", "import http.server")) 2>$null | Out-String | Out-Null
-      if ($LASTEXITCODE -ne 0) {
-        continue
-      }
-      return [pscustomobject]@{
-        Path = $cmd.Path
-        Args = $args
-      }
-    }
-  }
-  return $null
-}
-
 function Wait-HttpServer {
   param([int]$Port, [System.Diagnostics.Process]$Process)
-  for ($i = 0; $i -lt 60; $i++) {
+  for ($i = 0; $i -lt 10; $i++) {
     if ($Process -and $Process.HasExited) {
       return $false
     }
@@ -73,24 +43,50 @@ function Wait-HttpServer {
       }
       $client.Close()
     } catch {
-       Write-Host "DEBUG: Connection attempt $i failed: $_"
+       Write-Host "DEBUG: Connection attempt $i to $Port failed: $_"
     }
     Start-Sleep -Milliseconds 500
   }
   return $false
 }
 
-function Get-FreePort {
-  try {
-    $ip = [System.Net.IPAddress]::Parse("127.0.0.1")
-    $listener = [System.Net.Sockets.TcpListener]::new($ip, 0)
-    $listener.Start()
-    $port = $listener.LocalEndpoint.Port
-    $listener.Stop()
-    return [int]$port
-  } catch {
-    return $null
+function Wait-HttpServerPort {
+  param([System.Diagnostics.Process]$Process, [string]$StdoutPath)
+  $pattern = [regex]"http\.serve listening on\s+http://127\.0\.0\.1:(\d+)"
+  for ($i = 0; $i -lt 60; $i++) {
+    if ($Process -and $Process.HasExited) {
+      return $null
+    }
+    if ($StdoutPath -and (Test-Path -LiteralPath $StdoutPath)) {
+      try {
+        $text = Get-Content -LiteralPath $StdoutPath -Raw
+        if ($text) {
+          $match = $pattern.Match($text)
+          if ($match.Success) {
+            return [int]$match.Groups[1].Value
+          }
+        }
+      } catch {
+      }
+    }
+
+    if ($Process -and $Process.HasExited) {
+       if ($StdoutPath -and (Test-Path -LiteralPath $StdoutPath)) {
+         try {
+           $text = Get-Content -LiteralPath $StdoutPath -Raw
+           if ($text) {
+             $match = $pattern.Match($text)
+             if ($match.Success) {
+                return [int]$match.Groups[1].Value
+             }
+           }
+         } catch {}
+       }
+       return $null
+    }
+    Start-Sleep -Milliseconds 800
   }
+  return $null
 }
 
 if (-not (Test-Path -LiteralPath $Exe)) {
@@ -104,22 +100,7 @@ if (-not (Test-Path -LiteralPath $TestsDir)) {
 }
 
 if ($httpTestEnabled) {
-  $httpPort = $env:ERKAO_HTTP_TEST_PORT
-  if (-not $httpPort) {
-    $httpPort = Get-FreePort
-    if (-not $httpPort) {
-      Write-Error "Failed to allocate a port for HTTP tests."
-      exit 1
-    }
-    $env:ERKAO_HTTP_TEST_PORT = $httpPort
-  }
-  Write-Host "Using HTTP Port: $httpPort"
-  $pythonInfo = Find-Python -IsWin:$isWin
-  if (-not $pythonInfo) {
-    Write-Error "Python is required for HTTP tests (ERKAO_HTTP_TEST=1)."
-    exit 1
-  }
-  $serverPath = Join-Path $TestsDir "http_server.py"
+  $serverPath = Join-Path $TestsDir "http_server.ek"
   if (-not (Test-Path -LiteralPath $serverPath)) {
     Write-Error "HTTP test server not found: $serverPath"
     exit 1
@@ -127,8 +108,8 @@ if ($httpTestEnabled) {
   $httpServerStdout = New-TemporaryFile
   $httpServerStderr = New-TemporaryFile
   $startProcessArgs = @{
-    FilePath = $pythonInfo.Path
-    ArgumentList = @($pythonInfo.Args + @($serverPath, $httpPort))
+    FilePath = $Exe
+    ArgumentList = @("run", $serverPath)
     PassThru = $true
     RedirectStandardOutput = $httpServerStdout
     RedirectStandardError = $httpServerStderr
@@ -137,8 +118,8 @@ if ($httpTestEnabled) {
     $startProcessArgs.NoNewWindow = $true
   }
   $httpServer = Start-Process @startProcessArgs
-  Start-Sleep -Milliseconds 500
-  if (-not (Wait-HttpServer -Port ([int]$httpPort) -Process $httpServer)) {
+  $httpPort = Wait-HttpServerPort -Process $httpServer -StdoutPath $httpServerStdout
+  if (-not $httpPort) {
     if ($httpServer -and -not $httpServer.HasExited) {
       Stop-Process -Id $httpServer.Id -Force
     }
@@ -156,7 +137,6 @@ if ($httpTestEnabled) {
           $details += ("stdout:`n{0}" -f $stdout)
         }
       } catch {
-        Write-Host "Failed to read stdout: $_"
       }
     }
     if ($httpServerStderr -and (Test-Path -LiteralPath $httpServerStderr)) {
@@ -169,7 +149,6 @@ if ($httpTestEnabled) {
           $details += ("stderr:`n{0}" -f $stderr)
         }
       } catch {
-        Write-Host "Failed to read stderr: $_"
       }
     }
     $suffix = ""
@@ -179,11 +158,21 @@ if ($httpTestEnabled) {
     Write-Error ("HTTP test server failed to start.{0}" -f $suffix)
     exit 1
   }
+
+  $env:ERKAO_HTTP_TEST_PORT = "$httpPort"
+
+  if (-not (Wait-HttpServer -Port ([int]$httpPort) -Process $httpServer)) {
+    Write-Error "HTTP test server started on port $httpPort but refused connection."
+    Stop-Process -Id $httpServer.Id -Force
+    exit 1
+  }
 }
 
 $exitCode = 0
 try {
-  $tests = Get-ChildItem -LiteralPath $TestsDir -Filter "*.ek" | Sort-Object Name
+  $tests = Get-ChildItem -LiteralPath $TestsDir -Filter "*.ek" |
+    Where-Object { $_.Name -ne "http_server.ek" } |
+    Sort-Object Name
   if (-not $tests -or $tests.Count -eq 0) {
     Write-Host "No tests found in $TestsDir"
   } else {
