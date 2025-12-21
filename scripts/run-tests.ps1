@@ -36,9 +36,9 @@ function Find-Python {
       if ($cmd.Path -match "WindowsApps") {
         continue
       }
-      $args = @()
+      $args = @("-u")
       if ($candidate -eq "py") {
-        $args = @("-3")
+        $args += "-3"
       }
       & $cmd.Path @($args + @("-c", "import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)")) 2>$null | Out-String | Out-Null
       if ($LASTEXITCODE -ne 0) {
@@ -81,7 +81,8 @@ function Wait-HttpServer {
 
 function Get-FreePort {
   try {
-    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+    $ip = [System.Net.IPAddress]::Parse("127.0.0.1")
+    $listener = [System.Net.Sockets.TcpListener]::new($ip, 0)
     $listener.Start()
     $port = $listener.LocalEndpoint.Port
     $listener.Stop()
@@ -111,6 +112,7 @@ if ($httpTestEnabled) {
     }
     $env:ERKAO_HTTP_TEST_PORT = $httpPort
   }
+  Write-Host "Using HTTP Port: $httpPort"
   $pythonInfo = Find-Python -IsWin:$isWin
   if (-not $pythonInfo) {
     Write-Error "Python is required for HTTP tests (ERKAO_HTTP_TEST=1)."
@@ -153,6 +155,7 @@ if ($httpTestEnabled) {
           $details += ("stdout:`n{0}" -f $stdout)
         }
       } catch {
+        Write-Host "Failed to read stdout: $_"
       }
     }
     if ($httpServerStderr -and (Test-Path -LiteralPath $httpServerStderr)) {
@@ -165,6 +168,7 @@ if ($httpTestEnabled) {
           $details += ("stderr:`n{0}" -f $stderr)
         }
       } catch {
+        Write-Host "Failed to read stderr: $_"
       }
     }
     $suffix = ""
