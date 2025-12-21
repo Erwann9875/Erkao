@@ -8,11 +8,21 @@
 #include <wchar.h>
 
 #ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <winhttp.h>
 #else
+#include <arpa/inet.h>
 #include <curl/curl.h>
 #include <dirent.h>
+#include <errno.h>
+#include <netinet/in.h>
+#include <signal.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -1090,6 +1100,447 @@ static Value nativeHttpRequest(VM* vm, int argc, Value* args) {
                      body, bodyLength, "http.request failed.");
 }
 #endif
+
+#define HTTP_MAX_REQUEST_BYTES 65536
+
+#ifdef _WIN32
+typedef SOCKET ErkaoSocket;
+#define ERKAO_INVALID_SOCKET INVALID_SOCKET
+#define ERKAO_SOCKET_ERROR SOCKET_ERROR
+#define erkaoCloseSocket closesocket
+#else
+typedef int ErkaoSocket;
+#define ERKAO_INVALID_SOCKET (-1)
+#define ERKAO_SOCKET_ERROR (-1)
+#define erkaoCloseSocket close
+#endif
+
+static bool httpSocketStartup(void) {
+#ifdef _WIN32
+  static bool started = false;
+  if (!started) {
+    WSADATA data;
+    if (WSAStartup(MAKEWORD(2, 2), &data) != 0) {
+      return false;
+    }
+    started = true;
+  }
+#endif
+  return true;
+}
+
+static bool httpSocketAddrInUse(void) {
+#ifdef _WIN32
+  return WSAGetLastError() == WSAEADDRINUSE;
+#else
+  return errno == EADDRINUSE;
+#endif
+}
+
+static int httpSocketGetPort(ErkaoSocket server) {
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+#ifdef _WIN32
+  int len = (int)sizeof(addr);
+  if (getsockname(server, (struct sockaddr*)&addr, &len) == SOCKET_ERROR) {
+    return -1;
+  }
+#else
+  socklen_t len = sizeof(addr);
+  if (getsockname(server, (struct sockaddr*)&addr, &len) < 0) {
+    return -1;
+  }
+#endif
+  return (int)ntohs(addr.sin_port);
+}
+
+static bool httpBindServerSocket(ErkaoSocket* out, int port, int* outPort, bool* outInUse) {
+  if (outInUse) *outInUse = false;
+
+  ErkaoSocket server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (server == ERKAO_INVALID_SOCKET) {
+    return false;
+  }
+
+  int opt = 1;
+  setsockopt(server, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt));
+#ifdef SO_NOSIGPIPE
+  setsockopt(server, SOL_SOCKET, SO_NOSIGPIPE, (const char*)&opt, sizeof(opt));
+#endif
+
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port = htons((uint16_t)port);
+
+  if (bind(server, (struct sockaddr*)&addr, sizeof(addr)) == ERKAO_SOCKET_ERROR) {
+    if (outInUse) *outInUse = httpSocketAddrInUse();
+    erkaoCloseSocket(server);
+    return false;
+  }
+
+  if (listen(server, SOMAXCONN) == ERKAO_SOCKET_ERROR) {
+    erkaoCloseSocket(server);
+    return false;
+  }
+
+  int boundPort = httpSocketGetPort(server);
+  if (boundPort <= 0) {
+    erkaoCloseSocket(server);
+    return false;
+  }
+
+  *out = server;
+  *outPort = boundPort;
+  return true;
+}
+
+static bool httpPortFromValue(VM* vm, Value value, int* outPort) {
+  if (IS_NULL(value)) {
+    *outPort = 0;
+    return true;
+  }
+  if (!IS_NUMBER(value)) {
+    runtimeErrorValue(vm, "http.serve expects port to be a number or null.");
+    return false;
+  }
+  double number = AS_NUMBER(value);
+  double truncated = floor(number);
+  if (number != truncated) {
+    runtimeErrorValue(vm, "http.serve expects port to be an integer.");
+    return false;
+  }
+  if (number < 0.0 || number > 65535.0) {
+    runtimeErrorValue(vm, "http.serve expects port in range 0-65535.");
+    return false;
+  }
+  *outPort = (int)number;
+  return true;
+}
+
+static bool httpFindHeaderEnd(const char* data, size_t length, size_t* outIndex) {
+  if (length < 2) return false;
+  for (size_t i = 3; i < length; i++) {
+    if (data[i - 3] == '\r' && data[i - 2] == '\n' &&
+        data[i - 1] == '\r' && data[i] == '\n') {
+      *outIndex = i + 1;
+      return true;
+    }
+  }
+  for (size_t i = 1; i < length; i++) {
+    if (data[i - 1] == '\n' && data[i] == '\n') {
+      *outIndex = i + 1;
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool httpReadHeaders(ErkaoSocket client, ByteBuffer* buffer, size_t* headerEnd) {
+  char chunk[1024];
+  while (buffer->length < HTTP_MAX_REQUEST_BYTES) {
+    int received = recv(client, chunk, (int)sizeof(chunk), 0);
+    if (received <= 0) {
+      return false;
+    }
+    bufferAppendN(buffer, chunk, (size_t)received);
+    if (httpFindHeaderEnd(buffer->data, buffer->length, headerEnd)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool httpParseRequestLine(const char* data, size_t headerEnd,
+                                 const char** method, size_t* methodLen,
+                                 const char** path, size_t* pathLen) {
+  if (!data || headerEnd == 0) return false;
+  const char* lineEnd = memchr(data, '\n', headerEnd);
+  if (!lineEnd) return false;
+  const char* lineEndClean = lineEnd;
+  if (lineEndClean > data && lineEndClean[-1] == '\r') {
+    lineEndClean--;
+  }
+  const char* space1 = memchr(data, ' ', (size_t)(lineEndClean - data));
+  if (!space1) return false;
+  const char* space2 = memchr(space1 + 1, ' ', (size_t)(lineEndClean - (space1 + 1)));
+  if (!space2) return false;
+  if (space1 == data || space2 == space1 + 1) return false;
+  *method = data;
+  *methodLen = (size_t)(space1 - data);
+  *path = space1 + 1;
+  *pathLen = (size_t)(space2 - (space1 + 1));
+  return true;
+}
+
+static bool httpStringEqualsIgnoreCaseN(const char* left, int leftLen, const char* right) {
+  int rightLen = (int)strlen(right);
+  if (leftLen != rightLen) return false;
+  for (int i = 0; i < leftLen; i++) {
+    unsigned char a = (unsigned char)left[i];
+    unsigned char b = (unsigned char)right[i];
+    if (tolower(a) != tolower(b)) return false;
+  }
+  return true;
+}
+
+static void httpAppendHeader(ByteBuffer* buffer, const char* name, const char* value) {
+  bufferAppendN(buffer, name, strlen(name));
+  bufferAppendN(buffer, ": ", 2);
+  bufferAppendN(buffer, value, strlen(value));
+  bufferAppendN(buffer, "\r\n", 2);
+}
+
+static const char* httpStatusText(int status) {
+  switch (status) {
+    case 200:
+      return "OK";
+    case 201:
+      return "Created";
+    case 204:
+      return "No Content";
+    case 400:
+      return "Bad Request";
+    case 404:
+      return "Not Found";
+    case 500:
+      return "Internal Server Error";
+    default:
+      return "OK";
+  }
+}
+
+static bool httpAppendHeadersFromMap(ByteBuffer* buffer, ObjMap* headers, bool* hasContentType) {
+  if (!headers) return true;
+  for (int i = 0; i < headers->capacity; i++) {
+    MapEntryValue* entry = &headers->entries[i];
+    if (!entry->key) continue;
+    if (!isObjType(entry->value, OBJ_STRING)) continue;
+    ObjString* key = entry->key;
+    ObjString* value = (ObjString*)AS_OBJ(entry->value);
+    if (httpStringEqualsIgnoreCaseN(key->chars, key->length, "Content-Type")) {
+      if (hasContentType) *hasContentType = true;
+    }
+    httpAppendHeader(buffer, key->chars, value->chars);
+  }
+  return true;
+}
+
+static bool httpSendAll(ErkaoSocket client, const char* data, size_t length) {
+  size_t sent = 0;
+  while (sent < length) {
+    int chunk = (int)(length - sent);
+    int wrote = send(client, data + sent, chunk, 0);
+    if (wrote <= 0) return false;
+    sent += (size_t)wrote;
+  }
+  return true;
+}
+
+static bool httpSendResponse(ErkaoSocket client, int status, const char* body,
+                             size_t bodyLength, ObjMap* headers) {
+  ByteBuffer response;
+  bufferInit(&response);
+
+  char statusLine[64];
+  const char* statusText = httpStatusText(status);
+  int statusLen = snprintf(statusLine, sizeof(statusLine),
+                           "HTTP/1.1 %d %s\r\n", status, statusText);
+  if (statusLen < 0) statusLen = 0;
+  bufferAppendN(&response, statusLine, (size_t)statusLen);
+
+  bool hasContentType = false;
+  httpAppendHeadersFromMap(&response, headers, &hasContentType);
+  if (!hasContentType) {
+    httpAppendHeader(&response, "Content-Type", "text/plain; charset=utf-8");
+  }
+
+  char lengthValue[64];
+  int lengthLen = snprintf(lengthValue, sizeof(lengthValue), "%zu", bodyLength);
+  if (lengthLen < 0) lengthLen = 0;
+  httpAppendHeader(&response, "Content-Length", lengthValue);
+  httpAppendHeader(&response, "Connection", "close");
+  bufferAppendN(&response, "\r\n", 2);
+
+  if (bodyLength > 0 && body) {
+    bufferAppendN(&response, body, bodyLength);
+  }
+
+  bool ok = httpSendAll(client,
+                        response.data ? response.data : "",
+                        response.length);
+  bufferFree(&response);
+  return ok;
+}
+
+static bool httpResponseFromValue(VM* vm, Value value, int* statusOut,
+                                  const char** bodyOut, size_t* bodyLenOut,
+                                  ObjMap** headersOut) {
+  *statusOut = 200;
+  *bodyOut = "";
+  *bodyLenOut = 0;
+  *headersOut = NULL;
+
+  if (isObjType(value, OBJ_STRING)) {
+    ObjString* body = (ObjString*)AS_OBJ(value);
+    *bodyOut = body->chars;
+    *bodyLenOut = (size_t)body->length;
+    return true;
+  }
+
+  if (isObjType(value, OBJ_MAP)) {
+    ObjMap* response = (ObjMap*)AS_OBJ(value);
+    Value statusValue;
+    ObjString* statusKey = copyString(vm, "status");
+    if (mapGet(response, statusKey, &statusValue)) {
+      if (!IS_NUMBER(statusValue)) return false;
+      double statusNumber = AS_NUMBER(statusValue);
+      double truncated = floor(statusNumber);
+      if (statusNumber != truncated || statusNumber < 100.0 || statusNumber > 599.0) {
+        return false;
+      }
+      *statusOut = (int)statusNumber;
+    }
+
+    Value bodyValue;
+    ObjString* bodyKey = copyString(vm, "body");
+    if (mapGet(response, bodyKey, &bodyValue)) {
+      if (!isObjType(bodyValue, OBJ_STRING)) return false;
+      ObjString* body = (ObjString*)AS_OBJ(bodyValue);
+      *bodyOut = body->chars;
+      *bodyLenOut = (size_t)body->length;
+    }
+
+    Value headersValue;
+    ObjString* headersKey = copyString(vm, "headers");
+    if (mapGet(response, headersKey, &headersValue)) {
+      if (!isObjType(headersValue, OBJ_MAP)) return false;
+      *headersOut = (ObjMap*)AS_OBJ(headersValue);
+    }
+
+    return true;
+  }
+
+  return false;
+}
+
+static Value nativeHttpServe(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!httpPortFromValue(vm, args[0], &argc)) return NULL_VAL;
+  if (!isObjType(args[1], OBJ_MAP)) {
+    return runtimeErrorValue(vm, "http.serve expects (port, routes).");
+  }
+
+  ObjMap* routes = (ObjMap*)AS_OBJ(args[1]);
+  int requestedPort = argc;
+
+#ifndef _WIN32
+  signal(SIGPIPE, SIG_IGN);
+#endif
+
+  if (!httpSocketStartup()) {
+    return runtimeErrorValue(vm, "http.serve failed to initialize sockets.");
+  }
+
+  ErkaoSocket server = ERKAO_INVALID_SOCKET;
+  int boundPort = 0;
+  bool inUse = false;
+  if (!httpBindServerSocket(&server, requestedPort, &boundPort, &inUse)) {
+    if (requestedPort > 0 && inUse) {
+      if (!httpBindServerSocket(&server, 0, &boundPort, NULL)) {
+        return runtimeErrorValue(vm, "http.serve failed to bind.");
+      }
+      printf("http.serve port %d in use, selected %d\n", requestedPort, boundPort);
+    } else {
+      return runtimeErrorValue(vm, "http.serve failed to bind.");
+    }
+  }
+
+  printf("http.serve listening on http://127.0.0.1:%d\n", boundPort);
+  fflush(stdout);
+
+  for (;;) {
+    ErkaoSocket client = accept(server, NULL, NULL);
+    if (client == ERKAO_INVALID_SOCKET) {
+      continue;
+    }
+
+    ByteBuffer request;
+    bufferInit(&request);
+    size_t headerEnd = 0;
+    if (!httpReadHeaders(client, &request, &headerEnd)) {
+      bufferFree(&request);
+      erkaoCloseSocket(client);
+      continue;
+    }
+
+    const char* method = NULL;
+    size_t methodLen = 0;
+    const char* path = NULL;
+    size_t pathLen = 0;
+    if (!httpParseRequestLine(request.data, headerEnd, &method, &methodLen, &path, &pathLen)) {
+      httpSendResponse(client, 400, "bad request", strlen("bad request"), NULL);
+      bufferFree(&request);
+      erkaoCloseSocket(client);
+      continue;
+    }
+
+    Value routeValue;
+    bool found = false;
+    char* methodKey = NULL;
+    if (methodLen > 0 && pathLen > 0) {
+      size_t methodKeyLen = methodLen + 1 + pathLen;
+      methodKey = (char*)malloc(methodKeyLen + 1);
+      if (!methodKey) {
+        fprintf(stderr, "Out of memory.\n");
+        exit(1);
+      }
+      memcpy(methodKey, method, methodLen);
+      methodKey[methodLen] = ' ';
+      memcpy(methodKey + methodLen + 1, path, pathLen);
+      methodKey[methodKeyLen] = '\0';
+
+      ObjString* routeKey = copyStringWithLength(vm, methodKey, (int)methodKeyLen);
+      if (mapGet(routes, routeKey, &routeValue)) {
+        found = true;
+      }
+    }
+
+    if (!found) {
+      ObjString* routeKey = copyStringWithLength(vm, path, (int)pathLen);
+      if (mapGet(routes, routeKey, &routeValue)) {
+        found = true;
+      }
+    }
+
+    free(methodKey);
+
+    if (!found) {
+      httpSendResponse(client, 404, "not found", strlen("not found"), NULL);
+      bufferFree(&request);
+      erkaoCloseSocket(client);
+      continue;
+    }
+
+    int status = 200;
+    const char* body = "";
+    size_t bodyLen = 0;
+    ObjMap* headers = NULL;
+    if (!httpResponseFromValue(vm, routeValue, &status, &body, &bodyLen, &headers)) {
+      httpSendResponse(client, 500, "invalid response", strlen("invalid response"), NULL);
+      bufferFree(&request);
+      erkaoCloseSocket(client);
+      continue;
+    }
+
+    httpSendResponse(client, status, body, bodyLen, headers);
+    bufferFree(&request);
+    erkaoCloseSocket(client);
+  }
+
+  return NULL_VAL;
+}
 
 static Value nativePrint(VM* vm, int argc, Value* args) {
   (void)vm;
