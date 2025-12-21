@@ -40,7 +40,11 @@ function Find-Python {
       if ($candidate -eq "py") {
         $args = @("-3")
       }
-      & $cmd.Path @($args + @("-V")) 2>$null | Out-String | Out-Null
+      & $cmd.Path @($args + @("-c", "import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)")) 2>$null | Out-String | Out-Null
+      if ($LASTEXITCODE -ne 0) {
+        continue
+      }
+      & $cmd.Path @($args + @("-c", "import http.server")) 2>$null | Out-String | Out-Null
       if ($LASTEXITCODE -ne 0) {
         continue
       }
@@ -54,8 +58,11 @@ function Find-Python {
 }
 
 function Wait-HttpServer {
-  param([int]$Port)
-  for ($i = 0; $i -lt 30; $i++) {
+  param([int]$Port, [System.Diagnostics.Process]$Process)
+  for ($i = 0; $i -lt 60; $i++) {
+    if ($Process -and $Process.HasExited) {
+      return $false
+    }
     try {
       $client = [System.Net.Sockets.TcpClient]::new()
       $async = $client.BeginConnect("127.0.0.1", $Port, $null, $null)
@@ -117,21 +124,31 @@ if ($httpTestEnabled) {
   $httpServerStdout = New-TemporaryFile
   $httpServerStderr = New-TemporaryFile
   $httpServer = Start-Process -FilePath $pythonInfo.Path -ArgumentList @($pythonInfo.Args + @($serverPath, $httpPort)) -NoNewWindow -PassThru -RedirectStandardOutput $httpServerStdout -RedirectStandardError $httpServerStderr
-  if (-not (Wait-HttpServer -Port ([int]$httpPort))) {
+  if (-not (Wait-HttpServer -Port ([int]$httpPort) -Process $httpServer)) {
     if ($httpServer -and -not $httpServer.HasExited) {
       Stop-Process -Id $httpServer.Id -Force
     }
-    $details = ""
-    if ($httpServerStderr -and (Test-Path -LiteralPath $httpServerStderr)) {
-      $stderr = Get-Content -LiteralPath $httpServerStderr -Raw
-      if ($stderr) {
-        $stderr = $stderr.TrimEnd()
-        if ($stderr) {
-          $details = " `n$stderr"
-        }
+    $details = @()
+    if ($httpServer -and $httpServer.HasExited) {
+      $details += ("exit code {0}" -f $httpServer.ExitCode)
+    }
+    if ($httpServerStdout -and (Test-Path -LiteralPath $httpServerStdout)) {
+      $stdout = (Get-Content -LiteralPath $httpServerStdout -Raw).TrimEnd()
+      if ($stdout) {
+        $details += ("stdout:`n{0}" -f $stdout)
       }
     }
-    Write-Error ("HTTP test server failed to start.{0}" -f $details)
+    if ($httpServerStderr -and (Test-Path -LiteralPath $httpServerStderr)) {
+      $stderr = (Get-Content -LiteralPath $httpServerStderr -Raw).TrimEnd()
+      if ($stderr) {
+        $details += ("stderr:`n{0}" -f $stderr)
+      }
+    }
+    $suffix = ""
+    if ($details.Count -gt 0) {
+      $suffix = " `n" + ($details -join "`n")
+    }
+    Write-Error ("HTTP test server failed to start.{0}" -f $suffix)
     exit 1
   }
 }
@@ -213,11 +230,23 @@ try {
   if ($httpServer -and -not $httpServer.HasExited) {
     Stop-Process -Id $httpServer.Id -Force
   }
+  if ($httpServer) {
+    try {
+      Wait-Process -Id $httpServer.Id -Timeout 5 -ErrorAction SilentlyContinue
+    } catch {
+    }
+  }
   if ($httpServerStdout -and (Test-Path -LiteralPath $httpServerStdout)) {
-    Remove-Item -LiteralPath $httpServerStdout -Force
+    try {
+      Remove-Item -LiteralPath $httpServerStdout -Force -ErrorAction Stop
+    } catch {
+    }
   }
   if ($httpServerStderr -and (Test-Path -LiteralPath $httpServerStderr)) {
-    Remove-Item -LiteralPath $httpServerStderr -Force
+    try {
+      Remove-Item -LiteralPath $httpServerStderr -Force -ErrorAction Stop
+    } catch {
+    }
   }
 }
 
