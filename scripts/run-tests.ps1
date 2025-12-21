@@ -133,15 +133,27 @@ if ($httpTestEnabled) {
       $details += ("exit code {0}" -f $httpServer.ExitCode)
     }
     if ($httpServerStdout -and (Test-Path -LiteralPath $httpServerStdout)) {
-      $stdout = (Get-Content -LiteralPath $httpServerStdout -Raw).TrimEnd()
-      if ($stdout) {
-        $details += ("stdout:`n{0}" -f $stdout)
+      try {
+        $stdout = Get-Content -LiteralPath $httpServerStdout -Raw
+        if ($stdout) {
+          $stdout = $stdout.TrimEnd()
+        }
+        if ($stdout) {
+          $details += ("stdout:`n{0}" -f $stdout)
+        }
+      } catch {
       }
     }
     if ($httpServerStderr -and (Test-Path -LiteralPath $httpServerStderr)) {
-      $stderr = (Get-Content -LiteralPath $httpServerStderr -Raw).TrimEnd()
-      if ($stderr) {
-        $details += ("stderr:`n{0}" -f $stderr)
+      try {
+        $stderr = Get-Content -LiteralPath $httpServerStderr -Raw
+        if ($stderr) {
+          $stderr = $stderr.TrimEnd()
+        }
+        if ($stderr) {
+          $details += ("stderr:`n{0}" -f $stderr)
+        }
+      } catch {
       }
     }
     $suffix = ""
