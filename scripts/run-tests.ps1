@@ -24,6 +24,8 @@ if ($env:ERKAO_HTTP_TEST) {
   }
 }
 $httpServer = $null
+$httpServerStdout = $null
+$httpServerStderr = $null
 
 function Find-Python {
   param([bool]$IsWin)
@@ -70,6 +72,18 @@ function Wait-HttpServer {
   return $false
 }
 
+function Get-FreePort {
+  try {
+    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+    $listener.Start()
+    $port = $listener.LocalEndpoint.Port
+    $listener.Stop()
+    return [int]$port
+  } catch {
+    return $null
+  }
+}
+
 if (-not (Test-Path -LiteralPath $Exe)) {
   Write-Error "Executable not found: $Exe"
   exit 1
@@ -83,7 +97,11 @@ if (-not (Test-Path -LiteralPath $TestsDir)) {
 if ($httpTestEnabled) {
   $httpPort = $env:ERKAO_HTTP_TEST_PORT
   if (-not $httpPort) {
-    $httpPort = "18421"
+    $httpPort = Get-FreePort
+    if (-not $httpPort) {
+      Write-Error "Failed to allocate a port for HTTP tests."
+      exit 1
+    }
     $env:ERKAO_HTTP_TEST_PORT = $httpPort
   }
   $pythonInfo = Find-Python -IsWin:$isWin
@@ -96,12 +114,24 @@ if ($httpTestEnabled) {
     Write-Error "HTTP test server not found: $serverPath"
     exit 1
   }
-  $httpServer = Start-Process -FilePath $pythonInfo.Path -ArgumentList @($pythonInfo.Args + @($serverPath, $httpPort)) -NoNewWindow -PassThru
+  $httpServerStdout = New-TemporaryFile
+  $httpServerStderr = New-TemporaryFile
+  $httpServer = Start-Process -FilePath $pythonInfo.Path -ArgumentList @($pythonInfo.Args + @($serverPath, $httpPort)) -NoNewWindow -PassThru -RedirectStandardOutput $httpServerStdout -RedirectStandardError $httpServerStderr
   if (-not (Wait-HttpServer -Port ([int]$httpPort))) {
     if ($httpServer -and -not $httpServer.HasExited) {
       Stop-Process -Id $httpServer.Id -Force
     }
-    Write-Error "HTTP test server failed to start."
+    $details = ""
+    if ($httpServerStderr -and (Test-Path -LiteralPath $httpServerStderr)) {
+      $stderr = Get-Content -LiteralPath $httpServerStderr -Raw
+      if ($stderr) {
+        $stderr = $stderr.TrimEnd()
+        if ($stderr) {
+          $details = " `n$stderr"
+        }
+      }
+    }
+    Write-Error ("HTTP test server failed to start.{0}" -f $details)
     exit 1
   }
 }
@@ -182,6 +212,12 @@ try {
 } finally {
   if ($httpServer -and -not $httpServer.HasExited) {
     Stop-Process -Id $httpServer.Id -Force
+  }
+  if ($httpServerStdout -and (Test-Path -LiteralPath $httpServerStdout)) {
+    Remove-Item -LiteralPath $httpServerStdout -Force
+  }
+  if ($httpServerStderr -and (Test-Path -LiteralPath $httpServerStderr)) {
+    Remove-Item -LiteralPath $httpServerStderr -Force
   }
 }
 
