@@ -59,8 +59,19 @@ def main():
     if port <= 0:
         raise SystemExit("Missing ERKAO_HTTP_TEST_PORT")
 
-    server = TestServer(("127.0.0.1", port), Handler)
-    server.serve_forever()
+    print(f"DEBUG: Binding to 127.0.0.1:{port}...", file=sys.stderr)
+    sys.stderr.flush()
+    try:
+        server = TestServer(("127.0.0.1", port), Handler)
+        print("DEBUG: Bind successful. Serving forever...", file=sys.stderr)
+        sys.stderr.flush()
+        server.serve_forever()
+    except Exception as e:
+        print(f"DEBUG: Exception in main: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        sys.stderr.flush()
+        raise
 
 
 if __name__ == "__main__":

@@ -66,15 +66,16 @@ function Wait-HttpServer {
     try {
       $client = [System.Net.Sockets.TcpClient]::new()
       $async = $client.BeginConnect("127.0.0.1", $Port, $null, $null)
-      $ready = $async.AsyncWaitHandle.WaitOne(200)
+      $ready = $async.AsyncWaitHandle.WaitOne(1000)
       if ($ready -and $client.Connected) {
         $client.Close()
         return $true
       }
       $client.Close()
     } catch {
+       Write-Host "DEBUG: Connection attempt $i failed: $_"
     }
-    Start-Sleep -Milliseconds 200
+    Start-Sleep -Milliseconds 500
   }
   return $false
 }
