@@ -36,7 +36,7 @@ target_include_directories(erkao PRIVATE
 )
 
 if(WIN32)
-  target_link_libraries(erkao winhttp)
+  target_link_libraries(erkao winhttp ws2_32)
 else()
   find_package(CURL REQUIRED)
   if(TARGET CURL::libcurl)

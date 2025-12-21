@@ -1,6 +1,10 @@
 200
 hello
 200
-echo: ping
+ok
 200
-echo: pong
+{"count":2,"message":"hello"}
+200
+posted
+404
+not found

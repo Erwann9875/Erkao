@@ -1,4 +1,5 @@
 #include "erkao_stdlib.h"
+#include "gc.h"
 #include "interpreter_internal.h"
 #include "plugin.h"
 
@@ -1427,13 +1428,14 @@ static bool httpResponseFromValue(VM* vm, Value value, int* statusOut,
 
 static Value nativeHttpServe(VM* vm, int argc, Value* args) {
   (void)argc;
-  if (!httpPortFromValue(vm, args[0], &argc)) return NULL_VAL;
+  int portValue = 0;
+  if (!httpPortFromValue(vm, args[0], &portValue)) return NULL_VAL;
   if (!isObjType(args[1], OBJ_MAP)) {
     return runtimeErrorValue(vm, "http.serve expects (port, routes).");
   }
 
   ObjMap* routes = (ObjMap*)AS_OBJ(args[1]);
-  int requestedPort = argc;
+  int requestedPort = portValue;
 
 #ifndef _WIN32
   signal(SIGPIPE, SIG_IGN);
@@ -1537,6 +1539,7 @@ static Value nativeHttpServe(VM* vm, int argc, Value* args) {
     httpSendResponse(client, status, body, bodyLen, headers);
     bufferFree(&request);
     erkaoCloseSocket(client);
+    gcMaybe(vm);
   }
 
   return NULL_VAL;
@@ -1991,6 +1994,7 @@ void defineStdlib(VM* vm) {
   moduleAdd(vm, http, "get", nativeHttpGet, 1);
   moduleAdd(vm, http, "post", nativeHttpPost, 2);
   moduleAdd(vm, http, "request", nativeHttpRequest, 3);
+  moduleAdd(vm, http, "serve", nativeHttpServe, 2);
   defineGlobal(vm, "http", OBJ_VAL(http));
 
   ObjInstance* proc = makeModule(vm, "proc");
