@@ -1375,6 +1375,39 @@ static bool httpSendResponse(ErkaoSocket client, int status, const char* body,
   return ok;
 }
 
+static void httpLogRequest(const struct sockaddr_in* addr,
+                           const char* path, size_t pathLen) {
+  char ip[INET_ADDRSTRLEN] = "unknown";
+#ifdef _WIN32
+  if (addr) {
+    InetNtopA(AF_INET, (void*)&addr->sin_addr, ip, (DWORD)sizeof(ip));
+  }
+#else
+  if (addr) {
+    if (!inet_ntop(AF_INET, &addr->sin_addr, ip, sizeof(ip))) {
+      snprintf(ip, sizeof(ip), "unknown");
+    }
+  }
+#endif
+
+  char timeBuf[32] = {0};
+  time_t now = time(NULL);
+  struct tm localTime;
+#ifdef _WIN32
+  localtime_s(&localTime, &now);
+#else
+  localtime_r(&now, &localTime);
+#endif
+  strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", &localTime);
+
+  if (pathLen == 0 || !path) {
+    printf("[%s] [%s] Called /\n", ip, timeBuf);
+  } else {
+    printf("[%s] [%s] Called %.*s\n", ip, timeBuf, (int)pathLen, path);
+  }
+  fflush(stdout);
+}
+
 static bool httpResponseFromValue(VM* vm, Value value, int* statusOut,
                                   const char** bodyOut, size_t* bodyLenOut,
                                   ObjMap** headersOut) {
@@ -1463,7 +1496,13 @@ static Value nativeHttpServe(VM* vm, int argc, Value* args) {
   fflush(stdout);
 
   for (;;) {
-    ErkaoSocket client = accept(server, NULL, NULL);
+    struct sockaddr_in clientAddr;
+#ifdef _WIN32
+    int addrLen = (int)sizeof(clientAddr);
+#else
+    socklen_t addrLen = sizeof(clientAddr);
+#endif
+    ErkaoSocket client = accept(server, (struct sockaddr*)&clientAddr, &addrLen);
     if (client == ERKAO_INVALID_SOCKET) {
       continue;
     }
@@ -1487,6 +1526,8 @@ static Value nativeHttpServe(VM* vm, int argc, Value* args) {
       erkaoCloseSocket(client);
       continue;
     }
+
+    httpLogRequest(&clientAddr, path, pathLen);
 
     Value routeValue;
     bool found = false;

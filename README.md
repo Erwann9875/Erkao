@@ -300,6 +300,7 @@ Build a plugin with include paths to `include` and `src`.
 - `http` responses are maps with `status`, `body`, and `headers`.
 - `http.serve` binds to `127.0.0.1`; pass `0`/`null` for a random port. If a port is in use, it picks a free one and prints the chosen port.
 - `http.serve` routes map keys can be `"/path"` (any method) or `"GET /path"` (specific method); values can be a body string or a map with `status`, `body`, and `headers`.
+- `http.serve` logs requests as `[IP] [YYYY-MM-DD HH:MM:SS] Called /path`.
 - HTTP tests run by default and use the built-in HTTP server; set `ERKAO_HTTP_TEST=0` to skip.
 - `ERKAO_PATH` adds module search paths (separated by `;` on Windows, `:` elsewhere).
 - `ERKAO_PACKAGES` overrides the global packages directory.
