@@ -1,10 +1,21 @@
 param(
-  [string]$Exe = $(if ($IsWindows) { ".\\build\\Debug\\erkao.exe" } else { "./build/erkao" }),
+  [string]$Exe = "",
   [string[]]$Dirs = @("tests", "examples"),
   [switch]$Check
 )
 
 $ErrorActionPreference = "Stop"
+if (-not $Exe) {
+  $isWindows = $env:OS -eq "Windows_NT"
+  if (-not $isWindows -and $PSVersionTable.PSEdition -eq "Desktop") {
+    $isWindows = $true
+  }
+  if ($isWindows) {
+    $Exe = ".\\build\\Debug\\erkao.exe"
+  } else {
+    $Exe = "./build/erkao"
+  }
+}
 
 if (-not (Test-Path -LiteralPath $Exe)) {
   Write-Error "Executable not found: $Exe"

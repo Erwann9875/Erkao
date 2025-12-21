@@ -11,6 +11,7 @@
 #include <windows.h>
 #include <winhttp.h>
 #else
+#include <curl/curl.h>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -966,22 +967,127 @@ static Value nativeHttpRequest(VM* vm, int argc, Value* args) {
                      body, bodyLength, "http.request failed.");
 }
 #else
+static bool httpEnsureCurl(void) {
+  static bool initialized = false;
+  static bool ok = false;
+  if (!initialized) {
+    ok = (curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK);
+    initialized = true;
+  }
+  return ok;
+}
+
+static size_t httpWriteCallback(char* contents, size_t size, size_t nmemb, void* userp) {
+  size_t total = size * nmemb;
+  ByteBuffer* buffer = (ByteBuffer*)userp;
+  bufferAppendN(buffer, contents, total);
+  return total;
+}
+
+static Value httpRequest(VM* vm, const char* method, ObjString* url,
+                         const char* body, size_t bodyLength, const char* message) {
+  if (!httpEnsureCurl()) {
+    return runtimeErrorValue(vm, message);
+  }
+
+  CURL* curl = curl_easy_init();
+  if (!curl) {
+    return runtimeErrorValue(vm, message);
+  }
+
+  ByteBuffer bodyBuffer;
+  ByteBuffer headerBuffer;
+  bufferInit(&bodyBuffer);
+  bufferInit(&headerBuffer);
+
+  curl_easy_setopt(curl, CURLOPT_URL, url->chars);
+  curl_easy_setopt(curl, CURLOPT_USERAGENT, "Erkao/1.0");
+  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, httpWriteCallback);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &bodyBuffer);
+  curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, httpWriteCallback);
+  curl_easy_setopt(curl, CURLOPT_HEADERDATA, &headerBuffer);
+  curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+
+  bool isGet = strcmp(method, "GET") == 0;
+  bool isPost = strcmp(method, "POST") == 0;
+
+  if (isPost) {
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+  } else if (!isGet || bodyLength > 0) {
+    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method);
+  }
+
+  if (bodyLength > 0) {
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)bodyLength);
+  } else if (isPost) {
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)0);
+  }
+
+  CURLcode code = curl_easy_perform(curl);
+  if (code != CURLE_OK) {
+    curl_easy_cleanup(curl);
+    bufferFree(&bodyBuffer);
+    bufferFree(&headerBuffer);
+    return runtimeErrorValue(vm, message);
+  }
+
+  long status = 0;
+  curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+
+  ObjMap* response = newMap(vm);
+  mapSet(response, copyString(vm, "status"), NUMBER_VAL((double)status));
+  mapSet(response, copyString(vm, "body"),
+         OBJ_VAL(copyStringWithLength(vm,
+                                      bodyBuffer.data ? bodyBuffer.data : "",
+                                      (int)bodyBuffer.length)));
+  mapSet(response, copyString(vm, "headers"),
+         OBJ_VAL(copyStringWithLength(vm,
+                                      headerBuffer.data ? headerBuffer.data : "",
+                                      (int)headerBuffer.length)));
+
+  curl_easy_cleanup(curl);
+  bufferFree(&bodyBuffer);
+  bufferFree(&headerBuffer);
+  return OBJ_VAL(response);
+}
+
 static Value nativeHttpGet(VM* vm, int argc, Value* args) {
   (void)argc;
-  (void)args;
-  return runtimeErrorValue(vm, "http.get is only supported on Windows.");
+  if (!isObjType(args[0], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "http.get expects a url string.");
+  }
+  return httpRequest(vm, "GET", (ObjString*)AS_OBJ(args[0]), NULL, 0, "http.get failed.");
 }
 
 static Value nativeHttpPost(VM* vm, int argc, Value* args) {
   (void)argc;
-  (void)args;
-  return runtimeErrorValue(vm, "http.post is only supported on Windows.");
+  if (!isObjType(args[0], OBJ_STRING) || !isObjType(args[1], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "http.post expects (url, body) strings.");
+  }
+  ObjString* body = (ObjString*)AS_OBJ(args[1]);
+  return httpRequest(vm, "POST", (ObjString*)AS_OBJ(args[0]),
+                     body->chars, (size_t)body->length, "http.post failed.");
 }
 
 static Value nativeHttpRequest(VM* vm, int argc, Value* args) {
   (void)argc;
-  (void)args;
-  return runtimeErrorValue(vm, "http.request is only supported on Windows.");
+  if (!isObjType(args[0], OBJ_STRING) || !isObjType(args[1], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "http.request expects (method, url, body).");
+  }
+  const char* body = NULL;
+  size_t bodyLength = 0;
+  if (!IS_NULL(args[2])) {
+    if (!isObjType(args[2], OBJ_STRING)) {
+      return runtimeErrorValue(vm, "http.request expects body to be a string or null.");
+    }
+    ObjString* bodyString = (ObjString*)AS_OBJ(args[2]);
+    body = bodyString->chars;
+    bodyLength = (size_t)bodyString->length;
+  }
+  ObjString* method = (ObjString*)AS_OBJ(args[0]);
+  return httpRequest(vm, method->chars, (ObjString*)AS_OBJ(args[1]),
+                     body, bodyLength, "http.request failed.");
 }
 #endif
 

@@ -295,7 +295,8 @@ Build a plugin with include paths to `include` and `src`.
 - Set `ERKAO_GC_LOG=1` to print GC stats to stderr.
 - REPL history is stored in `~/.erkao_history` or `%USERPROFILE%\.erkao_history` (override with `ERKAO_HISTORY`).
 - Source and AST programs are freed when no live functions reference them.
-- `http` is currently Windows-only (WinHTTP).
+- `http` uses WinHTTP on Windows and libcurl on macOS/Linux (libcurl headers required at build time).
 - `http` responses are maps with `status`, `body`, and `headers`.
+- HTTP tests run by default and require Python; set `ERKAO_HTTP_TEST=0` to skip.
 - `ERKAO_PATH` adds module search paths (separated by `;` on Windows, `:` elsewhere).
 - `ERKAO_PACKAGES` overrides the global packages directory.

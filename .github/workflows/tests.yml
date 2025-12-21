@@ -14,15 +14,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install curl (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
+
+      - name: Install curl (macOS)
+        if: runner.os == 'macOS'
+        run: brew install curl
+
       - name: Configure (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: cmake -S . -B build
 
-      - name: Configure (Unix)
-        if: runner.os != 'Windows'
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
         shell: pwsh
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Configure (macOS)
+        if: runner.os == 'macOS'
+        shell: pwsh
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_PREFIX_PATH=$(brew --prefix curl)
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
@@ -36,4 +54,6 @@ jobs:
 
       - name: Run tests
         shell: pwsh
+        env:
+          ERKAO_HTTP_TEST: "1"
         run: ./scripts/run-tests.ps1

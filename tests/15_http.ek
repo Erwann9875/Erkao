@@ -1,0 +1,14 @@
+let port = env.get("ERKAO_HTTP_TEST_PORT");
+let base = "http://127.0.0.1:" + port;
+
+let getRes = http.get(base + "/hello");
+print(getRes["status"]);
+print(getRes["body"]);
+
+let postRes = http.post(base + "/echo", "ping");
+print(postRes["status"]);
+print(postRes["body"]);
+
+let putRes = http.request("PUT", base + "/echo", "pong");
+print(putRes["status"]);
+print(putRes["body"]);
