@@ -267,6 +267,4 @@ try {
   }
 }
 
-if ($exitCode -ne 0) {
-  exit $exitCode
-}
+exit $exitCode
