@@ -560,7 +560,7 @@ static void map(Compiler* c, bool canAssign) {
   c->chunk->code[sizeOffset + 1] = (uint8_t)(count & 0xff);
 }
 
-ParseRule rules[TOKEN_EOF + 1];
+static ParseRule rules[TOKEN_EOF + 1];
 static bool rulesInitialized = false;
 
 static void initRules(void) {
