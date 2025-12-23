@@ -299,7 +299,10 @@ Build a plugin with include paths to `include` and `src`.
 - `http` uses WinHTTP on Windows and libcurl on macOS/Linux (libcurl headers required at build time).
 - `http` responses are maps with `status`, `body`, and `headers`.
 - `http.serve` binds to `127.0.0.1`; pass `0`/`null` for a random port. If a port is in use, it picks a free one and prints the chosen port.
-- `http.serve` routes map keys can be `"/path"` (any method) or `"GET /path"` (specific method); values can be a body string or a map with `status`, `body`, and `headers`.
+- `http.serve` routes map keys can be `"/path"` (any method) or `"GET /path"` (specific method); values can be:
+  - A body string (returned with status 200)
+  - A map with `status`, `body`, and `headers`
+  - A function that receives a request object `{ method, path, headers, body }` and returns a string or response map
 - `http.serve` logs requests as `[IP] [YYYY-MM-DD HH:MM:SS] Called /path`.
 - HTTP tests run by default and use the built-in HTTP server; set `ERKAO_HTTP_TEST=0` to skip.
 - `ERKAO_PATH` adds module search paths (separated by `;` on Windows, `:` elsewhere).

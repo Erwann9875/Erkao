@@ -254,7 +254,55 @@ static bool callValue(VM* vm, Value callee, int argc) {
   return false;
 }
 
+static bool run(VM* vm);
+
+static bool runWithTarget(VM* vm, int targetFrameCount);
+
+bool vmCallValue(VM* vm, Value callee, int argc, Value* args, Value* out) {
+  int savedFrameCount = vm->frameCount;
+  Value* savedStackTop = vm->stackTop;
+  Env* savedEnv = vm->env;
+  Program* savedProgram = vm->currentProgram;
+
+  *vm->stackTop++ = callee;
+
+  for (int i = 0; i < argc; i++) {
+    *vm->stackTop++ = args[i];
+  }
+
+  if (!callValue(vm, callee, argc)) {
+    vm->stackTop = savedStackTop;
+    vm->env = savedEnv;
+    vm->currentProgram = savedProgram;
+    return false;
+  }
+
+  if (!runWithTarget(vm, savedFrameCount)) {
+    vm->frameCount = savedFrameCount;
+    vm->stackTop = savedStackTop;
+    vm->env = savedEnv;
+    vm->currentProgram = savedProgram;
+    return false;
+  }
+
+  if (vm->stackTop > savedStackTop) {
+    *out = *(vm->stackTop - 1);
+    vm->stackTop = savedStackTop;
+  } else {
+    *out = NULL_VAL;
+  }
+
+  vm->env = savedEnv;
+  vm->currentProgram = savedProgram;
+
+  return true;
+}
+
 static bool run(VM* vm) {
+  return runWithTarget(vm, 0);
+}
+
+static bool runWithTarget(VM* vm, int targetFrameCount) {
   CallFrame* frame = &vm->frames[vm->frameCount - 1];
 
 #define READ_BYTE() (*frame->ip++)
@@ -557,8 +605,8 @@ static bool run(VM* vm) {
         if (!finished->discardResult) {
           push(vm, result);
         }
-        if (vm->frameCount == 0) {
-          if (!finished->discardResult) {
+        if (vm->frameCount <= targetFrameCount) {
+          if (targetFrameCount == 0 && !finished->discardResult) {
             pop(vm);
           }
           return true;

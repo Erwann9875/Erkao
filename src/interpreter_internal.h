@@ -16,5 +16,6 @@ ObjString* asString(Value value);
 char* resolveImportPath(VM* vm, const char* currentPath, const char* importPath);
 bool hasExtension(const char* path);
 ObjFunction* loadModuleFunction(VM* vm, Token keyword, const char* path);
+bool vmCallValue(VM* vm, Value callee, int argc, Value* args, Value* out);
 
 #endif

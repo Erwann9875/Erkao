@@ -1,0 +1,22 @@
+import "./api.ek" as api;
+
+fun mergeRoutes(target, source) {
+  let sourceKeys = keys(source);
+  let i = 0;
+  while (i < len(sourceKeys)) {
+    let key = sourceKeys[i];
+    target[key] = source[key];
+    i = i + 1;
+  }
+  return target;
+}
+
+let routes = {
+  "/": "Welcome to the API",
+  "/health": "ok"
+};
+
+routes = mergeRoutes(routes, api.apiRoutes);
+
+print("Starting server with merged routes");
+http.serve(0, routes);

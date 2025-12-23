@@ -1409,13 +1409,117 @@ static void httpLogRequest(const struct sockaddr_in* addr,
   fflush(stdout);
 }
 
+static long httpGetContentLength(const char* headers, size_t headerEnd) {
+  const char* clHeader = "Content-Length:";
+  size_t clLen = strlen(clHeader);
+  const char* cursor = headers;
+  const char* end = headers + headerEnd;
+  while (cursor < end) {
+    const char* lineEnd = memchr(cursor, '\n', (size_t)(end - cursor));
+    if (!lineEnd) break;
+    size_t lineLen = (size_t)(lineEnd - cursor);
+    if (lineLen > 0 && cursor[lineLen - 1] == '\r') lineLen--;
+    if (lineLen > clLen && httpStringEqualsIgnoreCaseN(cursor, (int)clLen, clHeader)) {
+      const char* value = cursor + clLen;
+      while (*value == ' ' && value < lineEnd) value++;
+      long length = strtol(value, NULL, 10);
+      return length > 0 ? length : 0;
+    }
+    cursor = lineEnd + 1;
+  }
+  return 0;
+}
+
+static ObjMap* httpParseHeaders(VM* vm, const char* data, size_t headerEnd) {
+  ObjMap* headers = newMap(vm);
+  const char* cursor = data;
+  const char* end = data + headerEnd;
+  
+  const char* firstLine = memchr(cursor, '\n', (size_t)(end - cursor));
+  if (firstLine) cursor = firstLine + 1;
+  
+  while (cursor < end) {
+    const char* lineEnd = memchr(cursor, '\n', (size_t)(end - cursor));
+    if (!lineEnd) break;
+    size_t lineLen = (size_t)(lineEnd - cursor);
+    if (lineLen > 0 && cursor[lineLen - 1] == '\r') lineLen--;
+    if (lineLen == 0) break;
+    
+    const char* colon = memchr(cursor, ':', lineLen);
+    if (colon && colon > cursor) {
+      size_t keyLen = (size_t)(colon - cursor);
+      const char* value = colon + 1;
+      while (*value == ' ' && value < cursor + lineLen) value++;
+      size_t valueLen = lineLen - (size_t)(value - cursor);
+      
+      ObjString* key = copyStringWithLength(vm, cursor, (int)keyLen);
+      ObjString* val = copyStringWithLength(vm, value, (int)valueLen);
+      mapSet(headers, key, OBJ_VAL(val));
+    }
+    cursor = lineEnd + 1;
+  }
+  return headers;
+}
+
+static bool httpReadBody(ErkaoSocket client, ByteBuffer* buffer, size_t headerEnd, long contentLength) {
+  if (contentLength <= 0) return true;
+
+  size_t alreadyRead = buffer->length > headerEnd ? buffer->length - headerEnd : 0;
+  size_t remaining = (size_t)contentLength > alreadyRead ? (size_t)contentLength - alreadyRead : 0;
+  
+  char chunk[1024];
+  while (remaining > 0 && buffer->length < HTTP_MAX_REQUEST_BYTES) {
+    size_t toRead = remaining < sizeof(chunk) ? remaining : sizeof(chunk);
+    int received = recv(client, chunk, (int)toRead, 0);
+    if (received <= 0) return false;
+    bufferAppendN(buffer, chunk, (size_t)received);
+    remaining -= (size_t)received;
+  }
+  return true;
+}
+
+static ObjMap* httpCreateRequestObject(VM* vm, const char* method, size_t methodLen,
+                                        const char* path, size_t pathLen,
+                                        ObjMap* headers, const char* body, size_t bodyLen) {
+  ObjMap* request = newMap(vm);
+  
+  ObjString* methodKey = copyString(vm, "method");
+  ObjString* methodVal = copyStringWithLength(vm, method, (int)methodLen);
+  mapSet(request, methodKey, OBJ_VAL(methodVal));
+  
+  ObjString* pathKey = copyString(vm, "path");
+  ObjString* pathVal = copyStringWithLength(vm, path, (int)pathLen);
+  mapSet(request, pathKey, OBJ_VAL(pathVal));
+  
+  ObjString* headersKey = copyString(vm, "headers");
+  mapSet(request, headersKey, OBJ_VAL(headers));
+  
+  ObjString* bodyKey = copyString(vm, "body");
+  ObjString* bodyVal = copyStringWithLength(vm, body ? body : "", body ? (int)bodyLen : 0);
+  mapSet(request, bodyKey, OBJ_VAL(bodyVal));
+  
+  return request;
+}
+
 static bool httpResponseFromValue(VM* vm, Value value, int* statusOut,
                                   const char** bodyOut, size_t* bodyLenOut,
-                                  ObjMap** headersOut) {
+                                  ObjMap** headersOut, ObjMap* requestObj) {
   *statusOut = 200;
   *bodyOut = "";
   *bodyLenOut = 0;
   *headersOut = NULL;
+
+  if (isObjType(value, OBJ_FUNCTION) || isObjType(value, OBJ_BOUND_METHOD)) {
+    if (!requestObj) {
+      return false;
+    }
+    Value request = OBJ_VAL(requestObj);
+    Value result;
+    if (!vmCallValue(vm, value, 1, &request, &result)) {
+      return false;
+    }
+    return httpResponseFromValue(vm, result, statusOut, bodyOut, bodyLenOut, headersOut, NULL);
+  }
 
   if (isObjType(value, OBJ_STRING)) {
     ObjString* body = (ObjString*)AS_OBJ(value);
@@ -1573,11 +1677,32 @@ static Value nativeHttpServe(VM* vm, int argc, Value* args) {
       continue;
     }
 
+    ObjMap* requestObj = NULL;
+    bool isHandler = isObjType(routeValue, OBJ_FUNCTION) || isObjType(routeValue, OBJ_BOUND_METHOD);
+    if (isHandler) {
+      long contentLength = httpGetContentLength(request.data, headerEnd);
+      if (contentLength > 0) {
+        httpReadBody(client, &request, headerEnd, contentLength);
+      }
+      
+      ObjMap* requestHeaders = httpParseHeaders(vm, request.data, headerEnd);
+      
+      const char* requestBody = NULL;
+      size_t requestBodyLen = 0;
+      if (request.length > headerEnd) {
+        requestBody = request.data + headerEnd;
+        requestBodyLen = request.length - headerEnd;
+      }
+      
+      requestObj = httpCreateRequestObject(vm, method, methodLen, path, pathLen,
+                                           requestHeaders, requestBody, requestBodyLen);
+    }
+
     int status = 200;
     const char* body = "";
     size_t bodyLen = 0;
     ObjMap* headers = NULL;
-    if (!httpResponseFromValue(vm, routeValue, &status, &body, &bodyLen, &headers)) {
+    if (!httpResponseFromValue(vm, routeValue, &status, &body, &bodyLen, &headers, requestObj)) {
       httpSendResponse(client, 500, "invalid response", strlen("invalid response"), NULL);
       bufferFree(&request);
       erkaoCloseSocket(client);
