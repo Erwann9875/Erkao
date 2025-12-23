@@ -1,0 +1,92 @@
+print("gc_stress");
+for (let i = 0; i < 1000; i = i + 1) {
+  let arr = [1, 2, 3, i];
+  let map = { key: i };
+}
+print("stress", "ok");
+
+print("gc_nested");
+let children = [];
+for (let i = 0; i < 100; i = i + 1) {
+  children[i] = { index: i };
+}
+print("nested", len(children));
+
+print("gc_closures");
+fun makeCounter(start) {
+  let count = start;
+  fun increment() {
+    count = count + 1;
+    return count;
+  }
+  return increment;
+}
+let counter = makeCounter(10);
+print("closures", counter());
+
+print("gc_maps");
+let a = { name: "a" };
+let b = { name: "b" };
+a["ref"] = b;
+b["ref"] = a;
+print("maps", a["ref"]["name"]);
+
+print("gc_large_array");
+fun makeLargeArray() {
+  let arr = [];
+  for (let i = 0; i < 500; i = i + 1) {
+    arr[i] = { index: i };
+  }
+  return len(arr);
+}
+print("large", makeLargeArray());
+
+print("gc_strings");
+let result = "";
+for (let i = 0; i < 100; i = i + 1) {
+  result = result + "x";
+}
+print("strings", len(result));
+
+print("gc_classes");
+class Node {
+  fun init(value) {
+    this.value = value;
+    this.next = null;
+  }
+}
+let head = Node("head");
+let current = head;
+for (let i = 0; i < 100; i = i + 1) {
+  current.next = Node(i);
+  current = current.next;
+}
+print("classes", head.value);
+
+print("gc_recursion");
+fun recurse(n) {
+  if (n <= 0) return 0;
+  let temp = [n, n * 2, n * 3];
+  return n + recurse(n - 1);
+}
+print("recursion", recurse(50));
+
+print("gc_array");
+let bigArr = [];
+for (let i = 0; i < 200; i = i + 1) {
+  bigArr[i] = i * 2;
+}
+print("array", len(bigArr));
+
+print("gc_interleaved");
+let sum = 0;
+for (let i = 0; i < 100; i = i + 1) {
+  let arr = [];
+  for (let j = 0; j < 10; j = j + 1) {
+    arr[j] = i * 10 + j;
+  }
+  sum = sum + arr[5];
+}
+print("interleaved", sum);
+
+print("gc_complete");

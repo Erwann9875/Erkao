@@ -1,0 +1,21 @@
+gc_stress
+stress ok
+gc_nested
+nested 100
+gc_closures
+closures 11
+gc_maps
+maps b
+gc_large_array
+large 500
+gc_strings
+strings 100
+gc_classes
+classes head
+gc_recursion
+recursion 1275
+gc_array
+array 200
+gc_interleaved
+interleaved 50000
+gc_complete
