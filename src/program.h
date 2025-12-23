@@ -1,20 +1,20 @@
 #ifndef ERKAO_PROGRAM_H
 #define ERKAO_PROGRAM_H
 
-#include "ast.h"
+#include "value.h"
 
 typedef struct VM VM;
 
 typedef struct Program {
   char* source;
   char* path;
-  StmtArray statements;
+  ObjFunction* function;
   int refCount;
   int running;
   struct Program* next;
 } Program;
 
-Program* programCreate(VM* vm, char* source, const char* path, StmtArray statements);
+Program* programCreate(VM* vm, char* source, const char* path, ObjFunction* function);
 void programRetain(Program* program);
 void programRelease(VM* vm, Program* program);
 void programRunBegin(Program* program);

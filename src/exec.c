@@ -1,5 +1,5 @@
 #include "interpreter_internal.h"
-#include "compiler.h"
+#include "singlepass.h"
 #include "chunk.h"
 #include "disasm.h"
 #include "gc.h"
@@ -756,7 +756,7 @@ bool interpret(VM* vm, Program* program) {
   vm->currentProgram = program;
   programRunBegin(program);
 
-  ObjFunction* function = compileProgram(vm, program);
+  ObjFunction* function = program->function;
   if (!function) {
     programRunEnd(vm, program);
     vm->currentProgram = previousProgram;

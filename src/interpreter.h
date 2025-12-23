@@ -1,7 +1,6 @@
 #ifndef ERKAO_INTERPRETER_H
 #define ERKAO_INTERPRETER_H
 
-#include "ast.h"
 #include "value.h"
 
 typedef struct Program Program;

@@ -1,6 +1,5 @@
 #include "interpreter_internal.h"
-#include "compiler.h"
-#include "parser.h"
+#include "singlepass.h"
 #include "program.h"
 
 #include <ctype.h>
@@ -15,13 +14,6 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
-
-static void freeStatements(StmtArray* statements) {
-  for (int i = 0; i < statements->count; i++) {
-    freeStmt(statements->items[i]);
-  }
-  freeStmtArray(statements);
-}
 
 static char* readFilePath(const char* path) {
   FILE* file = fopen(path, "rb");
@@ -554,17 +546,17 @@ ObjFunction* loadModuleFunction(VM* vm, Token keyword, const char* path) {
     return NULL;
   }
 
-  StmtArray statements;
-  bool parseOk = parseTokens(&tokens, source, path, &statements);
+  bool compileError = false;
+  ObjFunction* function = compile(vm, &tokens, source, path, &compileError);
   freeTokenArray(&tokens);
-  if (!parseOk) {
-    freeStatements(&statements);
+  
+  if (compileError || !function) {
     free(source);
     return NULL;
   }
 
-  Program* program = programCreate(vm, source, path, statements);
-  ObjFunction* function = compileProgram(vm, program);
-  if (!function) return NULL;
+  Program* program = programCreate(vm, source, path, function);
+  function->program = program;
+  
   return function;
 }

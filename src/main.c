@@ -1,5 +1,5 @@
 #include "lexer.h"
-#include "parser.h"
+#include "singlepass.h"
 #include "interpreter.h"
 #include "program.h"
 #include "tooling.h"
@@ -358,13 +358,6 @@ static char* readLineWithHistory(const char* prompt, History* history) {
 }
 #endif
 
-static void freeStatements(StmtArray* statements) {
-  for (int i = 0; i < statements->count; i++) {
-    freeStmt(statements->items[i]);
-  }
-  freeStmtArray(statements);
-}
-
 static bool runSource(VM* vm, const char* path, char* source) {
   const char* displayPath = path ? path : "<repl>";
   bool lexError = false;
@@ -375,16 +368,16 @@ static bool runSource(VM* vm, const char* path, char* source) {
     return false;
   }
 
-  StmtArray statements;
-  bool parseOk = parseTokens(&tokens, source, displayPath, &statements);
+  bool compileError = false;
+  ObjFunction* function = compile(vm, &tokens, source, displayPath, &compileError);
   freeTokenArray(&tokens);
-  if (!parseOk) {
-    freeStatements(&statements);
+  if (compileError || !function) {
     free(source);
     return false;
   }
 
-  Program* program = programCreate(vm, source, path, statements);
+  Program* program = programCreate(vm, source, path, function);
+  function->program = program;
   return interpret(vm, program);
 }
 

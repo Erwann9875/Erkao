@@ -1,6 +1,10 @@
 #include "program.h"
 #include "interpreter.h"
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
 static void programUnlink(VM* vm, Program* program) {
   Program* previous = NULL;
   Program* current = vm->programs;
@@ -22,16 +26,12 @@ static void programUnlink(VM* vm, Program* program) {
 static void programFree(VM* vm, Program* program) {
   if (!program) return;
   programUnlink(vm, program);
-  for (int i = 0; i < program->statements.count; i++) {
-    freeStmt(program->statements.items[i]);
-  }
-  freeStmtArray(&program->statements);
   free(program->source);
   free(program->path);
   free(program);
 }
 
-Program* programCreate(VM* vm, char* source, const char* path, StmtArray statements) {
+Program* programCreate(VM* vm, char* source, const char* path, ObjFunction* function) {
   Program* program = (Program*)malloc(sizeof(Program));
   if (!program) {
     fprintf(stderr, "Out of memory.\n");
@@ -49,7 +49,7 @@ Program* programCreate(VM* vm, char* source, const char* path, StmtArray stateme
   } else {
     program->path = NULL;
   }
-  program->statements = statements;
+  program->function = function;
   program->refCount = 0;
   program->running = 0;
   program->next = vm->programs;
@@ -91,10 +91,6 @@ void programFreeAll(VM* vm) {
   Program* current = vm->programs;
   while (current) {
     Program* next = current->next;
-    for (int i = 0; i < current->statements.count; i++) {
-      freeStmt(current->statements.items[i]);
-    }
-    freeStmtArray(&current->statements);
     free(current->source);
     free(current->path);
     free(current);
