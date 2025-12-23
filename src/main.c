@@ -378,6 +378,7 @@ static bool runSource(VM* vm, const char* path, char* source) {
 
   Program* program = programCreate(vm, source, path, function);
   function->program = program;
+  programRetain(program);
   return interpret(vm, program);
 }
 
