@@ -3,6 +3,10 @@
 #include "interpreter_internal.h"
 #include "plugin.h"
 
+#if ERKAO_HAS_GRAPHICS
+#include "graphics.h"
+#endif
+
 #include <float.h>
 #include <math.h>
 #include <stdint.h>
@@ -2215,4 +2219,8 @@ void defineStdlib(VM* vm) {
   ObjInstance* plugin = makeModule(vm, "plugin");
   moduleAdd(vm, plugin, "load", nativePluginLoad, 1);
   defineGlobal(vm, "plugin", OBJ_VAL(plugin));
+
+#if ERKAO_HAS_GRAPHICS
+  defineGraphicsModule(vm, makeModule, moduleAdd, defineGlobal);
+#endif
 }

@@ -1,0 +1,55 @@
+gfx.init(800, 600, "Erkao Graphics Demo");
+gfx.fps(60);
+
+let playerX = 400;
+let playerY = 300;
+let speed = 200;
+let radius = 25;
+
+while (gfx.poll()) {
+  let dt = 0.016;
+  
+  if (gfx.key("left") or gfx.key("a")) {
+    playerX = playerX - speed * dt;
+  }
+  if (gfx.key("right") or gfx.key("d")) {
+    playerX = playerX + speed * dt;
+  }
+  if (gfx.key("up") or gfx.key("w")) {
+    playerY = playerY - speed * dt;
+  }
+  if (gfx.key("down") or gfx.key("s")) {
+    playerY = playerY + speed * dt;
+  }
+
+  if (playerX < radius) { playerX = radius; }
+  if (playerX > 800 - radius) { playerX = 800 - radius; }
+  if (playerY < radius) { playerY = radius; }
+  if (playerY > 600 - radius) { playerY = 600 - radius; }
+
+  gfx.clear("darkblue");
+
+  gfx.rectLine("red", 100, 100, 40, 40);
+  gfx.rectLine("blue", 200, 150, 30, 30);
+  gfx.rectLine("green", 350, 80, 50, 50);
+  gfx.rectLine("yellow", 500, 200, 35, 35);
+  gfx.rectLine("purple", 650, 120, 45, 45);
+  gfx.rectLine("orange", 150, 400, 40, 40);
+  gfx.rectLine("cyan", 400, 450, 55, 55);
+  gfx.rectLine("pink", 600, 500, 30, 30);
+
+  gfx.circle("cyan", playerX, playerY, radius);
+  gfx.circleLine("white", playerX, playerY, radius);
+
+  gfx.text("Erkao Graphics Demo", 10, 10, "white", 24);
+  gfx.text("Use arrow keys or WASD to move", 10, 40, "lightgray", 16);
+  gfx.text("Press ESC to quit", 10, 60, "lightgray", 16);
+
+  let mouse = gfx.mouse();
+  gfx.circleLine("yellow", mouse["x"], mouse["y"], 10);
+
+  gfx.present();
+}
+
+gfx.quit();
+print("Thanks for playing!");
