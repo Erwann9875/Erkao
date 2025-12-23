@@ -1341,7 +1341,7 @@ static bool httpSendAll(ErkaoSocket client, const char* data, size_t length) {
 }
 
 static bool httpSendResponse(ErkaoSocket client, int status, const char* body,
-                             size_t bodyLength, ObjMap* headers) {
+                             size_t bodyLength, ObjMap* headers, ObjMap* corsConfig) {
   ByteBuffer response;
   bufferInit(&response);
 
@@ -1356,6 +1356,29 @@ static bool httpSendResponse(ErkaoSocket client, int status, const char* body,
   httpAppendHeadersFromMap(&response, headers, &hasContentType);
   if (!hasContentType) {
     httpAppendHeader(&response, "Content-Type", "text/plain; charset=utf-8");
+  }
+
+  if (corsConfig) {
+    Value originVal;
+    ObjString* originKey = copyString(corsConfig->vm, "origin");
+    if (mapGet(corsConfig, originKey, &originVal) && isObjType(originVal, OBJ_STRING)) {
+      ObjString* origin = (ObjString*)AS_OBJ(originVal);
+      httpAppendHeader(&response, "Access-Control-Allow-Origin", origin->chars);
+    }
+    
+    Value methodsVal;
+    ObjString* methodsKey = copyString(corsConfig->vm, "methods");
+    if (mapGet(corsConfig, methodsKey, &methodsVal) && isObjType(methodsVal, OBJ_STRING)) {
+      ObjString* methods = (ObjString*)AS_OBJ(methodsVal);
+      httpAppendHeader(&response, "Access-Control-Allow-Methods", methods->chars);
+    }
+    
+    Value headersVal;
+    ObjString* headersKey = copyString(corsConfig->vm, "headers");
+    if (mapGet(corsConfig, headersKey, &headersVal) && isObjType(headersVal, OBJ_STRING)) {
+      ObjString* hdrs = (ObjString*)AS_OBJ(headersVal);
+      httpAppendHeader(&response, "Access-Control-Allow-Headers", hdrs->chars);
+    }
   }
 
   char lengthValue[64];
@@ -1565,14 +1588,17 @@ static bool httpResponseFromValue(VM* vm, Value value, int* statusOut,
 }
 
 static Value nativeHttpServe(VM* vm, int argc, Value* args) {
-  (void)argc;
   int portValue = 0;
   if (!httpPortFromValue(vm, args[0], &portValue)) return NULL_VAL;
   if (!isObjType(args[1], OBJ_MAP)) {
-    return runtimeErrorValue(vm, "http.serve expects (port, routes).");
+    return runtimeErrorValue(vm, "http.serve expects (port, routes[, cors]).");
   }
 
   ObjMap* routes = (ObjMap*)AS_OBJ(args[1]);
+  ObjMap* corsConfig = NULL;
+  if (argc >= 3 && isObjType(args[2], OBJ_MAP)) {
+    corsConfig = (ObjMap*)AS_OBJ(args[2]);
+  }
   int requestedPort = portValue;
 
 #ifndef _WIN32
@@ -1632,7 +1658,7 @@ static Value nativeHttpServe(VM* vm, int argc, Value* args) {
     const char* path = NULL;
     size_t pathLen = 0;
     if (!httpParseRequestLine(request.data, headerEnd, &method, &methodLen, &path, &pathLen)) {
-      httpSendResponse(client, 400, "bad request", strlen("bad request"), NULL);
+      httpSendResponse(client, 400, "bad request", strlen("bad request"), NULL, corsConfig);
       bufferFree(&request);
       erkaoCloseSocket(client);
       continue;
@@ -1670,8 +1696,15 @@ static Value nativeHttpServe(VM* vm, int argc, Value* args) {
 
     free(methodKey);
 
+    if (methodLen == 7 && memcmp(method, "OPTIONS", 7) == 0) {
+      httpSendResponse(client, 204, "", 0, NULL, corsConfig);
+      bufferFree(&request);
+      erkaoCloseSocket(client);
+      continue;
+    }
+
     if (!found) {
-      httpSendResponse(client, 404, "not found", strlen("not found"), NULL);
+      httpSendResponse(client, 404, "not found", strlen("not found"), NULL, corsConfig);
       bufferFree(&request);
       erkaoCloseSocket(client);
       continue;
@@ -1703,13 +1736,13 @@ static Value nativeHttpServe(VM* vm, int argc, Value* args) {
     size_t bodyLen = 0;
     ObjMap* headers = NULL;
     if (!httpResponseFromValue(vm, routeValue, &status, &body, &bodyLen, &headers, requestObj)) {
-      httpSendResponse(client, 500, "invalid response", strlen("invalid response"), NULL);
+      httpSendResponse(client, 500, "invalid response", strlen("invalid response"), NULL, corsConfig);
       bufferFree(&request);
       erkaoCloseSocket(client);
       continue;
     }
 
-    httpSendResponse(client, status, body, bodyLen, headers);
+    httpSendResponse(client, status, body, bodyLen, headers, corsConfig);
     bufferFree(&request);
     erkaoCloseSocket(client);
     gcMaybe(vm);
@@ -2167,7 +2200,7 @@ void defineStdlib(VM* vm) {
   moduleAdd(vm, http, "get", nativeHttpGet, 1);
   moduleAdd(vm, http, "post", nativeHttpPost, 2);
   moduleAdd(vm, http, "request", nativeHttpRequest, 3);
-  moduleAdd(vm, http, "serve", nativeHttpServe, 2);
+  moduleAdd(vm, http, "serve", nativeHttpServe, -1);
   defineGlobal(vm, "http", OBJ_VAL(http));
 
   ObjInstance* proc = makeModule(vm, "proc");

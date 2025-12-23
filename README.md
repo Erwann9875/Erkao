@@ -303,6 +303,7 @@ Build a plugin with include paths to `include` and `src`.
   - A body string (returned with status 200)
   - A map with `status`, `body`, and `headers`
   - A function that receives a request object `{ method, path, headers, body }` and returns a string or response map
+- `http.serve(port, routes, cors)` accepts an optional third parameter for CORS config: `{ origin: "*", methods: "GET, POST", headers: "Content-Type" }`
 - `http.serve` logs requests as `[IP] [YYYY-MM-DD HH:MM:SS] Called /path`.
 - HTTP tests run by default and use the built-in HTTP server; set `ERKAO_HTTP_TEST=0` to skip.
 - `ERKAO_PATH` adds module search paths (separated by `;` on Windows, `:` elsewhere).
