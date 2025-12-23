@@ -1,6 +1,7 @@
 #include "singlepass.h"
 #include "chunk.h"
 #include "common.h"
+#include "interpreter.h"
 
 #include <stdio.h>
 #include <stdlib.h>
