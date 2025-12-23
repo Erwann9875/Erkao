@@ -80,6 +80,7 @@ typedef struct VM {
   int modulePathCapacity;
   char* projectRoot;
   char* globalPackagesDir;
+  void* compiler;
 } VM;
 
 void vmInit(VM* vm);

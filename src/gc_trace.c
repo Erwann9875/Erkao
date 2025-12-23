@@ -1,5 +1,6 @@
 #include "gc_internal.h"
 #include "chunk.h"
+#include "singlepass.h"
 
 static void markValue(VM* vm, Value value);
 static void markObject(VM* vm, Obj* object);
@@ -248,6 +249,14 @@ void markRoots(VM* vm) {
     }
     if (vm->frames[i].moduleAlias) {
       markObject(vm, (Obj*)vm->frames[i].moduleAlias);
+    }
+  }
+
+  if (vm->compiler) {
+    Compiler* c = (Compiler*)vm->compiler;
+    while (c) {
+      markChunk(vm, c->chunk);
+      c = c->enclosing;
     }
   }
 }
