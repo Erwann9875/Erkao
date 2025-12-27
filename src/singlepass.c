@@ -6,6 +6,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <string.h>
 
 typedef enum {
@@ -664,6 +665,116 @@ static bool keywordSuggestion(Token found, ErkaoTokenType expected,
   return true;
 }
 
+static void synchronize(Compiler* c);
+
+static void appendMessage(char* buffer, size_t size, const char* format, ...) {
+  size_t length = strlen(buffer);
+  if (length >= size) return;
+  va_list args;
+  va_start(args, format);
+  vsnprintf(buffer + length, size - length, format, args);
+  va_end(args);
+}
+
+static void noteAt(Compiler* c, Token token, const char* message) {
+  if (!message || message[0] == '\0') return;
+  if (token.line <= 0 || token.column <= 0) return;
+  const char* path = c->path ? c->path : "<repl>";
+  fprintf(stderr, "%s:%d:%d: Note: %s\n", path, token.line, token.column, message);
+  printErrorContext(c->source, token.line, token.column,
+                    token.length > 0 ? token.length : 1);
+}
+
+static void synchronizeExpression(Compiler* c) {
+  while (!isAtEnd(c)) {
+    switch (peek(c).type) {
+      case TOKEN_COMMA:
+      case TOKEN_SEMICOLON:
+      case TOKEN_RIGHT_PAREN:
+      case TOKEN_RIGHT_BRACKET:
+      case TOKEN_RIGHT_BRACE:
+      case TOKEN_INTERP_END:
+        return;
+      default:
+        break;
+    }
+    advance(c);
+  }
+}
+
+static void buildConsumeErrorMessage(ErkaoTokenType expected, Token found,
+                                     const char* message,
+                                     char* out, size_t outSize) {
+  const char* foundDesc = tokenDescription(found.type);
+  if (message && message[0] != '\0') {
+    snprintf(out, outSize, "%s Found %s.", message, foundDesc);
+  } else {
+    const char* expectedDesc = tokenDescription(expected);
+    snprintf(out, outSize, "Expected %s. Found %s.", expectedDesc, foundDesc);
+  }
+
+  if ((expected == TOKEN_RIGHT_PAREN || expected == TOKEN_RIGHT_BRACKET ||
+       expected == TOKEN_RIGHT_BRACE) &&
+      (found.type == TOKEN_RIGHT_PAREN || found.type == TOKEN_RIGHT_BRACKET ||
+       found.type == TOKEN_RIGHT_BRACE) &&
+      expected != found.type) {
+    appendMessage(out, outSize, " Mismatched closing %s.", foundDesc);
+  }
+
+  if (expected == TOKEN_IDENTIFIER) {
+    const char* lexeme = keywordLexeme(found.type);
+    if (lexeme) {
+      appendMessage(out, outSize, " '%s' is a keyword.", lexeme);
+    }
+  }
+
+  char suggestion[32];
+  if (keywordSuggestion(found, expected, suggestion, sizeof(suggestion))) {
+    appendMessage(out, outSize, " Did you mean '%s'?", suggestion);
+  }
+}
+
+static void emitConsumeError(Compiler* c, ErkaoTokenType expected, Token found,
+                             const char* message) {
+  char full[256];
+  buildConsumeErrorMessage(expected, found, message, full, sizeof(full));
+  if (expected == TOKEN_SEMICOLON && c->current > 0) {
+    Token token = previous(c);
+    if (token.length > 0) token.column += token.length;
+    errorAt(c, token, full);
+  } else {
+    errorAtCurrent(c, full);
+  }
+}
+
+static void recoverAfterConsumeError(Compiler* c, ErkaoTokenType expected) {
+  if (expected == TOKEN_SEMICOLON) {
+    synchronize(c);
+    return;
+  }
+  if (expected == TOKEN_RIGHT_PAREN || expected == TOKEN_RIGHT_BRACKET ||
+      expected == TOKEN_RIGHT_BRACE || expected == TOKEN_INTERP_END) {
+    synchronizeExpression(c);
+    c->panicMode = false;
+  }
+}
+
+static bool openMatchesClose(ErkaoTokenType open, ErkaoTokenType close) {
+  if (open == TOKEN_LEFT_PAREN && close == TOKEN_RIGHT_PAREN) return true;
+  if (open == TOKEN_LEFT_BRACKET && close == TOKEN_RIGHT_BRACKET) return true;
+  if (open == TOKEN_LEFT_BRACE && close == TOKEN_RIGHT_BRACE) return true;
+  if (open == TOKEN_INTERP_START && close == TOKEN_INTERP_END) return true;
+  return false;
+}
+
+static void noteUnclosedDelimiter(Compiler* c, Token open, ErkaoTokenType close) {
+  if (!openMatchesClose(open.type, close)) return;
+  const char* desc = tokenDescription(open.type);
+  char message[96];
+  snprintf(message, sizeof(message), "Opening %s is here.", desc);
+  noteAt(c, open, message);
+}
+
 static void errorAt(Compiler* c, Token token, const char* message) {
   if (c->panicMode) return;
   c->panicMode = true;
@@ -687,28 +798,21 @@ static void errorAtCurrent(Compiler* c, const char* message) {
 static Token consume(Compiler* c, ErkaoTokenType type, const char* message) {
   if (check(c, type)) return advance(c);
   Token found = peek(c);
-  const char* foundDesc = tokenDescription(found.type);
-  char full[256];
-  if (message && message[0] != '\0') {
-    snprintf(full, sizeof(full), "%s Found %s.", message, foundDesc);
-  } else {
-    const char* expectedDesc = tokenDescription(type);
-    snprintf(full, sizeof(full), "Expected %s. Found %s.", expectedDesc, foundDesc);
-  }
-  char suggestion[32];
-  if (keywordSuggestion(found, type, suggestion, sizeof(suggestion))) {
-    size_t length = strlen(full);
-    snprintf(full + length, sizeof(full) - length,
-             " Did you mean '%s'?", suggestion);
-  }
-  if (type == TOKEN_SEMICOLON && c->current > 0) {
-    Token token = previous(c);
-    if (token.length > 0) token.column += token.length;
-    errorAt(c, token, full);
-  } else {
-    errorAtCurrent(c, full);
-  }
-  return peek(c);
+  if (c->panicMode) return found;
+  emitConsumeError(c, type, found, message);
+  recoverAfterConsumeError(c, type);
+  return found;
+}
+
+static Token consumeClosing(Compiler* c, ErkaoTokenType type, const char* message,
+                            Token open) {
+  if (check(c, type)) return advance(c);
+  Token found = peek(c);
+  if (c->panicMode) return found;
+  emitConsumeError(c, type, found, message);
+  noteUnclosedDelimiter(c, open, type);
+  recoverAfterConsumeError(c, type);
+  return found;
 }
 
 static void synchronize(Compiler* c) {
@@ -946,7 +1050,7 @@ static char* parseStringSegment(Token token) {
 static void expression(Compiler* c);
 static void declaration(Compiler* c);
 static void statement(Compiler* c);
-static void block(Compiler* c);
+static void block(Compiler* c, Token open);
 
 typedef enum {
   PREC_NONE,
@@ -1005,8 +1109,9 @@ static void stringSegment(Compiler* c, bool canAssign) {
   emitConstant(c, OBJ_VAL(str), segment);
 
   while (match(c, TOKEN_INTERP_START)) {
+    Token interpStart = previous(c);
     expression(c);
-    consume(c, TOKEN_INTERP_END, "Expect '}' after interpolation.");
+    consumeClosing(c, TOKEN_INTERP_END, "Expect '}' after interpolation.", interpStart);
     emitByte(c, OP_STRINGIFY, segment);
     emitByte(c, OP_ADD, segment);
 
@@ -1052,8 +1157,9 @@ static void thisExpr(Compiler* c, bool canAssign) {
 
 static void grouping(Compiler* c, bool canAssign) {
   (void)canAssign;
+  Token open = previous(c);
   expression(c);
-  consume(c, TOKEN_RIGHT_PAREN, "Expect ')' after expression.");
+  consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after expression.", open);
 }
 
 static void unary(Compiler* c, bool canAssign) {
@@ -1125,7 +1231,7 @@ static void call(Compiler* c, bool canAssign) {
       argc++;
     } while (match(c, TOKEN_COMMA));
   }
-  consume(c, TOKEN_RIGHT_PAREN, "Expect ')' after arguments.");
+  consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after arguments.", paren);
   emitByte(c, optionalCall ? OP_CALL_OPTIONAL : OP_CALL, paren);
   emitByte(c, (uint8_t)argc, paren);
 }
@@ -1150,7 +1256,7 @@ static void dot(Compiler* c, bool canAssign) {
         argc++;
       } while (match(c, TOKEN_COMMA));
     }
-    consume(c, TOKEN_RIGHT_PAREN, "Expect ')' after arguments.");
+    consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after arguments.", paren);
     emitByte(c, OP_INVOKE, paren);
     emitShort(c, (uint16_t)nameIdx, name);
     emitByte(c, (uint8_t)argc, paren);
@@ -1173,7 +1279,7 @@ static void index_(Compiler* c, bool canAssign) {
   c->pendingOptionalCall = false;
   Token bracket = previous(c);
   expression(c);
-  consume(c, TOKEN_RIGHT_BRACKET, "Expect ']' after index.");
+  consumeClosing(c, TOKEN_RIGHT_BRACKET, "Expect ']' after index.", bracket);
   if (canAssign && match(c, TOKEN_EQUAL)) {
     expression(c);
     emitByte(c, OP_SET_INDEX, bracket);
@@ -1184,6 +1290,7 @@ static void index_(Compiler* c, bool canAssign) {
 
 static void array(Compiler* c, bool canAssign) {
   (void)canAssign;
+  Token open = previous(c);
   int count = 0;
   emitByte(c, OP_ARRAY, noToken());
   emitShort(c, 0, noToken());
@@ -1195,13 +1302,14 @@ static void array(Compiler* c, bool canAssign) {
       count++;
     } while (match(c, TOKEN_COMMA));
   }
-  consume(c, TOKEN_RIGHT_BRACKET, "Expect ']' after array literal.");
+  consumeClosing(c, TOKEN_RIGHT_BRACKET, "Expect ']' after array literal.", open);
   c->chunk->code[sizeOffset] = (uint8_t)((count >> 8) & 0xff);
   c->chunk->code[sizeOffset + 1] = (uint8_t)(count & 0xff);
 }
 
 static void map(Compiler* c, bool canAssign) {
   (void)canAssign;
+  Token open = previous(c);
   int count = 0;
   emitByte(c, OP_MAP, noToken());
   emitShort(c, 0, noToken());
@@ -1228,7 +1336,7 @@ static void map(Compiler* c, bool canAssign) {
       count++;
     } while (match(c, TOKEN_COMMA));
   }
-  consume(c, TOKEN_RIGHT_BRACE, "Expect '}' after map literal.");
+  consumeClosing(c, TOKEN_RIGHT_BRACE, "Expect '}' after map literal.", open);
   c->chunk->code[sizeOffset] = (uint8_t)((count >> 8) & 0xff);
   c->chunk->code[sizeOffset + 1] = (uint8_t)(count & 0xff);
 }
@@ -1278,7 +1386,12 @@ static void parsePrecedence(Compiler* c, Precedence prec) {
   advance(c);
   ParseFn prefixRule = getRule(previous(c).type)->prefix;
   if (prefixRule == NULL) {
-    errorAt(c, previous(c), "Expect expression.");
+    char message[128];
+    snprintf(message, sizeof(message), "Expect expression. Found %s.",
+             tokenDescription(previous(c).type));
+    errorAt(c, previous(c), message);
+    synchronizeExpression(c);
+    c->panicMode = false;
     return;
   }
   bool canAssign = prec <= PREC_ASSIGNMENT;
@@ -1331,17 +1444,18 @@ static void varDeclaration(Compiler* c, bool isConst, bool isExport) {
   emitGc(c);
 }
 
-static void block(Compiler* c) {
+static void block(Compiler* c, Token open) {
   while (!check(c, TOKEN_RIGHT_BRACE) && !isAtEnd(c)) {
     declaration(c);
   }
-  consume(c, TOKEN_RIGHT_BRACE, "Expect '}' after block.");
+  consumeClosing(c, TOKEN_RIGHT_BRACE, "Expect '}' after block.", open);
 }
 
 static void blockStatement(Compiler* c) {
+  Token open = previous(c);
   emitByte(c, OP_BEGIN_SCOPE, noToken());
   c->scopeDepth++;
-  block(c);
+  block(c, open);
   emitByte(c, OP_END_SCOPE, noToken());
   c->scopeDepth--;
   emitGc(c);
@@ -1349,9 +1463,9 @@ static void blockStatement(Compiler* c) {
 
 static void ifStatement(Compiler* c) {
   Token keyword = previous(c);
-  consume(c, TOKEN_LEFT_PAREN, "Expect '(' after 'if'.");
+  Token openParen = consume(c, TOKEN_LEFT_PAREN, "Expect '(' after 'if'.");
   expression(c);
-  consume(c, TOKEN_RIGHT_PAREN, "Expect ')' after if condition.");
+  consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after if condition.", openParen);
   int thenJump = emitJump(c, OP_JUMP_IF_FALSE, keyword);
   emitByte(c, OP_POP, noToken());
   statement(c);
@@ -1373,9 +1487,9 @@ static void ifStatement(Compiler* c) {
 static void whileStatement(Compiler* c) {
   Token keyword = previous(c);
   int loopStart = c->chunk->count;
-  consume(c, TOKEN_LEFT_PAREN, "Expect '(' after 'while'.");
+  Token openParen = consume(c, TOKEN_LEFT_PAREN, "Expect '(' after 'while'.");
   expression(c);
-  consume(c, TOKEN_RIGHT_PAREN, "Expect ')' after condition.");
+  consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after condition.", openParen);
   int exitJump = emitJump(c, OP_JUMP_IF_FALSE, keyword);
   emitByte(c, OP_POP, noToken());
 
@@ -1407,7 +1521,7 @@ static void forStatement(Compiler* c) {
   Token keyword = previous(c);
   emitByte(c, OP_BEGIN_SCOPE, noToken());
   c->scopeDepth++;
-  consume(c, TOKEN_LEFT_PAREN, "Expect '(' after 'for'.");
+  Token openParen = consume(c, TOKEN_LEFT_PAREN, "Expect '(' after 'for'.");
 
   if (match(c, TOKEN_SEMICOLON)) {
   } else if (match(c, TOKEN_LET)) {
@@ -1440,7 +1554,7 @@ static void forStatement(Compiler* c) {
     loopStart = incrementOffset;
     patchJump(c, bodyJump, keyword);
   }
-  consume(c, TOKEN_RIGHT_PAREN, "Expect ')' after for clauses.");
+  consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after for clauses.", openParen);
 
   BreakContext loop;
   loop.type = BREAK_LOOP;
@@ -1476,7 +1590,7 @@ static void foreachStatement(Compiler* c) {
   Token keyword = previous(c);
   emitByte(c, OP_BEGIN_SCOPE, noToken());
   c->scopeDepth++;
-  consume(c, TOKEN_LEFT_PAREN, "Expect '(' after 'foreach'.");
+  Token openParen = consume(c, TOKEN_LEFT_PAREN, "Expect '(' after 'foreach'.");
 
   Token first = consume(c, TOKEN_IDENTIFIER, "Expect loop variable.");
   Token keyToken; Token valueToken;
@@ -1490,7 +1604,7 @@ static void foreachStatement(Compiler* c) {
   }
   consume(c, TOKEN_IN, "Expect 'in' after foreach variable.");
   expression(c);
-  consume(c, TOKEN_RIGHT_PAREN, "Expect ')' after foreach iterable.");
+  consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after foreach iterable.", openParen);
 
   int iterName = emitTempNameConstant(c, "iter");
   emitDefineVarConstant(c, iterName);
@@ -1585,12 +1699,12 @@ static void switchStatement(Compiler* c) {
   emitByte(c, OP_BEGIN_SCOPE, noToken());
   c->scopeDepth++;
   snprintf(message, sizeof(message), "Expect '(' after '%s'.", keywordName);
-  consume(c, TOKEN_LEFT_PAREN, message);
+  Token openParen = consume(c, TOKEN_LEFT_PAREN, message);
   expression(c);
   snprintf(message, sizeof(message), "Expect ')' after %s value.", keywordName);
-  consume(c, TOKEN_RIGHT_PAREN, message);
+  consumeClosing(c, TOKEN_RIGHT_PAREN, message, openParen);
   snprintf(message, sizeof(message), "Expect '{' after %s value.", keywordName);
-  consume(c, TOKEN_LEFT_BRACE, message);
+  Token openBrace = consume(c, TOKEN_LEFT_BRACE, message);
 
   int switchValue = emitTempNameConstant(c, "switch");
   emitDefineVarConstant(c, switchValue);
@@ -1649,7 +1763,7 @@ static void switchStatement(Compiler* c) {
     emitByte(c, OP_POP, noToken());
   }
 
-  consume(c, TOKEN_RIGHT_BRACE, "Expect '}' after switch cases.");
+  consumeClosing(c, TOKEN_RIGHT_BRACE, "Expect '}' after switch cases.", openBrace);
   c->breakContext = ctx.enclosing;
   int switchEnd = c->chunk->count;
   patchJumpList(c, &endJumps, switchEnd, keyword);
@@ -1783,7 +1897,7 @@ static void functionDeclaration(Compiler* c, bool isExport) {
 
 static void classDeclaration(Compiler* c, bool isExport) {
   Token name = consume(c, TOKEN_IDENTIFIER, "Expect class name.");
-  consume(c, TOKEN_LEFT_BRACE, "Expect '{' before class body.");
+  Token openBrace = consume(c, TOKEN_LEFT_BRACE, "Expect '{' before class body.");
 
   int nameConst = emitStringConstant(c, name);
   emitByte(c, OP_NULL, noToken());
@@ -1806,7 +1920,7 @@ static void classDeclaration(Compiler* c, bool isExport) {
     emitShort(c, (uint16_t)constant, methodName);
     methodCount++;
   }
-  consume(c, TOKEN_RIGHT_BRACE, "Expect '}' after class body.");
+  consumeClosing(c, TOKEN_RIGHT_BRACE, "Expect '}' after class body.", openBrace);
 
   emitByte(c, OP_CLASS, name);
   emitShort(c, (uint16_t)nameConst, name);
@@ -1820,7 +1934,7 @@ static void classDeclaration(Compiler* c, bool isExport) {
 
 static void enumDeclaration(Compiler* c, bool isExport) {
   Token name = consume(c, TOKEN_IDENTIFIER, "Expect enum name.");
-  consume(c, TOKEN_LEFT_BRACE, "Expect '{' before enum body.");
+  Token openBrace = consume(c, TOKEN_LEFT_BRACE, "Expect '{' before enum body.");
 
   emitByte(c, OP_MAP, noToken());
   emitShort(c, 0, noToken());
@@ -1855,7 +1969,7 @@ static void enumDeclaration(Compiler* c, bool isExport) {
     } while (match(c, TOKEN_COMMA));
   }
 
-  consume(c, TOKEN_RIGHT_BRACE, "Expect '}' after enum body.");
+  consumeClosing(c, TOKEN_RIGHT_BRACE, "Expect '}' after enum body.", openBrace);
 
   c->chunk->code[sizeOffset] = (uint8_t)((count >> 8) & 0xff);
   c->chunk->code[sizeOffset + 1] = (uint8_t)(count & 0xff);
@@ -1875,7 +1989,7 @@ typedef struct {
   uint16_t to;
 } ExportName;
 
-static ExportName* parseExportList(Compiler* c, int* outCount) {
+static ExportName* parseExportList(Compiler* c, int* outCount, Token open) {
   int count = 0;
   int capacity = 4;
   ExportName* names = (ExportName*)malloc(sizeof(ExportName) * (size_t)capacity);
@@ -1911,7 +2025,7 @@ static ExportName* parseExportList(Compiler* c, int* outCount) {
       count++;
     } while (match(c, TOKEN_COMMA));
   }
-  consume(c, TOKEN_RIGHT_BRACE, "Expect '}' after export list.");
+  consumeClosing(c, TOKEN_RIGHT_BRACE, "Expect '}' after export list.", open);
 
   *outCount = count;
   return names;
@@ -1945,7 +2059,7 @@ static void exportDeclaration(Compiler* c) {
     }
     if (match(c, TOKEN_CLASS)) {
       Token name = consume(c, TOKEN_IDENTIFIER, "Expect class name.");
-      consume(c, TOKEN_LEFT_BRACE, "Expect '{' before class body.");
+      Token openBrace = consume(c, TOKEN_LEFT_BRACE, "Expect '{' before class body.");
 
       int nameConst = emitStringConstant(c, name);
       emitByte(c, OP_NULL, noToken());
@@ -1968,7 +2082,7 @@ static void exportDeclaration(Compiler* c) {
         emitShort(c, (uint16_t)constant, methodName);
         methodCount++;
       }
-      consume(c, TOKEN_RIGHT_BRACE, "Expect '}' after class body.");
+      consumeClosing(c, TOKEN_RIGHT_BRACE, "Expect '}' after class body.", openBrace);
 
       emitByte(c, OP_CLASS, name);
       emitShort(c, (uint16_t)nameConst, name);
@@ -2008,8 +2122,9 @@ static void exportDeclaration(Compiler* c) {
   }
 
   if (match(c, TOKEN_LEFT_BRACE)) {
+    Token openBrace = previous(c);
     int nameCount = 0;
-    ExportName* names = parseExportList(c, &nameCount);
+    ExportName* names = parseExportList(c, &nameCount, openBrace);
     bool hasFrom = match(c, TOKEN_FROM);
     if (hasFrom) {
       expression(c);
@@ -2116,7 +2231,7 @@ static void statement(Compiler* c) {
 }
 
 static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer) {
-  consume(c, TOKEN_LEFT_PAREN, "Expect '(' after function name.");
+  Token openParen = consume(c, TOKEN_LEFT_PAREN, "Expect '(' after function name.");
 
   int arity = 0;
   int minArity = 0;
@@ -2149,7 +2264,7 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer)
       }
     } while (match(c, TOKEN_COMMA));
   }
-  consume(c, TOKEN_RIGHT_PAREN, "Expect ')' after parameters.");
+  consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after parameters.", openParen);
   consume(c, TOKEN_LEFT_BRACE, "Expect '{' before function body.");
   int bodyStart = c->current;
 
@@ -2198,8 +2313,8 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer)
       paramIdx++;
     } while (match(c, TOKEN_COMMA));
   }
-  consume(c, TOKEN_RIGHT_PAREN, "Expect ')' after parameters.");
-  consume(c, TOKEN_LEFT_BRACE, "Expect '{' before function body.");
+  consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after parameters.", openParen);
+  Token openBrace = consume(c, TOKEN_LEFT_BRACE, "Expect '{' before function body.");
 
   Chunk* chunk = (Chunk*)malloc(sizeof(Chunk));
   if (!chunk) { fprintf(stderr, "Out of memory.\n"); exit(1); }
@@ -2254,7 +2369,7 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer)
   while (!check(&fnCompiler, TOKEN_RIGHT_BRACE) && !isAtEnd(&fnCompiler)) {
     declaration(&fnCompiler);
   }
-  consume(&fnCompiler, TOKEN_RIGHT_BRACE, "Expect '}' after function body.");
+  consumeClosing(&fnCompiler, TOKEN_RIGHT_BRACE, "Expect '}' after function body.", openBrace);
 
   emitByte(&fnCompiler, OP_NULL, noToken());
   emitByte(&fnCompiler, OP_RETURN, noToken());
