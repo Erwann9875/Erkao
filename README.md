@@ -137,6 +137,27 @@ Lint a file:
 ./build/Debug/erkao.exe lint ./examples/hello.ek
 ```
 
+Tooling config (optional):
+
+Create `erkao.tooling` in the repo root (or pass `--config path`):
+
+```
+# erkao.tooling
+format.ruleset = standard
+format.indent = 2
+lint.ruleset = strict
+lint.maxLine = 100
+lint.rules = trailing,tabs,indent,line-length,flow,lex
+```
+
+Rulesets:
+- Format: `standard` (2 spaces), `wide` (4 spaces)
+- Lint: `basic`, `default`, `strict`
+
+Overrides:
+- `fmt --ruleset NAME --indent N`
+- `lint --ruleset NAME --max-line N --rules list`
+
 ## Testing
 
 Run the golden tests from the repo root:
@@ -163,8 +184,8 @@ Lint tests and examples:
 ./scripts/lint.ps1
 ```
 
-Lint checks: whitespace/indentation, long lines, unused locals/assignments,
-unreachable code, and break/continue misuse.
+Lint checks: trailing whitespace, tabs, indentation, long lines, and (when enabled)
+flow/lex errors.
 
 ## Language quick tour
 

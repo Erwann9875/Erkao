@@ -6,7 +6,10 @@ const {
   SymbolKind,
   Location,
   Range,
-  MarkupKind
+  MarkupKind,
+  ResponseError,
+  ErrorCodes,
+  TextEdit
 } = require("vscode-languageserver/node");
 const { TextDocument } = require("vscode-languageserver-textdocument");
 
@@ -103,6 +106,14 @@ function isIdentChar(ch) {
   return /[A-Za-z0-9_]/.test(ch);
 }
 
+function isIdentStart(ch) {
+  return /[A-Za-z_]/.test(ch);
+}
+
+function isValidIdentifier(name) {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
+}
+
 function getWordAt(text, offset) {
   if (offset < 0 || offset >= text.length) return null;
   let start = offset;
@@ -125,6 +136,153 @@ function getWordInfo(doc, position) {
     info = getWordAt(text, offset - 1);
   }
   return info;
+}
+
+function findIdentifierOccurrences(text, target) {
+  const ranges = [];
+  if (!target) return ranges;
+
+  let i = 0;
+  let inLineComment = false;
+  let inBlockComment = false;
+  let inString = false;
+  let stringTriple = false;
+  let inInterpolation = false;
+  let interpDepth = 0;
+  let resumeString = false;
+  let resumeStringTriple = false;
+
+  while (i < text.length) {
+    const ch = text[i];
+    const next = text[i + 1];
+    const next2 = text[i + 2];
+
+    if (inLineComment) {
+      if (ch === "\n") inLineComment = false;
+      i++;
+      continue;
+    }
+    if (inBlockComment) {
+      if (ch === "*" && next === "/") {
+        inBlockComment = false;
+        i += 2;
+        continue;
+      }
+      i++;
+      continue;
+    }
+
+    if (inString) {
+      if (!inInterpolation && ch === "$" && next === "{") {
+        inInterpolation = true;
+        interpDepth = 0;
+        resumeString = true;
+        resumeStringTriple = stringTriple;
+        inString = false;
+        i += 2;
+        continue;
+      }
+      if (stringTriple) {
+        if (ch === "\"" && next === "\"" && next2 === "\"") {
+          inString = false;
+          stringTriple = false;
+          i += 3;
+          continue;
+        }
+        i++;
+        continue;
+      }
+      if (ch === "\\") {
+        i += 2;
+        continue;
+      }
+      if (ch === "\"") {
+        inString = false;
+        i++;
+        continue;
+      }
+      i++;
+      continue;
+    }
+
+    if (ch === "/" && next === "/") {
+      inLineComment = true;
+      i += 2;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      inBlockComment = true;
+      i += 2;
+      continue;
+    }
+    if (ch === "\"") {
+      if (next === "\"" && next2 === "\"") {
+        inString = true;
+        stringTriple = true;
+        i += 3;
+        continue;
+      }
+      inString = true;
+      stringTriple = false;
+      i++;
+      continue;
+    }
+
+    if (inInterpolation) {
+      if (ch === "{") {
+        interpDepth++;
+        i++;
+        continue;
+      }
+      if (ch === "}") {
+        if (interpDepth === 0) {
+          inInterpolation = false;
+          if (resumeString) {
+            inString = true;
+            stringTriple = resumeStringTriple;
+            resumeString = false;
+          }
+          i++;
+          continue;
+        }
+        interpDepth--;
+        i++;
+        continue;
+      }
+    }
+
+    if (isIdentStart(ch)) {
+      const start = i;
+      i++;
+      while (i < text.length && isIdentChar(text[i])) {
+        i++;
+      }
+      if (text.slice(start, i) === target) {
+        ranges.push({ start, end: i });
+      }
+      continue;
+    }
+
+    i++;
+  }
+
+  return ranges;
+}
+
+function rangesToLocations(doc, ranges) {
+  return ranges.map((range) => {
+    const start = doc.positionAt(range.start);
+    const end = doc.positionAt(range.end);
+    return Location.create(doc.uri, Range.create(start, end));
+  });
+}
+
+function rangesToEdits(doc, ranges, newText) {
+  return ranges.map((range) => {
+    const start = doc.positionAt(range.start);
+    const end = doc.positionAt(range.end);
+    return TextEdit.replace(Range.create(start, end), newText);
+  });
 }
 
 function addSymbol(doc, symbols, byName, name, kind, nameIndex) {
@@ -201,7 +359,9 @@ connection.onInitialize(() => {
       completionProvider: { resolveProvider: false, triggerCharacters: ["."] },
       hoverProvider: true,
       definitionProvider: true,
-      documentSymbolProvider: true
+      documentSymbolProvider: true,
+      referencesProvider: true,
+      renameProvider: { prepareProvider: true }
     }
   };
 });
@@ -268,6 +428,68 @@ connection.onDefinition((params) => {
   const info = byName.get(wordInfo.word);
   if (!info) return null;
   return Location.create(doc.uri, info.range);
+});
+
+connection.onReferences((params) => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return [];
+  const wordInfo = getWordInfo(doc, params.position);
+  if (!wordInfo || KEYWORDS.includes(wordInfo.word)) return [];
+
+  const results = [];
+  for (const openDoc of documents.all()) {
+    const ranges = findIdentifierOccurrences(openDoc.getText(), wordInfo.word);
+    const { byName } = getSymbols(openDoc);
+    const def = byName.get(wordInfo.word);
+    const includeDecl = params.context ? params.context.includeDeclaration : true;
+    if (!includeDecl && def) {
+      for (let i = ranges.length - 1; i >= 0; i--) {
+        const start = openDoc.positionAt(ranges[i].start);
+        const end = openDoc.positionAt(ranges[i].end);
+        if (Range.create(start, end).start.line === def.range.start.line &&
+            Range.create(start, end).start.character === def.range.start.character &&
+            Range.create(start, end).end.line === def.range.end.line &&
+            Range.create(start, end).end.character === def.range.end.character) {
+          ranges.splice(i, 1);
+        }
+      }
+    }
+    results.push(...rangesToLocations(openDoc, ranges));
+  }
+  return results;
+});
+
+connection.onPrepareRename((params) => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return null;
+  const wordInfo = getWordInfo(doc, params.position);
+  if (!wordInfo) return null;
+  if (KEYWORDS.includes(wordInfo.word)) return null;
+  const start = doc.positionAt(wordInfo.start);
+  const end = doc.positionAt(wordInfo.end);
+  return Range.create(start, end);
+});
+
+connection.onRenameRequest((params) => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return null;
+  const wordInfo = getWordInfo(doc, params.position);
+  if (!wordInfo || KEYWORDS.includes(wordInfo.word)) return null;
+  if (!isValidIdentifier(params.newName) || KEYWORDS.includes(params.newName)) {
+    throw new ResponseError(
+      ErrorCodes.InvalidParams,
+      "Rename target must be a valid identifier."
+    );
+  }
+
+  const changes = {};
+  for (const openDoc of documents.all()) {
+    const ranges = findIdentifierOccurrences(openDoc.getText(), wordInfo.word);
+    if (ranges.length === 0) continue;
+    changes[openDoc.uri] = rangesToEdits(openDoc, ranges, params.newName);
+  }
+
+  return { changes };
 });
 
 connection.onDocumentSymbol((params) => {

@@ -50,6 +50,13 @@ static char* readFile(const char* path) {
   return buffer;
 }
 
+static bool fileExists(const char* path) {
+  FILE* file = fopen(path, "rb");
+  if (!file) return false;
+  fclose(file);
+  return true;
+}
+
 static void historyInit(History* history, char* path) {
   history->entries = NULL;
   history->count = 0;
@@ -466,7 +473,12 @@ static void printHelp(const char* exe) {
           "  --bytecode     Print bytecode before running.\n"
           "  --disasm       Alias for --bytecode.\n"
           "  --module-path  Add a module search path.\n"
-          "  --check        Check formatting without writing changes.\n",
+          "  --check        Check formatting without writing changes.\n"
+          "  --config       Tooling config file for fmt/lint.\n"
+          "  --ruleset      Tooling ruleset name.\n"
+          "  --indent       Formatter indentation width.\n"
+          "  --max-line     Linter max line length.\n"
+          "  --rules        Linter rules list (comma-separated).\n",
           exe, exe, exe, exe, exe, exe, exe);
 }
 
@@ -478,10 +490,66 @@ static int runFormatCommand(const char* exe, int argc, const char** argv) {
   bool checkOnly = false;
   int files = 0;
   int exitCode = 0;
+  ToolingConfig config;
+  toolingConfigInit(&config);
+
+  const char* configPath = NULL;
+  for (int i = 2; i < argc; i++) {
+    if (isFlag(argv[i], "--config", NULL)) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "Missing value for --config.\n");
+        printHelp(exe);
+        return 64;
+      }
+      configPath = argv[++i];
+    }
+  }
+
+  if (configPath) {
+    if (!toolingLoadConfig(configPath, &config)) {
+      return 1;
+    }
+  } else if (fileExists("erkao.tooling")) {
+    if (!toolingLoadConfig("erkao.tooling", &config)) {
+      return 1;
+    }
+  }
 
   for (int i = 2; i < argc; i++) {
     if (isFlag(argv[i], "--check", "-c")) {
       checkOnly = true;
+      continue;
+    }
+    if (isFlag(argv[i], "--config", NULL)) {
+      i++;
+      continue;
+    }
+    if (isFlag(argv[i], "--ruleset", "-r")) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "Missing value for --ruleset.\n");
+        printHelp(exe);
+        return 64;
+      }
+      if (!toolingApplyFormatRuleset(&config, argv[i + 1])) {
+        fprintf(stderr, "Unknown format ruleset: %s\n", argv[i + 1]);
+        return 64;
+      }
+      i++;
+      continue;
+    }
+    if (isFlag(argv[i], "--indent", "-i")) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "Missing value for --indent.\n");
+        printHelp(exe);
+        return 64;
+      }
+      int indent = atoi(argv[i + 1]);
+      if (indent <= 0) {
+        fprintf(stderr, "Invalid indent: %s\n", argv[i + 1]);
+        return 64;
+      }
+      config.formatIndent = indent;
+      i++;
       continue;
     }
     if (argv[i][0] == '-') {
@@ -490,7 +558,7 @@ static int runFormatCommand(const char* exe, int argc, const char** argv) {
       return 64;
     }
     bool changed = false;
-    if (!formatFile(argv[i], checkOnly, &changed)) {
+    if (!formatFileWithConfig(argv[i], checkOnly, &changed, &config)) {
       return 1;
     }
     if (checkOnly && changed) {
@@ -511,14 +579,83 @@ static int runFormatCommand(const char* exe, int argc, const char** argv) {
 static int runLintCommand(const char* exe, int argc, const char** argv) {
   int files = 0;
   int issues = 0;
+  ToolingConfig config;
+  toolingConfigInit(&config);
+
+  const char* configPath = NULL;
+  for (int i = 2; i < argc; i++) {
+    if (isFlag(argv[i], "--config", NULL)) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "Missing value for --config.\n");
+        printHelp(exe);
+        return 64;
+      }
+      configPath = argv[++i];
+    }
+  }
+
+  if (configPath) {
+    if (!toolingLoadConfig(configPath, &config)) {
+      return 1;
+    }
+  } else if (fileExists("erkao.tooling")) {
+    if (!toolingLoadConfig("erkao.tooling", &config)) {
+      return 1;
+    }
+  }
 
   for (int i = 2; i < argc; i++) {
+    if (isFlag(argv[i], "--config", NULL)) {
+      i++;
+      continue;
+    }
+    if (isFlag(argv[i], "--ruleset", "-r")) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "Missing value for --ruleset.\n");
+        printHelp(exe);
+        return 64;
+      }
+      if (!toolingApplyLintRuleset(&config, argv[i + 1])) {
+        fprintf(stderr, "Unknown lint ruleset: %s\n", argv[i + 1]);
+        return 64;
+      }
+      i++;
+      continue;
+    }
+    if (isFlag(argv[i], "--rules", NULL)) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "Missing value for --rules.\n");
+        printHelp(exe);
+        return 64;
+      }
+      if (!toolingApplyLintRules(&config, argv[i + 1])) {
+        fprintf(stderr, "Unknown lint rules: %s\n", argv[i + 1]);
+        return 64;
+      }
+      i++;
+      continue;
+    }
+    if (isFlag(argv[i], "--max-line", "-m")) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "Missing value for --max-line.\n");
+        printHelp(exe);
+        return 64;
+      }
+      int maxLine = atoi(argv[i + 1]);
+      if (maxLine <= 0) {
+        fprintf(stderr, "Invalid max line length: %s\n", argv[i + 1]);
+        return 64;
+      }
+      config.lintMaxLine = maxLine;
+      i++;
+      continue;
+    }
     if (argv[i][0] == '-') {
       fprintf(stderr, "Unknown option for 'lint': %s\n", argv[i]);
       printHelp(exe);
       return 64;
     }
-    int result = lintFile(argv[i]);
+    int result = lintFileWithConfig(argv[i], &config);
     if (result < 0) return 1;
     issues += result;
     files++;
