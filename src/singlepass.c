@@ -424,6 +424,9 @@ static char* parseStringChars(const char* src, int length) {
   int out = 0;
   for (int i = 0; i < length; i++) {
     char ch = src[i];
+    if (ch == '\r' && i + 1 < length && src[i + 1] == '\n') {
+      continue;
+    }
     if (ch == '\\' && i + 1 < length) {
       char next = src[++i];
       switch (next) {
