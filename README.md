@@ -47,6 +47,7 @@ You can also use the PowerShell helper:
 
 For MSVC builds, the script will bootstrap vcpkg and install SDL2 if needed.
 Set `VCPKG_ROOT` or pass `-VcpkgRoot` to reuse an existing vcpkg install.
+If you already configured a preset without vcpkg, rerun with `-Clean` to reset the build dir.
 
 If `gfx` is undefined at runtime, graphics were disabled because SDL2 was not found for that toolchain.
 

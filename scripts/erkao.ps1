@@ -3,6 +3,7 @@ param(
   [string]$Generator,
   [string]$Preset,
   [switch]$UseVcpkg,
+  [switch]$Clean,
   [string]$VcpkgRoot,
   [string]$VcpkgTriplet
 )
@@ -109,6 +110,68 @@ function Require-RepoRoot {
 
 function Get-RepoRoot {
   return [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
+}
+
+function Get-PresetBinaryDir {
+  param([string]$PresetName)
+  $repoRoot = Get-RepoRoot
+  $presetFile = Join-Path $repoRoot "CMakePresets.json"
+  if (-not (Test-Path -LiteralPath $presetFile)) {
+    return [System.IO.Path]::Combine($repoRoot, "build", $PresetName)
+  }
+
+  try {
+    $json = Get-Content -LiteralPath $presetFile -Raw | ConvertFrom-Json
+  } catch {
+    return [System.IO.Path]::Combine($repoRoot, "build", $PresetName)
+  }
+
+  $preset = $null
+  foreach ($item in $json.configurePresets) {
+    if ($item.name -eq $PresetName) {
+      $preset = $item
+      break
+    }
+  }
+
+  if (-not $preset -or -not $preset.binaryDir) {
+    return [System.IO.Path]::Combine($repoRoot, "build", $PresetName)
+  }
+
+  $binaryDir = [string]$preset.binaryDir
+  $binaryDir = $binaryDir.Replace('${sourceDir}', $repoRoot)
+  $binaryDir = $binaryDir.Replace('${presetName}', $PresetName)
+  $binaryDir = [regex]::Replace($binaryDir, '\$env\{([^}]+)\}', {
+    param($match)
+    $name = $match.Groups[1].Value
+    $value = [Environment]::GetEnvironmentVariable($name)
+    if ($value) { return $value }
+    return ""
+  })
+
+  if (-not [System.IO.Path]::IsPathRooted($binaryDir)) {
+    $binaryDir = Join-Path $repoRoot $binaryDir
+  }
+
+  return [System.IO.Path]::GetFullPath($binaryDir)
+}
+
+function Ensure-BuildDirSafe {
+  param([string]$BuildDir)
+  $repoRoot = [System.IO.Path]::GetFullPath((Get-RepoRoot))
+  $full = [System.IO.Path]::GetFullPath($BuildDir)
+  if (-not $full.StartsWith($repoRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Refusing to modify build dir outside repo root: $full"
+  }
+}
+
+function Test-CMakeFreshSupport {
+  if ($script:SupportsFresh -ne $null) {
+    return $script:SupportsFresh
+  }
+  $help = & cmake --help | Out-String
+  $script:SupportsFresh = $help -match "--fresh"
+  return $script:SupportsFresh
 }
 
 function Resolve-VcpkgRoot {
@@ -270,6 +333,22 @@ function Build-Project {
       $cmakeArgs += "-DCMAKE_TOOLCHAIN_FILE=$toolchain"
       $cmakeArgs += "-DVCPKG_TARGET_TRIPLET=$resolvedTriplet"
     }
+    $buildDir = Get-PresetBinaryDir -PresetName $Preset
+    if ($Clean -and (Test-Path -LiteralPath $buildDir)) {
+      Ensure-BuildDirSafe -BuildDir $buildDir
+      Remove-Item -LiteralPath $buildDir -Recurse -Force
+    }
+    $cachePath = Join-Path $buildDir "CMakeCache.txt"
+    if ($useVcpkg -and -not $Clean -and (Test-Path -LiteralPath $cachePath)) {
+      $cache = Get-Content -LiteralPath $cachePath -Raw
+      if ($toolchain -and ($cache -notmatch [regex]::Escape($toolchain))) {
+        if (Test-CMakeFreshSupport) {
+          $cmakeArgs += "--fresh"
+        } else {
+          throw "Existing build cache was configured without vcpkg. Delete '$buildDir' or rerun with -Clean."
+        }
+      }
+    }
     cmake @cmakeArgs
     cmake --build --preset $Preset
     return
@@ -334,6 +413,7 @@ function Show-Menu {
   Write-Host "2) Build"
   Write-Host "   (Use -Preset msys2-debug or -Preset msvc-debug to use CMakePresets.json)"
   Write-Host "   (MSVC builds auto-install vcpkg; set VCPKG_ROOT to reuse an existing install)"
+  Write-Host "   (Use -Clean to remove an existing preset build dir before configuring)"
   Write-Host "3) Format check (tests/examples)"
 }
 
