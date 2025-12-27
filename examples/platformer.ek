@@ -1,0 +1,466 @@
+let WIDTH = 960;
+let HEIGHT = 540;
+let TILE = 32;
+
+let SKY = [90, 145, 210];
+let BG_HAZE = [140, 190, 235, 120];
+let SOLID_TOP = [110, 180, 170];
+let SOLID_EDGE = [70, 120, 110];
+let MOVING_TOP = [150, 210, 190];
+let MOVING_EDGE = [90, 140, 120];
+let SPIKE = [235, 80, 90];
+let PLAYER = [255, 220, 150];
+let PLAYER_EDGE = [120, 80, 60];
+let GOAL = [255, 220, 120];
+
+let LEVEL = [
+  "..............................",
+  "..............#####...........",
+  "..............#G..#...........",
+  "..............#####...........",
+  "..............................",
+  "........####..................",
+  "..............................",
+  ".....................####.....",
+  ".....................#..#.....",
+  ".....................####.....",
+  "..............................",
+  ".....####.....................",
+  ".....#..#.....................",
+  ".....####...........^^^.......",
+  "....................####......",
+  "..........####................",
+  "..........#..#................",
+  "..........####................",
+  "....................####......",
+  "....................#..#......",
+  "....................####......",
+  "....####......................",
+  "....#..#......................",
+  "....####............P.........",
+  "..............................",
+  "..............^^^.............",
+  "..............................",
+  "##############################"
+];
+
+fun clamp(value, min, max) {
+  if (value < min) return min;
+  if (value > max) return max;
+  return value;
+}
+
+fun lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+fun toText(value) {
+  return json.stringify(value);
+}
+
+fun approach(value, target, delta) {
+  if (value < target) {
+    value = value + delta;
+    if (value > target) return target;
+    return value;
+  }
+  if (value > target) {
+    value = value - delta;
+    if (value < target) return target;
+    return value;
+  }
+  return value;
+}
+
+fun rectsOverlap(ax, ay, aw, ah, bx, by, bw, bh) {
+  return ax < bx + bw and ax + aw > bx and ay < by + bh and ay + ah > by;
+}
+
+let solids = [];
+let movingPlatforms = [];
+let spikes = [];
+let goal = null;
+let spawn = { x: TILE, y: TILE };
+
+fun addSolid(x, y, w, h, top, edge, moving) {
+  let rect = { x: x, y: y, w: w, h: h, top: top, edge: edge, moving: moving, dx: 0, dy: 0 };
+  push(solids, rect);
+  return rect;
+}
+
+fun addMovingPlatform(x, y, w, h, axis, range, speed) {
+  let rect = addSolid(x, y, w, h, MOVING_TOP, MOVING_EDGE, true);
+  rect["axis"] = axis;
+  rect["range"] = range;
+  rect["speed"] = speed;
+  rect["baseX"] = x;
+  rect["baseY"] = y;
+  rect["offset"] = 0;
+  rect["dir"] = 1;
+  push(movingPlatforms, rect);
+}
+
+fun buildLevel() {
+  let row = 0;
+  while (row < len(LEVEL)) {
+    let line = LEVEL[row];
+    let chars = str.split(line, "");
+    let col = 0;
+    while (col < len(chars)) {
+      let ch = chars[col];
+      let x = col * TILE;
+      let y = row * TILE;
+      if (ch == "#") {
+        addSolid(x, y, TILE, TILE, SOLID_TOP, SOLID_EDGE, false);
+      } else if (ch == "^") {
+        push(spikes, { x: x, y: y, w: TILE, h: TILE });
+      } else if (ch == "G") {
+        goal = { x: x, y: y, w: TILE, h: TILE, reached: false };
+      } else if (ch == "P") {
+        spawn = { x: x + TILE / 2, y: y + TILE / 2 };
+      }
+      col = col + 1;
+    }
+    row = row + 1;
+  }
+
+  addMovingPlatform(7 * TILE, 15 * TILE, TILE * 2, TILE / 2, "x", TILE * 3, 90);
+  addMovingPlatform(18 * TILE, 10 * TILE, TILE * 2, TILE / 2, "y", TILE * 2, 70);
+}
+
+let WORLD_W = 0;
+let WORLD_H = 0;
+
+let player = {
+  x: 0, y: 0, w: 18, h: 22,
+  vx: 0, vy: 0,
+  onGround: false,
+  coyote: 0,
+  jumpBuffer: 0,
+  dashCount: 1,
+  dashTime: 0,
+  facing: 1,
+  ground: null
+};
+
+let deaths = 0;
+let state = "play";
+
+let ACCEL = 2000;
+let FRICTION = 2200;
+let MAX_SPEED = 180;
+let GRAVITY = 1400;
+let JUMP_SPEED = 420;
+let COYOTE_TIME = 0.12;
+let JUMP_BUFFER = 0.12;
+let DASH_SPEED = 520;
+let DASH_TIME = 0.18;
+let MAX_DASH = 1;
+
+fun respawn() {
+  player["x"] = spawn["x"] - player["w"] / 2;
+  player["y"] = spawn["y"] - player["h"] / 2;
+  player["vx"] = 0;
+  player["vy"] = 0;
+  player["dashCount"] = MAX_DASH;
+  player["dashTime"] = 0;
+  player["coyote"] = 0;
+  player["jumpBuffer"] = 0;
+}
+
+fun updatePlatforms(dt) {
+  let i = 0;
+  while (i < len(movingPlatforms)) {
+    let p = movingPlatforms[i];
+    let oldX = p["x"];
+    let oldY = p["y"];
+    let offset = p["offset"] + p["speed"] * dt * p["dir"];
+    let range = p["range"];
+    if (offset > range) { offset = range; p["dir"] = -1; }
+    if (offset < -range) { offset = -range; p["dir"] = 1; }
+    p["offset"] = offset;
+    if (p["axis"] == "x") {
+      p["x"] = p["baseX"] + offset;
+      p["y"] = p["baseY"];
+    } else {
+      p["x"] = p["baseX"];
+      p["y"] = p["baseY"] + offset;
+    }
+    p["dx"] = p["x"] - oldX;
+    p["dy"] = p["y"] - oldY;
+    i = i + 1;
+  }
+}
+
+fun firstSolidOverlap(x, y, w, h) {
+  let i = 0;
+  while (i < len(solids)) {
+    let s = solids[i];
+    if (rectsOverlap(x, y, w, h, s["x"], s["y"], s["w"], s["h"])) {
+      return s;
+    }
+    i = i + 1;
+  }
+  return null;
+}
+
+fun movePlayer(dt) {
+  player["onGround"] = false;
+  player["ground"] = null;
+
+  let dx = player["vx"] * dt;
+  player["x"] = player["x"] + dx;
+  let hit = firstSolidOverlap(player["x"], player["y"], player["w"], player["h"]);
+  if (hit != null) {
+    if (dx > 0) { player["x"] = hit["x"] - player["w"]; }
+    if (dx < 0) { player["x"] = hit["x"] + hit["w"]; }
+    player["vx"] = 0;
+  }
+
+  let dy = player["vy"] * dt;
+  player["y"] = player["y"] + dy;
+  hit = firstSolidOverlap(player["x"], player["y"], player["w"], player["h"]);
+  if (hit != null) {
+    if (dy > 0) {
+      player["y"] = hit["y"] - player["h"];
+      player["onGround"] = true;
+      player["ground"] = hit;
+    }
+    if (dy < 0) {
+      player["y"] = hit["y"] + hit["h"];
+    }
+    player["vy"] = 0;
+  }
+
+  if (player["onGround"] and player["ground"] != null and player["ground"]["moving"]) {
+    player["x"] = player["x"] + player["ground"]["dx"];
+    player["y"] = player["y"] + player["ground"]["dy"];
+  }
+}
+
+fun updatePlayer(dt) {
+  let moveX = 0;
+  if (gfx.key("a") or gfx.key("left")) moveX = moveX - 1;
+  if (gfx.key("d") or gfx.key("right")) moveX = moveX + 1;
+  if (moveX != 0) player["facing"] = moveX;
+
+  if (gfx.keyPressed("space") or gfx.keyPressed("z")) {
+    player["jumpBuffer"] = JUMP_BUFFER;
+  } else {
+    player["jumpBuffer"] = math.max(0, player["jumpBuffer"] - dt);
+  }
+
+  if (player["dashTime"] > 0) {
+    player["dashTime"] = player["dashTime"] - dt;
+  }
+
+  if (player["onGround"]) {
+    player["coyote"] = COYOTE_TIME;
+    player["dashCount"] = MAX_DASH;
+  } else {
+    player["coyote"] = math.max(0, player["coyote"] - dt);
+  }
+
+  if (player["dashTime"] <= 0) {
+    let target = moveX * MAX_SPEED;
+    let accel = ACCEL;
+    if (moveX == 0) {
+      accel = FRICTION;
+    }
+    player["vx"] = approach(player["vx"], target, accel * dt);
+    player["vy"] = player["vy"] + GRAVITY * dt;
+  }
+
+  if (player["jumpBuffer"] > 0 and (player["onGround"] or player["coyote"] > 0)) {
+    player["vy"] = -JUMP_SPEED;
+    player["jumpBuffer"] = 0;
+    player["coyote"] = 0;
+  }
+
+  if (!(gfx.key("space") or gfx.key("z")) and player["vy"] < -80) {
+    player["vy"] = player["vy"] * 0.6;
+  }
+
+  if (gfx.keyPressed("x") and player["dashCount"] > 0 and player["dashTime"] <= 0) {
+    let dashX = moveX;
+    let dashY = 0;
+    if (gfx.key("w") or gfx.key("up")) dashY = dashY - 1;
+    if (gfx.key("s") or gfx.key("down")) dashY = dashY + 1;
+    if (dashX == 0 and dashY == 0) dashX = player["facing"];
+    let len = math.sqrt(dashX * dashX + dashY * dashY);
+    if (len > 0) {
+      dashX = dashX / len;
+      dashY = dashY / len;
+    }
+    player["vx"] = dashX * DASH_SPEED;
+    player["vy"] = dashY * DASH_SPEED;
+    player["dashTime"] = DASH_TIME;
+    player["dashCount"] = player["dashCount"] - 1;
+  }
+
+  movePlayer(dt);
+}
+
+fun checkHazards() {
+  if (player["y"] > WORLD_H + 200) {
+    deaths = deaths + 1;
+    respawn();
+    return;
+  }
+  let i = 0;
+  while (i < len(spikes)) {
+    let s = spikes[i];
+    if (rectsOverlap(player["x"], player["y"], player["w"], player["h"],
+                     s["x"], s["y"], s["w"], s["h"])) {
+      deaths = deaths + 1;
+      respawn();
+      return;
+    }
+    i = i + 1;
+  }
+
+  if (goal != null and !goal["reached"]) {
+    if (rectsOverlap(player["x"], player["y"], player["w"], player["h"],
+                     goal["x"], goal["y"], goal["w"], goal["h"])) {
+      goal["reached"] = true;
+      state = "win";
+    }
+  }
+}
+
+let camX = 0;
+let camY = 0;
+let zoom = 1.0;
+
+fun updateCamera(dt) {
+  let targetX = player["x"] + player["w"] / 2 - (WIDTH / (2 * zoom));
+  let targetY = player["y"] + player["h"] / 2 - (HEIGHT / (2 * zoom));
+  let t = clamp(dt * 6, 0, 1);
+  camX = lerp(camX, targetX, t);
+  camY = lerp(camY, targetY, t);
+
+  let maxX = WORLD_W - WIDTH / zoom;
+  let maxY = WORLD_H - HEIGHT / zoom;
+  if (maxX < 0) maxX = 0;
+  if (maxY < 0) maxY = 0;
+  camX = clamp(camX, 0, maxX);
+  camY = clamp(camY, 0, maxY);
+
+  gfx.cameraZoom(zoom);
+  gfx.camera(camX, camY);
+}
+
+fun drawBackground() {
+  gfx.clear(SKY);
+  let bandH = 120;
+  let y = 0;
+  while (y < WORLD_H) {
+    let alpha = 140 - math.min(90, y / 6);
+    gfx.rect([BG_HAZE[0], BG_HAZE[1], BG_HAZE[2], alpha], 0, y, WORLD_W, bandH);
+    y = y + bandH * 2;
+  }
+}
+
+fun drawSolids() {
+  let i = 0;
+  while (i < len(solids)) {
+    let s = solids[i];
+    gfx.rect(s["top"], s["x"], s["y"], s["w"], s["h"]);
+    gfx.rectLine(s["edge"], s["x"], s["y"], s["w"], s["h"]);
+    i = i + 1;
+  }
+}
+
+fun drawSpikes() {
+  let i = 0;
+  while (i < len(spikes)) {
+    let s = spikes[i];
+    let step = s["w"] / 3;
+    let x = s["x"];
+    let base = s["y"] + s["h"];
+    let mid = s["y"] + s["h"] * 0.55;
+    let k = 0;
+    while (k < 3) {
+      let a = x + k * step;
+      gfx.line(SPIKE, a, base, a + step / 2, mid);
+      gfx.line(SPIKE, a + step / 2, mid, a + step, base);
+      k = k + 1;
+    }
+    i = i + 1;
+  }
+}
+
+fun drawGoal() {
+  if (goal == null) return;
+  let t = gfx.time() * 1.5;
+  let phase = t - math.floor(t);
+  let tri = phase;
+  if (tri > 0.5) { tri = 1 - phase; }
+  let pulse = 0.6 + tri * 0.8;
+  let poleX = goal["x"] + TILE * 0.6;
+  gfx.rect([235, 230, 230], poleX, goal["y"] - TILE * 0.5, 4, TILE * 1.6);
+  gfx.rect([GOAL[0], GOAL[1], GOAL[2]], poleX + 4, goal["y"] - TILE * 0.35,
+           TILE * 0.6, TILE * 0.3);
+  gfx.circle([GOAL[0], GOAL[1], GOAL[2], 200], poleX + 6, goal["y"] - TILE * 0.55,
+             6 * pulse);
+}
+
+fun drawPlayer() {
+  gfx.rect(PLAYER, player["x"], player["y"], player["w"], player["h"]);
+  gfx.rectLine(PLAYER_EDGE, player["x"], player["y"], player["w"], player["h"]);
+}
+
+buildLevel();
+WORLD_W = len(LEVEL[0]) * TILE;
+WORLD_H = len(LEVEL) * TILE;
+respawn();
+
+gfx.init(WIDTH, HEIGHT, "Erkao Platformer");
+gfx.fps(60);
+
+let lastTime = gfx.time();
+let running = true;
+
+while (running and gfx.poll()) {
+  let now = gfx.time();
+  let dt = now - lastTime;
+  lastTime = now;
+  if (dt > 0.05) { dt = 0.05; }
+
+  if (gfx.keyPressed("escape")) {
+    running = false;
+  }
+
+  updatePlatforms(dt);
+  if (state == "play") {
+    updatePlayer(dt);
+    checkHazards();
+  } else {
+    if (gfx.keyPressed("r")) {
+      goal["reached"] = false;
+      state = "play";
+      respawn();
+    }
+  }
+
+  updateCamera(dt);
+  drawBackground();
+  drawSolids();
+  drawSpikes();
+  drawGoal();
+  drawPlayer();
+
+  gfx.cameraZoom(1);
+  gfx.camera(0, 0);
+  gfx.text("Move: WASD / Arrows", 24, 16, [255, 255, 255, 230], 16);
+  gfx.text("Jump: Z or Space  Dash: X", 24, 36, [255, 255, 255, 220], 16);
+  gfx.text("Deaths: " + toText(deaths), 24, 56, [255, 255, 255, 180], 14);
+  if (state == "win") {
+    gfx.text("Goal reached! Press R to restart", 24, 78, [255, 230, 150, 230], 18);
+  }
+
+  gfx.present();
+}
+
+gfx.quit();
+print("Done.");
