@@ -4,8 +4,10 @@
 #include "disasm.h"
 #include "gc.h"
 #include "program.h"
+#include "diagnostics.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -36,6 +38,52 @@ static Token currentToken(CallFrame* frame) {
     token = frame->function->chunk->tokens[offset];
   }
   return token;
+}
+
+static bool updateBestSuggestionFromMap(ObjMap* map, const char* target, int targetLen,
+                                        ObjString** best, int* bestDist) {
+  if (!map || !target || targetLen <= 0) return false;
+  for (int i = 0; i < map->capacity; i++) {
+    ObjString* key = map->entries[i].key;
+    if (!key) continue;
+    int maxDist = *bestDist - 1;
+    if (maxDist < 0) return true;
+    if (maxDist > ERKAO_DIAG_MAX_DISTANCE) maxDist = ERKAO_DIAG_MAX_DISTANCE;
+    int dist = diag_edit_distance_limited(target, targetLen, key->chars, key->length,
+                                          maxDist);
+    if (dist < *bestDist) {
+      *bestDist = dist;
+      *best = key;
+      if (dist == 0) return true;
+    }
+  }
+  return *best != NULL;
+}
+
+static bool suggestNameFromEnv(Env* env, const char* target, int targetLen,
+                               char* out, size_t outSize) {
+  if (!env || !out || outSize == 0) return false;
+  ObjString* best = NULL;
+  int bestDist = ERKAO_DIAG_MAX_DISTANCE + 1;
+  for (Env* current = env; current != NULL; current = current->enclosing) {
+    updateBestSuggestionFromMap(current->values, target, targetLen, &best, &bestDist);
+  }
+  if (!best || bestDist > ERKAO_DIAG_MAX_DISTANCE) return false;
+  snprintf(out, outSize, "%.*s", best->length, best->chars);
+  return true;
+}
+
+static bool suggestNameFromInstance(ObjInstance* instance, const char* target, int targetLen,
+                                    char* out, size_t outSize) {
+  if (!instance || !out || outSize == 0) return false;
+  ObjString* best = NULL;
+  int bestDist = ERKAO_DIAG_MAX_DISTANCE + 1;
+  updateBestSuggestionFromMap(instance->fields, target, targetLen, &best, &bestDist);
+  updateBestSuggestionFromMap(instance->klass ? instance->klass->methods : NULL,
+                              target, targetLen, &best, &bestDist);
+  if (!best || bestDist > ERKAO_DIAG_MAX_DISTANCE) return false;
+  snprintf(out, outSize, "%.*s", best->length, best->chars);
+  return true;
 }
 
 static bool ensureNumberOperand(VM* vm, Token op, Value value) {
@@ -339,7 +387,16 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
         ObjString* name = (ObjString*)AS_OBJ(READ_CONSTANT());
         Value value;
         if (!envGetByName(vm->env, name, &value)) {
-          runtimeError(vm, currentToken(frame), "Undefined variable.");
+          char suggestion[64];
+          char message[256];
+          if (suggestNameFromEnv(vm->env, name->chars, name->length,
+                                 suggestion, sizeof(suggestion))) {
+            snprintf(message, sizeof(message),
+                     "Undefined variable. Did you mean '%s'?", suggestion);
+            runtimeError(vm, currentToken(frame), message);
+          } else {
+            runtimeError(vm, currentToken(frame), "Undefined variable.");
+          }
           return false;
         }
         push(vm, value);
@@ -349,7 +406,16 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
         ObjString* name = (ObjString*)AS_OBJ(READ_CONSTANT());
         Value value = peek(vm, 0);
         if (!envAssignByName(vm->env, name, value)) {
-          runtimeError(vm, currentToken(frame), "Undefined variable.");
+          char suggestion[64];
+          char message[256];
+          if (suggestNameFromEnv(vm->env, name->chars, name->length,
+                                 suggestion, sizeof(suggestion))) {
+            snprintf(message, sizeof(message),
+                     "Undefined variable. Did you mean '%s'?", suggestion);
+            runtimeError(vm, currentToken(frame), message);
+          } else {
+            runtimeError(vm, currentToken(frame), "Undefined variable.");
+          }
           return false;
         }
         break;
@@ -423,7 +489,18 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
             break;
           }
 
-          runtimeError(vm, currentToken(frame), "Undefined property.");
+          {
+            char suggestion[64];
+            char message[256];
+            if (suggestNameFromInstance(instance, name->chars, name->length,
+                                        suggestion, sizeof(suggestion))) {
+              snprintf(message, sizeof(message),
+                       "Undefined property. Did you mean '%s'?", suggestion);
+              runtimeError(vm, currentToken(frame), message);
+            } else {
+              runtimeError(vm, currentToken(frame), "Undefined property.");
+            }
+          }
           return false;
         }
         runtimeError(vm, currentToken(frame), "Only instances have properties.");

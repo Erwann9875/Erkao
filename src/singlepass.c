@@ -2,6 +2,7 @@
 #include "chunk.h"
 #include "common.h"
 #include "interpreter.h"
+#include "diagnostics.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -71,6 +72,118 @@ static Token noToken(void) {
   return t;
 }
 
+typedef struct {
+  ErkaoTokenType type;
+  const char* lexeme;
+} KeywordEntry;
+
+static const KeywordEntry keywordEntries[] = {
+  {TOKEN_AND, "and"},
+  {TOKEN_AS, "as"},
+  {TOKEN_BREAK, "break"},
+  {TOKEN_CASE, "case"},
+  {TOKEN_CLASS, "class"},
+  {TOKEN_CONTINUE, "continue"},
+  {TOKEN_DEFAULT, "default"},
+  {TOKEN_ELSE, "else"},
+  {TOKEN_FALSE, "false"},
+  {TOKEN_FOR, "for"},
+  {TOKEN_FOREACH, "foreach"},
+  {TOKEN_FROM, "from"},
+  {TOKEN_FUN, "fun"},
+  {TOKEN_IF, "if"},
+  {TOKEN_IMPORT, "import"},
+  {TOKEN_IN, "in"},
+  {TOKEN_LET, "let"},
+  {TOKEN_NULL, "null"},
+  {TOKEN_OR, "or"},
+  {TOKEN_RETURN, "return"},
+  {TOKEN_SWITCH, "switch"},
+  {TOKEN_THIS, "this"},
+  {TOKEN_TRUE, "true"},
+  {TOKEN_WHILE, "while"},
+  {TOKEN_ERROR, NULL}
+};
+
+static const char* keywordLexeme(ErkaoTokenType type) {
+  for (int i = 0; keywordEntries[i].lexeme != NULL; i++) {
+    if (keywordEntries[i].type == type) return keywordEntries[i].lexeme;
+  }
+  return NULL;
+}
+
+static const char* tokenDescription(ErkaoTokenType type) {
+  switch (type) {
+    case TOKEN_LEFT_PAREN: return "'('";
+    case TOKEN_RIGHT_PAREN: return "')'";
+    case TOKEN_LEFT_BRACE: return "'{'";
+    case TOKEN_RIGHT_BRACE: return "'}'";
+    case TOKEN_LEFT_BRACKET: return "'['";
+    case TOKEN_RIGHT_BRACKET: return "']'";
+    case TOKEN_COMMA: return "','";
+    case TOKEN_DOT: return "'.'";
+    case TOKEN_MINUS: return "'-'";
+    case TOKEN_PLUS: return "'+'";
+    case TOKEN_SEMICOLON: return "';'";
+    case TOKEN_SLASH: return "'/'";
+    case TOKEN_STAR: return "'*'";
+    case TOKEN_COLON: return "':'";
+    case TOKEN_BANG: return "'!'";
+    case TOKEN_BANG_EQUAL: return "'!='";
+    case TOKEN_EQUAL: return "'='";
+    case TOKEN_EQUAL_EQUAL: return "'=='";
+    case TOKEN_GREATER: return "'>'";
+    case TOKEN_GREATER_EQUAL: return "'>='";
+    case TOKEN_LESS: return "'<'";
+    case TOKEN_LESS_EQUAL: return "'<='";
+    case TOKEN_IDENTIFIER: return "identifier";
+    case TOKEN_STRING: return "string";
+    case TOKEN_NUMBER: return "number";
+    case TOKEN_AND: return "'and'";
+    case TOKEN_AS: return "'as'";
+    case TOKEN_BREAK: return "'break'";
+    case TOKEN_CASE: return "'case'";
+    case TOKEN_CLASS: return "'class'";
+    case TOKEN_CONTINUE: return "'continue'";
+    case TOKEN_DEFAULT: return "'default'";
+    case TOKEN_ELSE: return "'else'";
+    case TOKEN_FALSE: return "'false'";
+    case TOKEN_FOR: return "'for'";
+    case TOKEN_FOREACH: return "'foreach'";
+    case TOKEN_FROM: return "'from'";
+    case TOKEN_FUN: return "'fun'";
+    case TOKEN_IF: return "'if'";
+    case TOKEN_IMPORT: return "'import'";
+    case TOKEN_IN: return "'in'";
+    case TOKEN_LET: return "'let'";
+    case TOKEN_NULL: return "'null'";
+    case TOKEN_OR: return "'or'";
+    case TOKEN_RETURN: return "'return'";
+    case TOKEN_SWITCH: return "'switch'";
+    case TOKEN_THIS: return "'this'";
+    case TOKEN_TRUE: return "'true'";
+    case TOKEN_WHILE: return "'while'";
+    case TOKEN_EOF: return "end of file";
+    case TOKEN_ERROR: return "invalid token";
+    default:
+      return "token";
+  }
+}
+
+static bool keywordSuggestion(Token found, ErkaoTokenType expected,
+                              char* out, size_t outSize) {
+  if (found.type != TOKEN_IDENTIFIER || !out || outSize == 0) return false;
+  const char* expectedLexeme = keywordLexeme(expected);
+  if (!expectedLexeme) return false;
+  int expectedLen = (int)strlen(expectedLexeme);
+  int dist = diag_edit_distance_limited(found.start, found.length,
+                                        expectedLexeme, expectedLen,
+                                        ERKAO_DIAG_MAX_DISTANCE);
+  if (dist > ERKAO_DIAG_MAX_DISTANCE) return false;
+  snprintf(out, outSize, "%s", expectedLexeme);
+  return true;
+}
+
 static void errorAt(Compiler* c, Token token, const char* message) {
   if (c->panicMode) return;
   c->panicMode = true;
@@ -93,12 +206,27 @@ static void errorAtCurrent(Compiler* c, const char* message) {
 
 static Token consume(Compiler* c, ErkaoTokenType type, const char* message) {
   if (check(c, type)) return advance(c);
+  Token found = peek(c);
+  const char* foundDesc = tokenDescription(found.type);
+  char full[256];
+  if (message && message[0] != '\0') {
+    snprintf(full, sizeof(full), "%s Found %s.", message, foundDesc);
+  } else {
+    const char* expectedDesc = tokenDescription(type);
+    snprintf(full, sizeof(full), "Expected %s. Found %s.", expectedDesc, foundDesc);
+  }
+  char suggestion[32];
+  if (keywordSuggestion(found, type, suggestion, sizeof(suggestion))) {
+    size_t length = strlen(full);
+    snprintf(full + length, sizeof(full) - length,
+             " Did you mean '%s'?", suggestion);
+  }
   if (type == TOKEN_SEMICOLON && c->current > 0) {
     Token token = previous(c);
     if (token.length > 0) token.column += token.length;
-    errorAt(c, token, message);
+    errorAt(c, token, full);
   } else {
-    errorAtCurrent(c, message);
+    errorAtCurrent(c, full);
   }
   return peek(c);
 }

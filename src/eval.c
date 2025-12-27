@@ -1,8 +1,56 @@
 #include "interpreter_internal.h"
+#include "diagnostics.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+static bool updateBestSuggestionFromMap(ObjMap* map, const char* target, int targetLen,
+                                        ObjString** best, int* bestDist) {
+  if (!map || !target || targetLen <= 0) return false;
+  for (int i = 0; i < map->capacity; i++) {
+    ObjString* key = map->entries[i].key;
+    if (!key) continue;
+    int maxDist = *bestDist - 1;
+    if (maxDist < 0) return true;
+    if (maxDist > ERKAO_DIAG_MAX_DISTANCE) maxDist = ERKAO_DIAG_MAX_DISTANCE;
+    int dist = diag_edit_distance_limited(target, targetLen, key->chars, key->length,
+                                          maxDist);
+    if (dist < *bestDist) {
+      *bestDist = dist;
+      *best = key;
+      if (dist == 0) return true;
+    }
+  }
+  return *best != NULL;
+}
+
+static bool suggestNameFromEnv(Env* env, const char* target, int targetLen,
+                               char* out, size_t outSize) {
+  if (!env || !out || outSize == 0) return false;
+  ObjString* best = NULL;
+  int bestDist = ERKAO_DIAG_MAX_DISTANCE + 1;
+  for (Env* current = env; current != NULL; current = current->enclosing) {
+    updateBestSuggestionFromMap(current->values, target, targetLen, &best, &bestDist);
+  }
+  if (!best || bestDist > ERKAO_DIAG_MAX_DISTANCE) return false;
+  snprintf(out, outSize, "%.*s", best->length, best->chars);
+  return true;
+}
+
+static bool suggestNameFromInstance(ObjInstance* instance, const char* target, int targetLen,
+                                    char* out, size_t outSize) {
+  if (!instance || !out || outSize == 0) return false;
+  ObjString* best = NULL;
+  int bestDist = ERKAO_DIAG_MAX_DISTANCE + 1;
+  updateBestSuggestionFromMap(instance->fields, target, targetLen, &best, &bestDist);
+  updateBestSuggestionFromMap(instance->klass ? instance->klass->methods : NULL,
+                              target, targetLen, &best, &bestDist);
+  if (!best || bestDist > ERKAO_DIAG_MAX_DISTANCE) return false;
+  snprintf(out, outSize, "%.*s", best->length, best->chars);
+  return true;
+}
 
 static bool callFunction(VM* vm, ObjFunction* function, Value receiver,
                          bool hasReceiver, int argc, Value* args, Value* out) {
@@ -298,7 +346,17 @@ Value evaluate(VM* vm, Expr* expr) {
     case EXPR_VARIABLE: {
       Value value;
       if (!envGet(vm->env, expr->as.variable.name, &value)) {
-        runtimeError(vm, expr->as.variable.name, "Undefined variable.");
+        char suggestion[64];
+        char message[256];
+        const char* target = expr->as.variable.name.start;
+        int targetLen = expr->as.variable.name.length;
+        if (suggestNameFromEnv(vm->env, target, targetLen, suggestion, sizeof(suggestion))) {
+          snprintf(message, sizeof(message),
+                   "Undefined variable. Did you mean '%s'?", suggestion);
+          runtimeError(vm, expr->as.variable.name, message);
+        } else {
+          runtimeError(vm, expr->as.variable.name, "Undefined variable.");
+        }
         return NULL_VAL;
       }
       return value;
@@ -307,7 +365,17 @@ Value evaluate(VM* vm, Expr* expr) {
       Value value = evaluate(vm, expr->as.assign.value);
       if (vm->hadError) return NULL_VAL;
       if (!envAssign(vm->env, expr->as.assign.name, value)) {
-        runtimeError(vm, expr->as.assign.name, "Undefined variable.");
+        char suggestion[64];
+        char message[256];
+        const char* target = expr->as.assign.name.start;
+        int targetLen = expr->as.assign.name.length;
+        if (suggestNameFromEnv(vm->env, target, targetLen, suggestion, sizeof(suggestion))) {
+          snprintf(message, sizeof(message),
+                   "Undefined variable. Did you mean '%s'?", suggestion);
+          runtimeError(vm, expr->as.assign.name, message);
+        } else {
+          runtimeError(vm, expr->as.assign.name, "Undefined variable.");
+        }
         return NULL_VAL;
       }
       return value;
@@ -363,7 +431,20 @@ Value evaluate(VM* vm, Expr* expr) {
           ObjBoundMethod* bound = newBoundMethod(vm, object, method);
           return OBJ_VAL(bound);
         }
-        runtimeError(vm, expr->as.get.name, "Undefined property.");
+        {
+          char suggestion[64];
+          char message[256];
+          const char* target = expr->as.get.name.start;
+          int targetLen = expr->as.get.name.length;
+          if (suggestNameFromInstance(instance, target, targetLen,
+                                      suggestion, sizeof(suggestion))) {
+            snprintf(message, sizeof(message),
+                     "Undefined property. Did you mean '%s'?", suggestion);
+            runtimeError(vm, expr->as.get.name, message);
+          } else {
+            runtimeError(vm, expr->as.get.name, "Undefined property.");
+          }
+        }
         return NULL_VAL;
       }
       runtimeError(vm, expr->as.get.name, "Only instances have properties.");
