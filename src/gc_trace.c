@@ -241,6 +241,9 @@ void markRoots(VM* vm) {
   if (vm->modules) {
     markObject(vm, (Obj*)vm->modules);
   }
+  if (vm->strings) {
+    markObject(vm, (Obj*)vm->strings);
+  }
   for (Value* slot = vm->stack; slot < vm->stackTop; slot++) {
     markValue(vm, *slot);
   }
@@ -274,6 +277,9 @@ void markYoungRoots(VM* vm) {
   }
   if (vm->modules) {
     markYoungObject(vm, (Obj*)vm->modules);
+  }
+  if (vm->strings) {
+    markYoungObject(vm, (Obj*)vm->strings);
   }
   markYoungFromEnv(vm, vm->globals);
   markYoungFromEnv(vm, vm->env);

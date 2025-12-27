@@ -41,6 +41,7 @@ typedef struct VM {
   Obj* oldObjects;
   ObjArray* args;
   ObjMap* modules;
+  ObjMap* strings;
   Program* programs;
   Program* currentProgram;
   CallFrame frames[FRAMES_MAX];

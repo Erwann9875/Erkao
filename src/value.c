@@ -13,6 +13,22 @@ static uint32_t hashBytes(const char* chars, int length) {
   return hash;
 }
 
+static ObjString* findInternedString(VM* vm, const char* chars, int length) {
+  if (!vm || !vm->strings) return NULL;
+  if (!chars && length > 0) return NULL;
+  Token token;
+  memset(&token, 0, sizeof(Token));
+  token.start = chars ? chars : "";
+  token.length = length;
+  Value value;
+  if (mapGetByToken(vm->strings, token, &value)) {
+    if (isObjType(value, OBJ_STRING)) {
+      return (ObjString*)AS_OBJ(value);
+    }
+  }
+  return NULL;
+}
+
 static bool stringsEqual(ObjString* a, ObjString* b);
 static MapEntryValue* mapFindEntry(MapEntryValue* entries, int capacity, ObjString* key);
 static MapEntryValue* mapFindEntryByToken(MapEntryValue* entries, int capacity,
@@ -53,19 +69,44 @@ static ObjString* allocateString(VM* vm, char* chars, int length) {
 }
 
 ObjString* copyStringWithLength(VM* vm, const char* chars, int length) {
+  if (length < 0) length = 0;
+  if (!chars) chars = "";
+  ObjString* interned = findInternedString(vm, chars, length);
+  if (interned) return interned;
+
   char* heap = (char*)malloc((size_t)length + 1);
   if (!heap) {
     fprintf(stderr, "Out of memory.\n");
     exit(1);
   }
-  memcpy(heap, chars, (size_t)length);
+  if (length > 0) {
+    memcpy(heap, chars, (size_t)length);
+  }
   heap[length] = '\0';
-  return allocateString(vm, heap, length);
+  ObjString* string = allocateString(vm, heap, length);
+  if (vm && vm->strings) {
+    mapSet(vm->strings, string, OBJ_VAL(string));
+  }
+  return string;
 }
 
 ObjString* takeStringWithLength(VM* vm, char* chars, int length) {
-  if (!chars) return allocateString(vm, NULL, 0);
-  return allocateString(vm, chars, length);
+  if (length < 0) length = 0;
+  if (!chars) {
+    return copyStringWithLength(vm, "", 0);
+  }
+
+  ObjString* interned = findInternedString(vm, chars, length);
+  if (interned) {
+    free(chars);
+    return interned;
+  }
+  chars[length] = '\0';
+  ObjString* string = allocateString(vm, chars, length);
+  if (vm && vm->strings) {
+    mapSet(vm->strings, string, OBJ_VAL(string));
+  }
+  return string;
 }
 
 ObjString* copyString(VM* vm, const char* chars) {
@@ -238,6 +279,7 @@ bool arraySet(ObjArray* array, int index, Value value) {
 }
 
 static bool stringsEqual(ObjString* a, ObjString* b) {
+  if (a == b) return true;
   if (a->length != b->length) return false;
   if (a->hash != b->hash) return false;
   return memcmp(a->chars, b->chars, (size_t)a->length) == 0;

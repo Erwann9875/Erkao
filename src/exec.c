@@ -545,6 +545,20 @@ static bool run(VM* vm);
 static bool runWithTarget(VM* vm, int targetFrameCount);
 
 bool vmCallValue(VM* vm, Value callee, int argc, Value* args, Value* out) {
+  if (isObjType(callee, OBJ_NATIVE)) {
+    ObjNative* native = (ObjNative*)AS_OBJ(callee);
+    if (native->arity >= 0 && argc != native->arity) {
+      Token token;
+      memset(&token, 0, sizeof(Token));
+      runtimeError(vm, token, "Wrong number of arguments.");
+      return false;
+    }
+    Value result = native->function(vm, argc, args);
+    if (vm->hadError) return false;
+    *out = result;
+    return true;
+  }
+
   int savedFrameCount = vm->frameCount;
   Value* savedStackTop = vm->stackTop;
   Env* savedEnv = vm->env;
@@ -852,6 +866,35 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
       case OP_GET_INDEX: {
         Value index = pop(vm);
         Value object = pop(vm);
+        if (isObjType(object, OBJ_MAP) && isString(index)) {
+          ObjMap* map = (ObjMap*)AS_OBJ(object);
+          ObjString* key = asString(index);
+          if (cache && cache->kind == IC_MAP && cache->map == map) {
+            int entryIndex = cache->index;
+            if (entryIndex >= 0 && entryIndex < map->capacity &&
+                map->entries[entryIndex].key == key) {
+              push(vm, map->entries[entryIndex].value);
+              break;
+            }
+          }
+
+          Value out;
+          int entryIndex = -1;
+          if (mapGetIndex(map, key, &out, &entryIndex)) {
+            if (cache) {
+              cache->kind = IC_MAP;
+              cache->map = map;
+              cache->key = key;
+              cache->index = entryIndex;
+              cache->klass = NULL;
+              cache->method = NULL;
+            }
+            push(vm, out);
+          } else {
+            push(vm, NULL_VAL);
+          }
+          break;
+        }
         Value result = evaluateIndex(vm, currentToken(frame), object, index);
         if (vm->hadError) return false;
         push(vm, result);
@@ -861,6 +904,32 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
         Value value = pop(vm);
         Value index = pop(vm);
         Value object = pop(vm);
+        if (isObjType(object, OBJ_MAP) && isString(index)) {
+          ObjMap* map = (ObjMap*)AS_OBJ(object);
+          ObjString* key = asString(index);
+          if (cache && cache->kind == IC_MAP && cache->map == map) {
+            int entryIndex = cache->index;
+            if (entryIndex >= 0 && entryIndex < map->capacity &&
+                map->entries[entryIndex].key == key) {
+              map->entries[entryIndex].value = value;
+              gcWriteBarrier(vm, (Obj*)map, value);
+              push(vm, value);
+              break;
+            }
+          }
+
+          int entryIndex = mapSetIndex(map, key, value);
+          if (cache) {
+            cache->kind = IC_MAP;
+            cache->map = map;
+            cache->key = key;
+            cache->index = entryIndex;
+            cache->klass = NULL;
+            cache->method = NULL;
+          }
+          push(vm, value);
+          break;
+        }
         Value result = evaluateSetIndex(vm, currentToken(frame), object, index, value);
         if (vm->hadError) return false;
         push(vm, result);

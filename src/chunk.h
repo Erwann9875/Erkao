@@ -6,7 +6,8 @@
 typedef enum {
   IC_NONE,
   IC_FIELD,
-  IC_METHOD
+  IC_METHOD,
+  IC_MAP
 } InlineCacheKind;
 
 typedef struct {

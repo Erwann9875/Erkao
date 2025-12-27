@@ -4,9 +4,9 @@
 #include "interpreter.h"
 
 #define GC_MIN_HEAP_BYTES (4 * 1024 * 1024)
-#define GC_MIN_YOUNG_HEAP_BYTES (1024 * 1024)
+#define GC_MIN_YOUNG_HEAP_BYTES (2 * 1024 * 1024)
 #define GC_HEAP_GROW_FACTOR 3
-#define GC_YOUNG_GROW_FACTOR 3
+#define GC_YOUNG_GROW_FACTOR 4
 #define GC_SWEEP_BATCH 256
 #define GC_PROMOTION_AGE 2
 

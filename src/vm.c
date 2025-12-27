@@ -254,6 +254,7 @@ void vmInit(VM* vm) {
   vm->env = vm->globals;
   vm->args = newArray(vm);
   vm->modules = newMap(vm);
+  vm->strings = newMap(vm);
 
   loadEnvModulePaths(vm);
   defineStdlib(vm);

@@ -4096,7 +4096,7 @@ static Value nativeArrayFilter(VM* vm, int argc, Value* args) {
   }
   ObjArray* array = (ObjArray*)AS_OBJ(args[0]);
   Value fn = args[1];
-  ObjArray* result = newArray(vm);
+  ObjArray* result = newArrayWithCapacity(vm, array->count);
   for (int i = 0; i < array->count; i++) {
     Value arg = array->items[i];
     Value out;
