@@ -645,8 +645,10 @@ static void ifStatement(Compiler* c) {
     statement(c);
     patchJump(c, elseJump, keyword);
   } else {
+    int endJump = emitJump(c, OP_JUMP, keyword);
     patchJump(c, thenJump, keyword);
     emitByte(c, OP_POP, noToken());
+    patchJump(c, endJump, keyword);
   }
   emitGc(c);
 }
