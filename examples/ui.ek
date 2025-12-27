@@ -1,11 +1,33 @@
 class Button {
-  fun init(label, x, y, w, h) {
+  fun init(label, x, y, w, h, style = null) {
     this.label = label;
     this.x = x;
     this.y = y;
     this.w = w;
     this.h = h;
     this.textSize = 22;
+
+    this.fill = [245, 247, 250];
+    this.hoverFill = [255, 255, 255];
+    this.pressFill = [230, 235, 242];
+    this.border = [60, 90, 120, 160];
+    this.textColor = [40, 50, 60];
+    this.shadow = [0, 0, 0, 70];
+    this.highlight = [255, 255, 255, 120];
+
+    this.applyStyle(style);
+  }
+
+  fun applyStyle(style) {
+    if (style == null) { return; }
+    if (style["textSize"] != null) { this.textSize = style["textSize"]; }
+    if (style["fill"] != null) { this.fill = style["fill"]; }
+    if (style["hoverFill"] != null) { this.hoverFill = style["hoverFill"]; }
+    if (style["pressFill"] != null) { this.pressFill = style["pressFill"]; }
+    if (style["border"] != null) { this.border = style["border"]; }
+    if (style["textColor"] != null) { this.textColor = style["textColor"]; }
+    if (style["shadow"] != null) { this.shadow = style["shadow"]; }
+    if (style["highlight"] != null) { this.highlight = style["highlight"]; }
   }
 
   fun contains(px, py) {
@@ -13,22 +35,34 @@ class Button {
            py >= this.y and py <= this.y + this.h;
   }
 
-  fun draw(mx, my) {
+  fun draw(mx, my, pressed = false) {
     let hover = this.contains(mx, my);
-    let fill = "white";
-    let border = "black";
-    if (hover) {
-      fill = "gold";
-      border = "orange";
+    let fill = this.fill;
+    if (hover) { fill = this.hoverFill; }
+    if (pressed and hover) { fill = this.pressFill; }
+
+    let offsetX = 0;
+    let offsetY = 0;
+    let shadowOffset = 4;
+    if (pressed and hover) {
+      offsetX = 1;
+      offsetY = 2;
+      shadowOffset = 2;
     }
 
-    gfx.rect(fill, this.x, this.y, this.w, this.h);
-    gfx.rectLine(border, this.x, this.y, this.w, this.h);
+    if (this.shadow != null) {
+      gfx.rect(this.shadow, this.x + shadowOffset, this.y + shadowOffset, this.w, this.h);
+    }
+    gfx.rect(fill, this.x + offsetX, this.y + offsetY, this.w, this.h);
+    gfx.rectLine(this.border, this.x + offsetX, this.y + offsetY, this.w, this.h);
+    if (this.highlight != null) {
+      gfx.rect(this.highlight, this.x + offsetX + 2, this.y + offsetY + 2, this.w - 4, 6);
+    }
 
-    let approxWidth = len(this.label) * this.textSize * 0.55;
-    let textX = this.x + (this.w - approxWidth) / 2;
-    let textY = this.y + (this.h - this.textSize) / 2 - 2;
-    gfx.text(this.label, textX, textY, "black", this.textSize);
+    let approxWidth = len(this.label) * this.textSize * 0.56;
+    let textX = this.x + offsetX + (this.w - approxWidth) / 2;
+    let textY = this.y + offsetY + (this.h - this.textSize) / 2 - 2;
+    gfx.text(this.label, textX, textY, this.textColor, this.textSize);
   }
 
   fun clicked(px, py, pressed) {

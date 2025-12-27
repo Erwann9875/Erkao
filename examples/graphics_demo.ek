@@ -1,7 +1,110 @@
 import "./ui.ek" as ui;
 
+let SKY_TOP = [80, 170, 255];
+let SKY_BOTTOM = [186, 230, 255];
+let SKY_BAND_COUNT = 10;
+let SKY_BANDS = [];
+let SUN = [255, 210, 110];
+let SUN_GLOW = [255, 230, 160, 120];
+let CLOUD = [255, 255, 255, 200];
+let HILL_FAR = [120, 195, 130];
+let HILL_NEAR = [104, 178, 118];
+let GROUND = [70, 135, 80];
+let GROUND_EDGE = [95, 170, 95];
+let GROUND_SHADOW = [55, 110, 70];
+let PANEL = [255, 255, 255, 220];
+let PANEL_BORDER = [255, 255, 255, 200];
+let PANEL_STROKE = [60, 90, 120, 70];
+let TEXT_SHADOW = [0, 0, 0, 90];
+let HUD_BG = [0, 0, 0, 80];
+let HUD_BORDER = [255, 255, 255, 140];
+let HUD_SUBTEXT = [255, 255, 255, 200];
+let OVERLAY = [0, 0, 0, 120];
+let TEXT_DARK = [40, 60, 80];
+let TEXT_MUTED = [80, 100, 120];
+let TEXT_SOFT = [100, 120, 140];
+let BIRD_BODY = [255, 210, 80];
+let BIRD_OUTLINE = [200, 120, 40];
+let BIRD_EYE = [255, 255, 255];
+let BIRD_PUPIL = [0, 0, 0];
+let BIRD_BEAK = [255, 170, 60];
+
 fun toText(value) {
   return json.stringify(value);
+}
+
+fun lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+fun lerpColor(a, b, t) {
+  return [
+    lerp(a[0], b[0], t),
+    lerp(a[1], b[1], t),
+    lerp(a[2], b[2], t)
+  ];
+}
+
+let i = 0;
+while (i < SKY_BAND_COUNT) {
+  let t = i / (SKY_BAND_COUNT - 1);
+  push(SKY_BANDS, lerpColor(SKY_TOP, SKY_BOTTOM, t));
+  i = i + 1;
+}
+
+fun approxTextWidth(text, size) {
+  return len(text) * size * 0.56;
+}
+
+fun drawCenteredText(text, y, size, color, shadowColor, width) {
+  let x = (width - approxTextWidth(text, size)) / 2;
+  if (shadowColor != null) {
+    gfx.text(text, x + 2, y + 2, shadowColor, size);
+  }
+  gfx.text(text, x, y, color, size);
+}
+
+fun drawSkyGradient(width, height) {
+  let bandH = height / SKY_BAND_COUNT;
+  let i = 0;
+  while (i < SKY_BAND_COUNT) {
+    let color = SKY_BANDS[i];
+    gfx.rect(color, 0, i * bandH, width, bandH + 1);
+    i = i + 1;
+  }
+}
+
+fun drawSun(x, y) {
+  gfx.circle(SUN_GLOW, x, y, 46);
+  gfx.circle(SUN, x, y, 32);
+}
+
+fun drawCloud(x, y, scale) {
+  let r1 = 18 * scale;
+  let r2 = 14 * scale;
+  gfx.circle(CLOUD, x, y, r1);
+  gfx.circle(CLOUD, x + 18 * scale, y + 6 * scale, r2);
+  gfx.circle(CLOUD, x - 16 * scale, y + 8 * scale, r2);
+  gfx.rect(CLOUD, x - 28 * scale, y + 8 * scale, 56 * scale, 14 * scale);
+}
+
+fun drawHills(width, groundY) {
+  gfx.circle(HILL_FAR, width * 0.2, groundY + 70, 150);
+  gfx.circle(HILL_NEAR, width * 0.72, groundY + 90, 210);
+}
+
+fun drawGround(width, height, groundY) {
+  gfx.rect(GROUND, 0, groundY, width, height - groundY);
+  gfx.rect(GROUND_EDGE, 0, groundY, width, 10);
+  gfx.rect(GROUND_SHADOW, 0, groundY + 10, width, 6);
+}
+
+fun drawBackdrop(width, height, groundY) {
+  drawSkyGradient(width, height);
+  drawSun(width - 120, 90);
+  drawCloud(160, 120, 1.0);
+  drawCloud(520, 100, 0.9);
+  drawHills(width, groundY);
 }
 
 class FlabbyBirdGame {
@@ -19,6 +122,9 @@ class FlabbyBirdGame {
     this.pipeGap = 170;
     this.pipeSpeed = 220;
     this.spawnInterval = 1.35;
+    this.pipeFill = [70, 180, 95];
+    this.pipeEdge = [40, 120, 70];
+    this.pipeCap = [86, 195, 110];
 
     this.best = 0;
 
@@ -28,6 +134,11 @@ class FlabbyBirdGame {
     this.reset();
   }
 
+  fun updateScoreText() {
+    this.scoreText = "Score " + toText(this.score);
+    this.bestText = "Best " + toText(this.best);
+  }
+
   fun reset() {
     this.birdY = this.height / 2;
     this.birdVel = 0;
@@ -35,6 +146,7 @@ class FlabbyBirdGame {
     this.spawnTimer = 0;
     this.score = 0;
     this.state = "playing";
+    this.updateScoreText();
   }
 
   fun rand() {
@@ -55,6 +167,7 @@ class FlabbyBirdGame {
 
   fun updatePipes(dt) {
     let newPipes = [];
+    let updatedScore = false;
     let i = 0;
     while (i < len(this.pipes)) {
       let pipe = this.pipes[i];
@@ -64,6 +177,7 @@ class FlabbyBirdGame {
         pipe["passed"] = true;
         this.score = this.score + 1;
         if (this.score > this.best) { this.best = this.score; }
+        updatedScore = true;
       }
 
       let gapTop = pipe["gapY"] - this.pipeGap / 2;
@@ -82,6 +196,9 @@ class FlabbyBirdGame {
       i = i + 1;
     }
     this.pipes = newPipes;
+    if (updatedScore) {
+      this.updateScoreText();
+    }
   }
 
   fun update(dt, flap) {
@@ -112,37 +229,66 @@ class FlabbyBirdGame {
 
   fun drawPipes() {
     let j = 0;
+    let capH = 14;
     while (j < len(this.pipes)) {
       let pipe = this.pipes[j];
       let gapTop = pipe["gapY"] - this.pipeGap / 2;
       let gapBottom = pipe["gapY"] + this.pipeGap / 2;
-      gfx.rect("green", pipe["x"], 0, this.pipeWidth, gapTop);
-      gfx.rect("green", pipe["x"], gapBottom, this.pipeWidth, this.groundY - gapBottom);
-      gfx.rectLine("darkgreen", pipe["x"], 0, this.pipeWidth, gapTop);
-      gfx.rectLine("darkgreen", pipe["x"], gapBottom, this.pipeWidth, this.groundY - gapBottom);
+      gfx.rect(this.pipeFill, pipe["x"], 0, this.pipeWidth, gapTop);
+      gfx.rect(this.pipeFill, pipe["x"], gapBottom, this.pipeWidth, this.groundY - gapBottom);
+      gfx.rect(this.pipeCap, pipe["x"] - 4, gapTop - capH, this.pipeWidth + 8, capH);
+      gfx.rect(this.pipeCap, pipe["x"] - 4, gapBottom, this.pipeWidth + 8, capH);
+      gfx.rectLine(this.pipeEdge, pipe["x"], 0, this.pipeWidth, gapTop);
+      gfx.rectLine(this.pipeEdge, pipe["x"], gapBottom, this.pipeWidth, this.groundY - gapBottom);
+      gfx.rectLine(this.pipeEdge, pipe["x"] - 4, gapTop - capH, this.pipeWidth + 8, capH);
+      gfx.rectLine(this.pipeEdge, pipe["x"] - 4, gapBottom, this.pipeWidth + 8, capH);
       j = j + 1;
     }
   }
 
+  fun drawBird() {
+    gfx.circle(BIRD_BODY, this.birdX, this.birdY, this.birdRadius);
+    gfx.circleLine(BIRD_OUTLINE, this.birdX, this.birdY, this.birdRadius);
+    gfx.circle(BIRD_EYE, this.birdX + 4, this.birdY - 4, 4);
+    gfx.circle(BIRD_PUPIL, this.birdX + 6, this.birdY - 4, 2);
+    gfx.circle(BIRD_BEAK, this.birdX - 4, this.birdY + 2, 3);
+  }
+
+  fun drawHud() {
+    let panelX = 12;
+    let panelY = 10;
+    let panelW = 170;
+    let panelH = 54;
+    gfx.rect(HUD_BG, panelX, panelY, panelW, panelH);
+    gfx.rectLine(HUD_BORDER, panelX, panelY, panelW, panelH);
+    gfx.text(this.scoreText, panelX + 10, panelY + 10, "white", 18);
+    gfx.text(this.bestText, panelX + 10, panelY + 30, HUD_SUBTEXT, 14);
+  }
+
+  fun drawGameOver() {
+    gfx.rect(OVERLAY, 0, 0, this.width, this.height);
+    let panelW = 360;
+    let panelH = 190;
+    let panelX = (this.width - panelW) / 2;
+    let panelY = (this.height - panelH) / 2 - 10;
+    gfx.rect(PANEL, panelX, panelY, panelW, panelH);
+    gfx.rectLine(PANEL_BORDER, panelX, panelY, panelW, panelH);
+    gfx.rectLine(PANEL_STROKE, panelX + 1, panelY + 1, panelW - 2, panelH - 2);
+    drawCenteredText("Game Over", panelY + 26, 36, TEXT_DARK, TEXT_SHADOW, this.width);
+    drawCenteredText(this.scoreText, panelY + 80, 22, TEXT_DARK, null, this.width);
+    drawCenteredText(this.bestText, panelY + 108, 18, TEXT_MUTED, null, this.width);
+    drawCenteredText("Press SPACE to restart", panelY + 140, 16, TEXT_MUTED, null, this.width);
+  }
+
   fun draw() {
-    gfx.clear("skyblue");
-
-    gfx.circle("gold", 680, 90, 35);
-
+    drawBackdrop(this.width, this.height, this.groundY);
     this.drawPipes();
-
-    gfx.rect("darkgreen", 0, this.groundY, this.width, this.height - this.groundY);
-    gfx.rectLine("black", 0, this.groundY, this.width, this.height - this.groundY);
-
-    gfx.circle("yellow", this.birdX, this.birdY, this.birdRadius);
-    gfx.circleLine("orange", this.birdX, this.birdY, this.birdRadius);
-
-    gfx.text("Score: " + toText(this.score), 12, 10, "white", 20);
-    gfx.text("Best: " + toText(this.best), 12, 34, "white", 16);
+    drawGround(this.width, this.height, this.groundY);
+    this.drawBird();
+    this.drawHud();
 
     if (this.state == "gameover") {
-      gfx.text("Game Over", 290, 160, "white", 32);
-      gfx.text("Press SPACE to restart", 230, 210, "lightgray", 18);
+      this.drawGameOver();
     }
   }
 }
@@ -153,13 +299,38 @@ class MenuScreen {
     this.height = height;
     this.groundY = height - 80;
 
-    let buttonWidth = 220;
-    let buttonHeight = 52;
-    let centerX = (width - buttonWidth) / 2;
-    let startY = height / 2 - 10;
+    this.panelW = 380;
+    this.panelH = 270;
+    this.panelX = (width - this.panelW) / 2;
+    this.panelY = 120;
 
-    this.startButton = ui.Button("Start", centerX, startY, buttonWidth, buttonHeight);
-    this.quitButton = ui.Button("Quit", centerX, startY + buttonHeight + 16, buttonWidth, buttonHeight);
+    let buttonWidth = 220;
+    let buttonHeight = 50;
+    let centerX = (width - buttonWidth) / 2;
+    let startY = this.panelY + 150;
+
+    let startStyle = {
+      fill: [255, 230, 150],
+      hoverFill: [255, 240, 190],
+      pressFill: [245, 210, 130],
+      border: [140, 100, 30, 160],
+      textColor: [60, 50, 20],
+      shadow: [0, 0, 0, 80],
+      highlight: [255, 255, 255, 160]
+    };
+
+    let quitStyle = {
+      fill: [240, 245, 250],
+      hoverFill: [255, 255, 255],
+      pressFill: [225, 232, 240],
+      border: [80, 100, 120, 120],
+      textColor: [50, 60, 70],
+      shadow: [0, 0, 0, 60],
+      highlight: [255, 255, 255, 140]
+    };
+
+    this.startButton = ui.Button("Start", centerX, startY, buttonWidth, buttonHeight, startStyle);
+    this.quitButton = ui.Button("Quit", centerX, startY + buttonHeight + 14, buttonWidth, buttonHeight, quitStyle);
   }
 
   fun update(mx, my, clicked) {
@@ -172,19 +343,21 @@ class MenuScreen {
     return null;
   }
 
-  fun draw(mx, my) {
-    gfx.clear("skyblue");
+  fun draw(mx, my, pressed) {
+    drawBackdrop(this.width, this.height, this.groundY);
+    drawGround(this.width, this.height, this.groundY);
 
-    gfx.circle("gold", 680, 90, 35);
-    gfx.rect("darkgreen", 0, this.groundY, this.width, this.height - this.groundY);
-    gfx.rectLine("black", 0, this.groundY, this.width, this.height - this.groundY);
+    gfx.rect(PANEL, this.panelX, this.panelY, this.panelW, this.panelH);
+    gfx.rect(PANEL_BORDER, this.panelX, this.panelY, this.panelW, 6);
+    gfx.rectLine(PANEL_BORDER, this.panelX, this.panelY, this.panelW, this.panelH);
+    gfx.rectLine(PANEL_STROKE, this.panelX + 1, this.panelY + 1, this.panelW - 2, this.panelH - 2);
 
-    gfx.text("Flabby Bird", 240, 120, "white", 40);
-    gfx.text("Click Start to play", 260, 180, "white", 18);
-    gfx.text("Space / W / Up to flap", 235, 210, "lightgray", 16);
+    drawCenteredText("Flabby Bird", this.panelY + 28, 42, TEXT_DARK, TEXT_SHADOW, this.width);
+    drawCenteredText("Classic arcade flight", this.panelY + 82, 16, TEXT_MUTED, null, this.width);
+    drawCenteredText("Space / W / Up to flap", this.panelY + 104, 14, TEXT_SOFT, null, this.width);
 
-    this.startButton.draw(mx, my);
-    this.quitButton.draw(mx, my);
+    this.startButton.draw(mx, my, pressed);
+    this.quitButton.draw(mx, my, pressed);
   }
 }
 
@@ -210,9 +383,9 @@ class App {
     return null;
   }
 
-  fun draw(mx, my) {
+  fun draw(mx, my, pressed) {
     if (this.screen == "menu") {
-      this.menu.draw(mx, my);
+      this.menu.draw(mx, my, pressed);
     } else {
       this.game.draw();
     }
@@ -240,6 +413,7 @@ while (running and gfx.poll()) {
   let mx = mouse["x"];
   let my = mouse["y"];
   let clicked = gfx.mouseClicked();
+  let pressed = gfx.mouseDown();
   let flap = gfx.keyPressed("space") or gfx.keyPressed("up") or gfx.keyPressed("w");
 
   let action = app.update(dt, mx, my, clicked, flap);
@@ -247,7 +421,7 @@ while (running and gfx.poll()) {
     running = false;
   }
 
-  app.draw(mx, my);
+  app.draw(mx, my, pressed);
   gfx.present();
 }
 
