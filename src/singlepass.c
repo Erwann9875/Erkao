@@ -666,6 +666,8 @@ static bool keywordSuggestion(Token found, ErkaoTokenType expected,
 }
 
 static void synchronize(Compiler* c);
+static void errorAt(Compiler* c, Token token, const char* message);
+static void errorAtCurrent(Compiler* c, const char* message);
 
 static void appendMessage(char* buffer, size_t size, const char* format, ...) {
   size_t length = strlen(buffer);
