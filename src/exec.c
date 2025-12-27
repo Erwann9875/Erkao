@@ -912,6 +912,86 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
         frame = &vm->frames[vm->frameCount - 1];
         break;
       }
+      case OP_INVOKE: {
+        ObjString* name = (ObjString*)AS_OBJ(READ_CONSTANT());
+        int argCount = READ_BYTE();
+        Value receiver = peek(vm, argCount);
+        if (!isObjType(receiver, OBJ_INSTANCE)) {
+          runtimeError(vm, currentToken(frame), "Only instances have properties.");
+          return false;
+        }
+
+        ObjInstance* instance = (ObjInstance*)AS_OBJ(receiver);
+        ObjMap* fields = instance->fields;
+        if (cache && cache->kind == IC_FIELD && cache->map == fields) {
+          int index = cache->index;
+          if (index >= 0 && index < fields->capacity &&
+              fields->entries[index].key == name) {
+            Value callee = fields->entries[index].value;
+            vm->stackTop[-argCount - 1] = callee;
+            if (!callValue(vm, callee, argCount)) return false;
+            frame = &vm->frames[vm->frameCount - 1];
+            break;
+          }
+        }
+
+        Value value;
+        int index = -1;
+        if (mapGetIndex(fields, name, &value, &index)) {
+          if (cache) {
+            cache->kind = IC_FIELD;
+            cache->map = fields;
+            cache->key = name;
+            cache->index = index;
+            cache->klass = NULL;
+            cache->method = NULL;
+          }
+          vm->stackTop[-argCount - 1] = value;
+          if (!callValue(vm, value, argCount)) return false;
+          frame = &vm->frames[vm->frameCount - 1];
+          break;
+        }
+
+        if (cache && cache->kind == IC_METHOD &&
+            cache->klass == instance->klass &&
+            cache->key == name && cache->method) {
+          ObjFunction* method = cache->method;
+          vm->stackTop[-argCount - 1] = OBJ_VAL(method);
+          if (!callFunction(vm, method, receiver, true, argCount)) return false;
+          frame = &vm->frames[vm->frameCount - 1];
+          break;
+        }
+
+        ObjFunction* method = NULL;
+        if (findMethodByName(instance->klass, name, &method)) {
+          if (cache) {
+            cache->kind = IC_METHOD;
+            cache->klass = instance->klass;
+            cache->key = name;
+            cache->method = method;
+            cache->map = NULL;
+            cache->index = -1;
+          }
+          vm->stackTop[-argCount - 1] = OBJ_VAL(method);
+          if (!callFunction(vm, method, receiver, true, argCount)) return false;
+          frame = &vm->frames[vm->frameCount - 1];
+          break;
+        }
+
+        {
+          char suggestion[64];
+          char message[256];
+          if (suggestNameFromInstance(instance, name->chars, name->length,
+                                      suggestion, sizeof(suggestion))) {
+            snprintf(message, sizeof(message),
+                     "Undefined property. Did you mean '%s'?", suggestion);
+            runtimeError(vm, currentToken(frame), message);
+          } else {
+            runtimeError(vm, currentToken(frame), "Undefined property.");
+          }
+        }
+        return false;
+      }
       case OP_ARG_COUNT:
         push(vm, NUMBER_VAL((double)frame->argCount));
         break;

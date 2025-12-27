@@ -49,6 +49,19 @@ static int byteInstruction(const char* name, const Chunk* chunk, int offset) {
   return offset + 2;
 }
 
+static int invokeInstruction(const char* name, const Chunk* chunk, int offset) {
+  uint16_t constant = (uint16_t)((chunk->code[offset + 1] << 8) | chunk->code[offset + 2]);
+  uint8_t argc = chunk->code[offset + 3];
+  printf("%-16s %4u argc=%u '", name, constant, argc);
+  if (constant < (uint16_t)chunk->constantsCount) {
+    printValue(chunk->constants[constant]);
+  } else {
+    printf("<invalid>");
+  }
+  printf("'\n");
+  return offset + 4;
+}
+
 static int jumpInstruction(const char* name, int sign, const Chunk* chunk, int offset) {
   uint16_t jump = (uint16_t)((chunk->code[offset + 1] << 8) | chunk->code[offset + 2]);
   int destination = offset + 3 + sign * (int)jump;
@@ -126,6 +139,8 @@ static int disassembleInstruction(const Chunk* chunk, int offset) {
       return byteInstruction("OP_CALL", chunk, offset);
     case OP_CALL_OPTIONAL:
       return byteInstruction("OP_CALL_OPTIONAL", chunk, offset);
+    case OP_INVOKE:
+      return invokeInstruction("OP_INVOKE", chunk, offset);
     case OP_ARG_COUNT:
       return simpleInstruction("OP_ARG_COUNT", chunk, offset);
     case OP_CLOSURE:

@@ -38,6 +38,460 @@ static bool constValueIsTruthy(const ConstValue* v) {
   return true;
 }
 
+static bool constValueFromValue(Value value, ConstValue* out) {
+  out->ownsString = false;
+  if (IS_NULL(value)) {
+    out->type = CONST_NULL;
+    return true;
+  }
+  if (IS_BOOL(value)) {
+    out->type = CONST_BOOL;
+    out->as.boolean = AS_BOOL(value);
+    return true;
+  }
+  if (IS_NUMBER(value)) {
+    out->type = CONST_NUMBER;
+    out->as.number = AS_NUMBER(value);
+    return true;
+  }
+  if (isObjType(value, OBJ_STRING)) {
+    ObjString* str = (ObjString*)AS_OBJ(value);
+    out->type = CONST_STRING;
+    out->as.string.chars = str->chars;
+    out->as.string.length = str->length;
+    return true;
+  }
+  return false;
+}
+
+static bool constValueEquals(const ConstValue* a, const ConstValue* b) {
+  if (a->type != b->type) return false;
+  switch (a->type) {
+    case CONST_NULL:
+      return true;
+    case CONST_BOOL:
+      return a->as.boolean == b->as.boolean;
+    case CONST_NUMBER:
+      return a->as.number == b->as.number;
+    case CONST_STRING:
+      if (a->as.string.length != b->as.string.length) return false;
+      return memcmp(a->as.string.chars, b->as.string.chars,
+                    (size_t)a->as.string.length) == 0;
+  }
+  return false;
+}
+
+static bool constValueConcat(const ConstValue* a, const ConstValue* b, ConstValue* out) {
+  if (a->type != CONST_STRING || b->type != CONST_STRING) return false;
+  int length = a->as.string.length + b->as.string.length;
+  char* buffer = (char*)malloc((size_t)length + 1);
+  if (!buffer) {
+    fprintf(stderr, "Out of memory.\n");
+    exit(1);
+  }
+  memcpy(buffer, a->as.string.chars, (size_t)a->as.string.length);
+  memcpy(buffer + a->as.string.length, b->as.string.chars, (size_t)b->as.string.length);
+  buffer[length] = '\0';
+  out->type = CONST_STRING;
+  out->ownsString = true;
+  out->as.string.chars = buffer;
+  out->as.string.length = length;
+  return true;
+}
+
+static bool constValueStringify(const ConstValue* input, ConstValue* out) {
+  if (input->type == CONST_STRING) {
+    *out = *input;
+    out->ownsString = false;
+    return true;
+  }
+
+  char buffer[128];
+  const char* text = NULL;
+  int length = 0;
+  switch (input->type) {
+    case CONST_NULL:
+      text = "null";
+      length = 4;
+      break;
+    case CONST_BOOL:
+      if (input->as.boolean) {
+        text = "true";
+        length = 4;
+      } else {
+        text = "false";
+        length = 5;
+      }
+      break;
+    case CONST_NUMBER:
+      length = snprintf(buffer, sizeof(buffer), "%g", input->as.number);
+      if (length < 0) length = 0;
+      if (length >= (int)sizeof(buffer)) {
+        length = (int)sizeof(buffer) - 1;
+      }
+      text = buffer;
+      break;
+    case CONST_STRING:
+      break;
+  }
+
+  if (!text) return false;
+  char* copy = (char*)malloc((size_t)length + 1);
+  if (!copy) {
+    fprintf(stderr, "Out of memory.\n");
+    exit(1);
+  }
+  memcpy(copy, text, (size_t)length);
+  copy[length] = '\0';
+  out->type = CONST_STRING;
+  out->ownsString = true;
+  out->as.string.chars = copy;
+  out->as.string.length = length;
+  return true;
+}
+
+typedef struct {
+  uint8_t op;
+  int offset;
+  int length;
+  Token token;
+} InstrInfo;
+
+typedef struct {
+  uint8_t* code;
+  Token* tokens;
+  InlineCache* caches;
+  int count;
+  int capacity;
+} CodeBuilder;
+
+static void codeBuilderInit(CodeBuilder* out) {
+  out->code = NULL;
+  out->tokens = NULL;
+  out->caches = NULL;
+  out->count = 0;
+  out->capacity = 0;
+}
+
+static void codeBuilderFree(CodeBuilder* out) {
+  FREE_ARRAY(uint8_t, out->code, out->capacity);
+  FREE_ARRAY(Token, out->tokens, out->capacity);
+  FREE_ARRAY(InlineCache, out->caches, out->capacity);
+  codeBuilderInit(out);
+}
+
+static void codeBuilderEnsure(CodeBuilder* out, int needed) {
+  if (out->capacity >= needed) return;
+  int oldCapacity = out->capacity;
+  out->capacity = GROW_CAPACITY(oldCapacity);
+  while (out->capacity < needed) {
+    out->capacity = GROW_CAPACITY(out->capacity);
+  }
+  out->code = GROW_ARRAY(uint8_t, out->code, oldCapacity, out->capacity);
+  out->tokens = GROW_ARRAY(Token, out->tokens, oldCapacity, out->capacity);
+  out->caches = GROW_ARRAY(InlineCache, out->caches, oldCapacity, out->capacity);
+  if (out->caches) {
+    memset(out->caches + oldCapacity, 0,
+           sizeof(InlineCache) * (size_t)(out->capacity - oldCapacity));
+  }
+}
+
+static void codeEmitByte(CodeBuilder* out, uint8_t byte, Token token) {
+  codeBuilderEnsure(out, out->count + 1);
+  out->code[out->count] = byte;
+  out->tokens[out->count] = token;
+  if (out->caches) {
+    memset(&out->caches[out->count], 0, sizeof(InlineCache));
+  }
+  out->count++;
+}
+
+static void codeEmitShort(CodeBuilder* out, uint16_t value, Token token) {
+  codeEmitByte(out, (uint8_t)((value >> 8) & 0xff), token);
+  codeEmitByte(out, (uint8_t)(value & 0xff), token);
+}
+
+static int instructionLength(uint8_t op) {
+  switch (op) {
+    case OP_CONSTANT:
+    case OP_GET_VAR:
+    case OP_SET_VAR:
+    case OP_DEFINE_VAR:
+    case OP_DEFINE_CONST:
+    case OP_GET_PROPERTY:
+    case OP_GET_PROPERTY_OPTIONAL:
+    case OP_SET_PROPERTY:
+    case OP_GET_THIS:
+    case OP_CLOSURE:
+    case OP_EXPORT:
+    case OP_JUMP:
+    case OP_JUMP_IF_FALSE:
+    case OP_LOOP:
+    case OP_ARRAY:
+    case OP_MAP:
+      return 3;
+    case OP_CALL:
+    case OP_CALL_OPTIONAL:
+      return 2;
+    case OP_INVOKE:
+      return 4;
+    case OP_CLASS:
+      return 5;
+    case OP_IMPORT:
+      return 4;
+    default:
+      return 1;
+  }
+}
+
+static bool instrPushesConst(const Chunk* chunk, const InstrInfo* instr, ConstValue* out) {
+  switch (instr->op) {
+    case OP_TRUE:
+      out->type = CONST_BOOL;
+      out->ownsString = false;
+      out->as.boolean = true;
+      return true;
+    case OP_FALSE:
+      out->type = CONST_BOOL;
+      out->ownsString = false;
+      out->as.boolean = false;
+      return true;
+    case OP_NULL:
+      out->type = CONST_NULL;
+      out->ownsString = false;
+      return true;
+    case OP_CONSTANT: {
+      uint16_t index = (uint16_t)((chunk->code[instr->offset + 1] << 8) |
+                                  chunk->code[instr->offset + 2]);
+      if (index >= (uint16_t)chunk->constantsCount) return false;
+      return constValueFromValue(chunk->constants[index], out);
+    }
+    default:
+      return false;
+  }
+}
+
+static bool emitConstValue(VM* vm, Chunk* chunk, CodeBuilder* out,
+                           const ConstValue* value, Token token) {
+  switch (value->type) {
+    case CONST_NULL:
+      codeEmitByte(out, OP_NULL, token);
+      return true;
+    case CONST_BOOL:
+      codeEmitByte(out, value->as.boolean ? OP_TRUE : OP_FALSE, token);
+      return true;
+    case CONST_NUMBER: {
+      int constant = addConstant(chunk, NUMBER_VAL(value->as.number));
+      if (constant > UINT16_MAX) return false;
+      codeEmitByte(out, OP_CONSTANT, token);
+      codeEmitShort(out, (uint16_t)constant, token);
+      return true;
+    }
+    case CONST_STRING: {
+      ObjString* str = copyStringWithLength(vm, value->as.string.chars,
+                                            value->as.string.length);
+      int constant = addConstant(chunk, OBJ_VAL(str));
+      if (constant > UINT16_MAX) return false;
+      codeEmitByte(out, OP_CONSTANT, token);
+      codeEmitShort(out, (uint16_t)constant, token);
+      return true;
+    }
+  }
+  return false;
+}
+
+static void emitInstructionRaw(CodeBuilder* out, const Chunk* chunk,
+                               const InstrInfo* instr) {
+  for (int i = 0; i < instr->length; i++) {
+    codeEmitByte(out, chunk->code[instr->offset + i],
+                 chunk->tokens[instr->offset + i]);
+  }
+}
+
+static void optimizeChunk(VM* vm, Chunk* chunk) {
+  if (!chunk || chunk->count == 0) return;
+  int capacity = 64;
+  int instrCount = 0;
+  InstrInfo* instrs = (InstrInfo*)malloc(sizeof(InstrInfo) * (size_t)capacity);
+  if (!instrs) {
+    fprintf(stderr, "Out of memory.\n");
+    exit(1);
+  }
+
+  int offset = 0;
+  while (offset < chunk->count) {
+    if (instrCount >= capacity) {
+      int oldCap = capacity;
+      capacity = GROW_CAPACITY(oldCap);
+      instrs = GROW_ARRAY(InstrInfo, instrs, oldCap, capacity);
+      if (!instrs) {
+        fprintf(stderr, "Out of memory.\n");
+        exit(1);
+      }
+    }
+    uint8_t op = chunk->code[offset];
+    int length = instructionLength(op);
+    if (offset + length > chunk->count) {
+      length = 1;
+    }
+    instrs[instrCount].op = op;
+    instrs[instrCount].offset = offset;
+    instrs[instrCount].length = length;
+    instrs[instrCount].token = chunk->tokens[offset];
+    instrCount++;
+    offset += length;
+  }
+
+  CodeBuilder out;
+  codeBuilderInit(&out);
+
+  for (int i = 0; i < instrCount; ) {
+    ConstValue a;
+    ConstValue b;
+    ConstValue result;
+
+    if (i + 1 < instrCount &&
+        instrPushesConst(chunk, &instrs[i], &a)) {
+      uint8_t op = instrs[i + 1].op;
+      if (op == OP_NEGATE && a.type == CONST_NUMBER) {
+        result.type = CONST_NUMBER;
+        result.ownsString = false;
+        result.as.number = -a.as.number;
+        if (emitConstValue(vm, chunk, &out, &result, instrs[i + 1].token)) {
+          i += 2;
+          continue;
+        }
+      }
+      if (op == OP_NOT) {
+        result.type = CONST_BOOL;
+        result.ownsString = false;
+        result.as.boolean = !constValueIsTruthy(&a);
+        if (emitConstValue(vm, chunk, &out, &result, instrs[i + 1].token)) {
+          i += 2;
+          continue;
+        }
+      }
+      if (op == OP_STRINGIFY) {
+        if (constValueStringify(&a, &result)) {
+          bool emitted = emitConstValue(vm, chunk, &out, &result, instrs[i + 1].token);
+          constValueFree(&result);
+          if (emitted) {
+            i += 2;
+            continue;
+          }
+        }
+      }
+    }
+
+    if (i + 2 < instrCount &&
+        instrPushesConst(chunk, &instrs[i], &a) &&
+        instrPushesConst(chunk, &instrs[i + 1], &b)) {
+      uint8_t op = instrs[i + 2].op;
+      bool folded = false;
+      switch (op) {
+        case OP_ADD:
+          if (a.type == CONST_NUMBER && b.type == CONST_NUMBER) {
+            result.type = CONST_NUMBER;
+            result.ownsString = false;
+            result.as.number = a.as.number + b.as.number;
+            folded = true;
+          } else if (constValueConcat(&a, &b, &result)) {
+            folded = true;
+          }
+          break;
+        case OP_SUBTRACT:
+          if (a.type == CONST_NUMBER && b.type == CONST_NUMBER) {
+            result.type = CONST_NUMBER;
+            result.ownsString = false;
+            result.as.number = a.as.number - b.as.number;
+            folded = true;
+          }
+          break;
+        case OP_MULTIPLY:
+          if (a.type == CONST_NUMBER && b.type == CONST_NUMBER) {
+            result.type = CONST_NUMBER;
+            result.ownsString = false;
+            result.as.number = a.as.number * b.as.number;
+            folded = true;
+          }
+          break;
+        case OP_DIVIDE:
+          if (a.type == CONST_NUMBER && b.type == CONST_NUMBER) {
+            result.type = CONST_NUMBER;
+            result.ownsString = false;
+            result.as.number = a.as.number / b.as.number;
+            folded = true;
+          }
+          break;
+        case OP_EQUAL:
+          result.type = CONST_BOOL;
+          result.ownsString = false;
+          result.as.boolean = constValueEquals(&a, &b);
+          folded = true;
+          break;
+        case OP_GREATER:
+          if (a.type == CONST_NUMBER && b.type == CONST_NUMBER) {
+            result.type = CONST_BOOL;
+            result.ownsString = false;
+            result.as.boolean = a.as.number > b.as.number;
+            folded = true;
+          }
+          break;
+        case OP_GREATER_EQUAL:
+          if (a.type == CONST_NUMBER && b.type == CONST_NUMBER) {
+            result.type = CONST_BOOL;
+            result.ownsString = false;
+            result.as.boolean = a.as.number >= b.as.number;
+            folded = true;
+          }
+          break;
+        case OP_LESS:
+          if (a.type == CONST_NUMBER && b.type == CONST_NUMBER) {
+            result.type = CONST_BOOL;
+            result.ownsString = false;
+            result.as.boolean = a.as.number < b.as.number;
+            folded = true;
+          }
+          break;
+        case OP_LESS_EQUAL:
+          if (a.type == CONST_NUMBER && b.type == CONST_NUMBER) {
+            result.type = CONST_BOOL;
+            result.ownsString = false;
+            result.as.boolean = a.as.number <= b.as.number;
+            folded = true;
+          }
+          break;
+        default:
+          break;
+      }
+
+      if (folded) {
+        if (emitConstValue(vm, chunk, &out, &result, instrs[i + 2].token)) {
+          constValueFree(&result);
+          i += 3;
+          continue;
+        }
+        constValueFree(&result);
+      }
+    }
+
+    emitInstructionRaw(&out, chunk, &instrs[i]);
+    i++;
+  }
+
+  free(instrs);
+
+  FREE_ARRAY(uint8_t, chunk->code, chunk->capacity);
+  FREE_ARRAY(Token, chunk->tokens, chunk->capacity);
+  FREE_ARRAY(InlineCache, chunk->caches, chunk->capacity);
+
+  chunk->code = out.code;
+  chunk->tokens = out.tokens;
+  chunk->caches = out.caches;
+  chunk->count = out.count;
+  chunk->capacity = out.capacity;
+}
+
 static bool isAtEnd(Compiler* c) {
   return c->tokens->tokens[c->current].type == TOKEN_EOF;
 }
@@ -665,6 +1119,22 @@ static void dot(Compiler* c, bool canAssign) {
     expression(c);
     emitByte(c, OP_SET_PROPERTY, name);
     emitShort(c, (uint16_t)nameIdx, name);
+  } else if (check(c, TOKEN_LEFT_PAREN)) {
+    Token paren = advance(c);
+    int argc = 0;
+    if (!check(c, TOKEN_RIGHT_PAREN)) {
+      do {
+        if (argc >= ERK_MAX_ARGS) {
+          errorAtCurrent(c, "Too many arguments.");
+        }
+        expression(c);
+        argc++;
+      } while (match(c, TOKEN_COMMA));
+    }
+    consume(c, TOKEN_RIGHT_PAREN, "Expect ')' after arguments.");
+    emitByte(c, OP_INVOKE, paren);
+    emitShort(c, (uint16_t)nameIdx, name);
+    emitByte(c, (uint8_t)argc, paren);
   } else {
     emitByte(c, OP_GET_PROPERTY, name);
     emitShort(c, (uint16_t)nameIdx, name);
@@ -1588,6 +2058,7 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer)
     return NULL;
   }
 
+  optimizeChunk(c->vm, chunk);
   return function;
 }
 
@@ -1630,5 +2101,6 @@ ObjFunction* compile(VM* vm, const TokenArray* tokens, const char* source,
   if (c.hadError) {
     return NULL;
   }
+  optimizeChunk(vm, chunk);
   return function;
 }
