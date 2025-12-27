@@ -1,0 +1,142 @@
+{
+  "name": "Erkao",
+  "scopeName": "source.erkao",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#function-decl" },
+    { "include": "#class-decl" },
+    { "include": "#storage" },
+    { "include": "#keywords" },
+    { "include": "#constants" },
+    { "include": "#this" },
+    { "include": "#operators" },
+    { "include": "#builtins" },
+    { "include": "#modules" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.erkao",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.erkao",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.erkao",
+      "begin": "\"",
+      "end": "\"",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.string.begin.erkao" }
+      },
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.string.end.erkao" }
+      },
+      "patterns": [
+        {
+          "name": "constant.character.escape.erkao",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.erkao",
+          "match": "\\b\\d+(?:\\.\\d+)?\\b"
+        }
+      ]
+    },
+    "function-decl": {
+      "patterns": [
+        {
+          "name": "meta.function.erkao",
+          "match": "\\b(fun)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.function.erkao" },
+            "2": { "name": "entity.name.function.erkao" }
+          }
+        }
+      ]
+    },
+    "class-decl": {
+      "patterns": [
+        {
+          "name": "meta.class.erkao",
+          "match": "\\b(class)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.class.erkao" },
+            "2": { "name": "entity.name.type.class.erkao" }
+          }
+        }
+      ]
+    },
+    "storage": {
+      "patterns": [
+        {
+          "name": "storage.type.variable.erkao",
+          "match": "\\blet\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.erkao",
+          "match": "\\b(?:if|else|while|for|foreach|switch|case|default|break|continue|return|import|from|as|in)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.erkao",
+          "match": "\\b(?:true|false)\\b"
+        },
+        {
+          "name": "constant.language.null.erkao",
+          "match": "\\bnull\\b"
+        }
+      ]
+    },
+    "this": {
+      "patterns": [
+        {
+          "name": "variable.language.this.erkao",
+          "match": "\\bthis\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.logical.erkao",
+          "match": "\\b(?:and|or)\\b"
+        }
+      ]
+    },
+    "builtins": {
+      "patterns": [
+        {
+          "name": "support.function.erkao",
+          "match": "\\b(?:print|clock|type|len|args|push|keys|values)\\b"
+        }
+      ]
+    },
+    "modules": {
+      "patterns": [
+        {
+          "name": "support.module.erkao",
+          "match": "\\b(?:fs|path|json|math|time|http|proc|env|plugin|gfx)\\b"
+        }
+      ]
+    }
+  }
+}

@@ -102,6 +102,21 @@ Backward-compatible shorthand:
 ./build/Debug/erkao.exe ./examples/hello.ek
 ```
 
+## VS Code syntax highlighting
+
+This repo includes a minimal VS Code extension for `.ek` syntax highlighting
+at `vscode/erkao-syntax`.
+
+Run it in development mode:
+
+```powershell
+# From the repo root
+code --extensionDevelopmentPath="$PWD\\vscode\\erkao-syntax"
+```
+
+Or open `vscode/erkao-syntax` in VS Code and press `F5` to launch the Extension
+Development Host, then open any `.ek` file.
+
 Format a file:
 
 ```sh

@@ -1,0 +1,35 @@
+{
+  "name": "erkao-syntax",
+  "displayName": "Erkao Syntax",
+  "description": "Syntax highlighting for Erkao (.ek) files.",
+  "version": "0.0.1",
+  "publisher": "erkao",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "erkao",
+        "aliases": [
+          "Erkao",
+          "erkao"
+        ],
+        "extensions": [
+          ".ek"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "erkao",
+        "scopeName": "source.erkao",
+        "path": "./syntaxes/erkao.tmLanguage.json"
+      }
+    ]
+  }
+}
