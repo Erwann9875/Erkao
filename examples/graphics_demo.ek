@@ -1,55 +1,156 @@
-gfx.init(800, 600, "Erkao Graphics Demo");
+gfx.init(800, 600, "Erkao Flabby Bird");
 gfx.fps(60);
 
-let playerX = 400;
-let playerY = 300;
-let speed = 200;
-let radius = 25;
+let width = 800;
+let height = 600;
+let groundY = height - 80;
+
+let birdX = 180;
+let birdY = height / 2;
+let birdRadius = 14;
+let birdVel = 0;
+
+let gravity = 900;
+let jumpVel = -320;
+
+let pipeWidth = 70;
+let pipeGap = 170;
+let pipeSpeed = 220;
+let spawnInterval = 1.35;
+let spawnTimer = 0;
+
+let pipes = [];
+let score = 0;
+let best = 0;
+let state = "ready";
+
+let seed = time.now() * 1000;
+seed = seed - math.floor(seed / 233280) * 233280;
+
+fun rand() {
+  seed = seed * 9301 + 49297;
+  seed = seed - math.floor(seed / 233280) * 233280;
+  return seed / 233280;
+}
+
+fun randRange(min, max) {
+  return min + (max - min) * rand();
+}
+
+fun toText(value) {
+  return json.stringify(value);
+}
+
+fun resetGame() {
+  birdY = height / 2;
+  birdVel = 0;
+  pipes = [];
+  spawnTimer = 0;
+  score = 0;
+}
+
+let lastTime = gfx.time();
 
 while (gfx.poll()) {
-  let dt = 0.016;
-  
-  if (gfx.key("left") or gfx.key("a")) {
-    playerX = playerX - speed * dt;
+  let now = gfx.time();
+  let dt = now - lastTime;
+  lastTime = now;
+  if (dt > 0.05) { dt = 0.05; }
+
+  let flap = gfx.keyPressed("space") or gfx.keyPressed("up") or gfx.keyPressed("w");
+
+  if (state == "ready") {
+    if (flap) {
+      state = "playing";
+      birdVel = jumpVel;
+    }
+  } else if (state == "playing") {
+    if (flap) { birdVel = jumpVel; }
+
+    birdVel = birdVel + gravity * dt;
+    birdY = birdY + birdVel * dt;
+
+    spawnTimer = spawnTimer + dt;
+    if (spawnTimer >= spawnInterval) {
+      spawnTimer = 0;
+      let gapY = randRange(140, groundY - 140);
+      let pipe = { x: width + 20, gapY: gapY, passed: false };
+      push(pipes, pipe);
+    }
+
+    let newPipes = [];
+    let i = 0;
+    while (i < len(pipes)) {
+      let pipe = pipes[i];
+      pipe["x"] = pipe["x"] - pipeSpeed * dt;
+
+      if (!pipe["passed"] and pipe["x"] + pipeWidth < birdX) {
+        pipe["passed"] = true;
+        score = score + 1;
+        if (score > best) { best = score; }
+      }
+
+      let gapTop = pipe["gapY"] - pipeGap / 2;
+      let gapBottom = pipe["gapY"] + pipeGap / 2;
+      let hitX = birdX + birdRadius > pipe["x"] and birdX - birdRadius < pipe["x"] + pipeWidth;
+      if (hitX and (birdY - birdRadius < gapTop or birdY + birdRadius > gapBottom)) {
+        state = "gameover";
+      }
+
+      if (pipe["x"] + pipeWidth > -20) {
+        push(newPipes, pipe);
+      }
+
+      i = i + 1;
+    }
+    pipes = newPipes;
+
+    if (birdY + birdRadius >= groundY or birdY - birdRadius <= 0) {
+      state = "gameover";
+    }
+  } else if (state == "gameover") {
+    if (flap) {
+      resetGame();
+      state = "playing";
+      birdVel = jumpVel;
+    }
   }
-  if (gfx.key("right") or gfx.key("d")) {
-    playerX = playerX + speed * dt;
+
+  gfx.clear("skyblue");
+
+  gfx.circle("gold", 680, 90, 35);
+
+  let j = 0;
+  while (j < len(pipes)) {
+    let pipe = pipes[j];
+    let gapTop = pipe["gapY"] - pipeGap / 2;
+    let gapBottom = pipe["gapY"] + pipeGap / 2;
+    gfx.rect("green", pipe["x"], 0, pipeWidth, gapTop);
+    gfx.rect("green", pipe["x"], gapBottom, pipeWidth, groundY - gapBottom);
+    gfx.rectLine("darkgreen", pipe["x"], 0, pipeWidth, gapTop);
+    gfx.rectLine("darkgreen", pipe["x"], gapBottom, pipeWidth, groundY - gapBottom);
+    j = j + 1;
   }
-  if (gfx.key("up") or gfx.key("w")) {
-    playerY = playerY - speed * dt;
+
+  gfx.rect("darkgreen", 0, groundY, width, height - groundY);
+  gfx.rectLine("black", 0, groundY, width, height - groundY);
+
+  gfx.circle("yellow", birdX, birdY, birdRadius);
+  gfx.circleLine("orange", birdX, birdY, birdRadius);
+
+  gfx.text("Score: " + toText(score), 12, 10, "white", 20);
+  gfx.text("Best: " + toText(best), 12, 34, "white", 16);
+
+  if (state == "ready") {
+    gfx.text("Flabby Bird", 270, 160, "white", 34);
+    gfx.text("Press SPACE / W / UP to flap", 200, 210, "lightgray", 18);
+  } else if (state == "gameover") {
+    gfx.text("Game Over", 290, 160, "white", 32);
+    gfx.text("Press SPACE to restart", 230, 210, "lightgray", 18);
   }
-  if (gfx.key("down") or gfx.key("s")) {
-    playerY = playerY + speed * dt;
-  }
-
-  if (playerX < radius) { playerX = radius; }
-  if (playerX > 800 - radius) { playerX = 800 - radius; }
-  if (playerY < radius) { playerY = radius; }
-  if (playerY > 600 - radius) { playerY = 600 - radius; }
-
-  gfx.clear("darkblue");
-
-  gfx.rectLine("red", 100, 100, 40, 40);
-  gfx.rectLine("blue", 200, 150, 30, 30);
-  gfx.rectLine("green", 350, 80, 50, 50);
-  gfx.rectLine("yellow", 500, 200, 35, 35);
-  gfx.rectLine("purple", 650, 120, 45, 45);
-  gfx.rectLine("orange", 150, 400, 40, 40);
-  gfx.rectLine("cyan", 400, 450, 55, 55);
-  gfx.rectLine("pink", 600, 500, 30, 30);
-
-  gfx.circle("cyan", playerX, playerY, radius);
-  gfx.circleLine("white", playerX, playerY, radius);
-
-  gfx.text("Erkao Graphics Demo", 10, 10, "white", 24);
-  gfx.text("Use arrow keys or WASD to move", 10, 40, "lightgray", 16);
-  gfx.text("Press ESC to quit", 10, 60, "lightgray", 16);
-
-  let mouse = gfx.mouse();
-  gfx.circleLine("yellow", mouse["x"], mouse["y"], 10);
 
   gfx.present();
 }
 
 gfx.quit();
-print("Thanks for playing!");
+print("Done.");
