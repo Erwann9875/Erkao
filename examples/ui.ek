@@ -1,0 +1,37 @@
+class Button {
+  fun init(label, x, y, w, h) {
+    this.label = label;
+    this.x = x;
+    this.y = y;
+    this.w = w;
+    this.h = h;
+    this.textSize = 22;
+  }
+
+  fun contains(px, py) {
+    return px >= this.x and px <= this.x + this.w and
+           py >= this.y and py <= this.y + this.h;
+  }
+
+  fun draw(mx, my) {
+    let hover = this.contains(mx, my);
+    let fill = "white";
+    let border = "black";
+    if (hover) {
+      fill = "gold";
+      border = "orange";
+    }
+
+    gfx.rect(fill, this.x, this.y, this.w, this.h);
+    gfx.rectLine(border, this.x, this.y, this.w, this.h);
+
+    let approxWidth = len(this.label) * this.textSize * 0.55;
+    let textX = this.x + (this.w - approxWidth) / 2;
+    let textY = this.y + (this.h - this.textSize) / 2 - 2;
+    gfx.text(this.label, textX, textY, "black", this.textSize);
+  }
+
+  fun clicked(px, py, pressed) {
+    return pressed and this.contains(px, py);
+  }
+}

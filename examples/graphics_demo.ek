@@ -1,154 +1,253 @@
-gfx.init(800, 600, "Erkao Flabby Bird");
-gfx.fps(60);
-
-let width = 800;
-let height = 600;
-let groundY = height - 80;
-
-let birdX = 180;
-let birdY = height / 2;
-let birdRadius = 14;
-let birdVel = 0;
-
-let gravity = 900;
-let jumpVel = -320;
-
-let pipeWidth = 70;
-let pipeGap = 170;
-let pipeSpeed = 220;
-let spawnInterval = 1.35;
-let spawnTimer = 0;
-
-let pipes = [];
-let score = 0;
-let best = 0;
-let state = "ready";
-
-let seed = time.now() * 1000;
-seed = seed - math.floor(seed / 233280) * 233280;
-
-fun rand() {
-  seed = seed * 9301 + 49297;
-  seed = seed - math.floor(seed / 233280) * 233280;
-  return seed / 233280;
-}
-
-fun randRange(min, max) {
-  return min + (max - min) * rand();
-}
+import "./ui.ek" as ui;
 
 fun toText(value) {
   return json.stringify(value);
 }
 
-fun resetGame() {
-  birdY = height / 2;
-  birdVel = 0;
-  pipes = [];
-  spawnTimer = 0;
-  score = 0;
-}
+class FlabbyBirdGame {
+  fun init(width, height) {
+    this.width = width;
+    this.height = height;
+    this.groundY = height - 80;
 
-let lastTime = gfx.time();
+    this.birdX = 180;
+    this.birdRadius = 14;
+    this.gravity = 900;
+    this.jumpVel = -320;
 
-while (gfx.poll()) {
-  let now = gfx.time();
-  let dt = now - lastTime;
-  lastTime = now;
-  if (dt > 0.05) { dt = 0.05; }
+    this.pipeWidth = 70;
+    this.pipeGap = 170;
+    this.pipeSpeed = 220;
+    this.spawnInterval = 1.35;
 
-  let flap = gfx.keyPressed("space") or gfx.keyPressed("up") or gfx.keyPressed("w");
+    this.best = 0;
 
-  if (state == "ready") {
-    if (flap) {
-      state = "playing";
-      birdVel = jumpVel;
-    }
-  } else if (state == "playing") {
-    if (flap) { birdVel = jumpVel; }
+    this.seed = time.now() * 1000;
+    this.seed = this.seed - math.floor(this.seed / 233280) * 233280;
 
-    birdVel = birdVel + gravity * dt;
-    birdY = birdY + birdVel * dt;
+    this.reset();
+  }
 
-    spawnTimer = spawnTimer + dt;
-    if (spawnTimer >= spawnInterval) {
-      spawnTimer = 0;
-      let gapY = randRange(140, groundY - 140);
-      let pipe = { x: width + 20, gapY: gapY, passed: false };
-      push(pipes, pipe);
-    }
+  fun reset() {
+    this.birdY = this.height / 2;
+    this.birdVel = 0;
+    this.pipes = [];
+    this.spawnTimer = 0;
+    this.score = 0;
+    this.state = "playing";
+  }
 
+  fun rand() {
+    this.seed = this.seed * 9301 + 49297;
+    this.seed = this.seed - math.floor(this.seed / 233280) * 233280;
+    return this.seed / 233280;
+  }
+
+  fun randRange(min, max) {
+    return min + (max - min) * this.rand();
+  }
+
+  fun spawnPipe() {
+    let gapY = this.randRange(140, this.groundY - 140);
+    let pipe = { x: this.width + 20, gapY: gapY, passed: false };
+    push(this.pipes, pipe);
+  }
+
+  fun updatePipes(dt) {
     let newPipes = [];
     let i = 0;
-    while (i < len(pipes)) {
-      let pipe = pipes[i];
-      pipe["x"] = pipe["x"] - pipeSpeed * dt;
+    while (i < len(this.pipes)) {
+      let pipe = this.pipes[i];
+      pipe["x"] = pipe["x"] - this.pipeSpeed * dt;
 
-      if (!pipe["passed"] and pipe["x"] + pipeWidth < birdX) {
+      if (!pipe["passed"] and pipe["x"] + this.pipeWidth < this.birdX) {
         pipe["passed"] = true;
-        score = score + 1;
-        if (score > best) { best = score; }
+        this.score = this.score + 1;
+        if (this.score > this.best) { this.best = this.score; }
       }
 
-      let gapTop = pipe["gapY"] - pipeGap / 2;
-      let gapBottom = pipe["gapY"] + pipeGap / 2;
-      let hitX = birdX + birdRadius > pipe["x"] and birdX - birdRadius < pipe["x"] + pipeWidth;
-      if (hitX and (birdY - birdRadius < gapTop or birdY + birdRadius > gapBottom)) {
-        state = "gameover";
+      let gapTop = pipe["gapY"] - this.pipeGap / 2;
+      let gapBottom = pipe["gapY"] + this.pipeGap / 2;
+      let hitX = this.birdX + this.birdRadius > pipe["x"] and
+                 this.birdX - this.birdRadius < pipe["x"] + this.pipeWidth;
+      if (hitX and (this.birdY - this.birdRadius < gapTop or
+                    this.birdY + this.birdRadius > gapBottom)) {
+        this.state = "gameover";
       }
 
-      if (pipe["x"] + pipeWidth > -20) {
+      if (pipe["x"] + this.pipeWidth > -20) {
         push(newPipes, pipe);
       }
 
       i = i + 1;
     }
-    pipes = newPipes;
+    this.pipes = newPipes;
+  }
 
-    if (birdY + birdRadius >= groundY or birdY - birdRadius <= 0) {
-      state = "gameover";
+  fun update(dt, flap) {
+    if (this.state == "playing") {
+      if (flap) { this.birdVel = this.jumpVel; }
+
+      this.birdVel = this.birdVel + this.gravity * dt;
+      this.birdY = this.birdY + this.birdVel * dt;
+
+      this.spawnTimer = this.spawnTimer + dt;
+      if (this.spawnTimer >= this.spawnInterval) {
+        this.spawnTimer = 0;
+        this.spawnPipe();
+      }
+
+      this.updatePipes(dt);
+
+      if (this.birdY + this.birdRadius >= this.groundY or
+          this.birdY - this.birdRadius <= 0) {
+        this.state = "gameover";
+      }
+    } else if (this.state == "gameover") {
+      if (flap) {
+        this.reset();
+      }
     }
-  } else if (state == "gameover") {
-    if (flap) {
-      resetGame();
-      state = "playing";
-      birdVel = jumpVel;
+  }
+
+  fun drawPipes() {
+    let j = 0;
+    while (j < len(this.pipes)) {
+      let pipe = this.pipes[j];
+      let gapTop = pipe["gapY"] - this.pipeGap / 2;
+      let gapBottom = pipe["gapY"] + this.pipeGap / 2;
+      gfx.rect("green", pipe["x"], 0, this.pipeWidth, gapTop);
+      gfx.rect("green", pipe["x"], gapBottom, this.pipeWidth, this.groundY - gapBottom);
+      gfx.rectLine("darkgreen", pipe["x"], 0, this.pipeWidth, gapTop);
+      gfx.rectLine("darkgreen", pipe["x"], gapBottom, this.pipeWidth, this.groundY - gapBottom);
+      j = j + 1;
     }
   }
 
-  gfx.clear("skyblue");
+  fun draw() {
+    gfx.clear("skyblue");
 
-  gfx.circle("gold", 680, 90, 35);
+    gfx.circle("gold", 680, 90, 35);
 
-  let j = 0;
-  while (j < len(pipes)) {
-    let pipe = pipes[j];
-    let gapTop = pipe["gapY"] - pipeGap / 2;
-    let gapBottom = pipe["gapY"] + pipeGap / 2;
-    gfx.rect("green", pipe["x"], 0, pipeWidth, gapTop);
-    gfx.rect("green", pipe["x"], gapBottom, pipeWidth, groundY - gapBottom);
-    gfx.rectLine("darkgreen", pipe["x"], 0, pipeWidth, gapTop);
-    gfx.rectLine("darkgreen", pipe["x"], gapBottom, pipeWidth, groundY - gapBottom);
-    j = j + 1;
+    this.drawPipes();
+
+    gfx.rect("darkgreen", 0, this.groundY, this.width, this.height - this.groundY);
+    gfx.rectLine("black", 0, this.groundY, this.width, this.height - this.groundY);
+
+    gfx.circle("yellow", this.birdX, this.birdY, this.birdRadius);
+    gfx.circleLine("orange", this.birdX, this.birdY, this.birdRadius);
+
+    gfx.text("Score: " + toText(this.score), 12, 10, "white", 20);
+    gfx.text("Best: " + toText(this.best), 12, 34, "white", 16);
+
+    if (this.state == "gameover") {
+      gfx.text("Game Over", 290, 160, "white", 32);
+      gfx.text("Press SPACE to restart", 230, 210, "lightgray", 18);
+    }
+  }
+}
+
+class MenuScreen {
+  fun init(width, height) {
+    this.width = width;
+    this.height = height;
+    this.groundY = height - 80;
+
+    let buttonWidth = 220;
+    let buttonHeight = 52;
+    let centerX = (width - buttonWidth) / 2;
+    let startY = height / 2 - 10;
+
+    this.startButton = ui.Button("Start", centerX, startY, buttonWidth, buttonHeight);
+    this.quitButton = ui.Button("Quit", centerX, startY + buttonHeight + 16, buttonWidth, buttonHeight);
   }
 
-  gfx.rect("darkgreen", 0, groundY, width, height - groundY);
-  gfx.rectLine("black", 0, groundY, width, height - groundY);
-
-  gfx.circle("yellow", birdX, birdY, birdRadius);
-  gfx.circleLine("orange", birdX, birdY, birdRadius);
-
-  gfx.text("Score: " + toText(score), 12, 10, "white", 20);
-  gfx.text("Best: " + toText(best), 12, 34, "white", 16);
-
-  if (state == "ready") {
-    gfx.text("Flabby Bird", 270, 160, "white", 34);
-    gfx.text("Press SPACE / W / UP to flap", 200, 210, "lightgray", 18);
-  } else if (state == "gameover") {
-    gfx.text("Game Over", 290, 160, "white", 32);
-    gfx.text("Press SPACE to restart", 230, 210, "lightgray", 18);
+  fun update(mx, my, clicked) {
+    if (this.startButton.clicked(mx, my, clicked)) {
+      return "start";
+    }
+    if (this.quitButton.clicked(mx, my, clicked)) {
+      return "quit";
+    }
+    return null;
   }
 
+  fun draw(mx, my) {
+    gfx.clear("skyblue");
+
+    gfx.circle("gold", 680, 90, 35);
+    gfx.rect("darkgreen", 0, this.groundY, this.width, this.height - this.groundY);
+    gfx.rectLine("black", 0, this.groundY, this.width, this.height - this.groundY);
+
+    gfx.text("Flabby Bird", 240, 120, "white", 40);
+    gfx.text("Click Start to play", 260, 180, "white", 18);
+    gfx.text("Space / W / Up to flap", 235, 210, "lightgray", 16);
+
+    this.startButton.draw(mx, my);
+    this.quitButton.draw(mx, my);
+  }
+}
+
+class App {
+  fun init(width, height) {
+    this.menu = MenuScreen(width, height);
+    this.game = FlabbyBirdGame(width, height);
+    this.screen = "menu";
+  }
+
+  fun update(dt, mx, my, clicked, flap) {
+    if (this.screen == "menu") {
+      let action = this.menu.update(mx, my, clicked);
+      if (action == "start" or flap) {
+        this.game.reset();
+        this.screen = "game";
+      } else if (action == "quit") {
+        return "quit";
+      }
+    } else {
+      this.game.update(dt, flap);
+    }
+    return null;
+  }
+
+  fun draw(mx, my) {
+    if (this.screen == "menu") {
+      this.menu.draw(mx, my);
+    } else {
+      this.game.draw();
+    }
+  }
+}
+
+gfx.init(800, 600, "Erkao Flabby Bird");
+gfx.fps(60);
+
+let width = 800;
+let height = 600;
+
+let app = App(width, height);
+
+let lastTime = gfx.time();
+let running = true;
+
+while (running and gfx.poll()) {
+  let now = gfx.time();
+  let dt = now - lastTime;
+  lastTime = now;
+  if (dt > 0.05) { dt = 0.05; }
+
+  let mouse = gfx.mouse();
+  let mx = mouse["x"];
+  let my = mouse["y"];
+  let clicked = gfx.mouseClicked();
+  let flap = gfx.keyPressed("space") or gfx.keyPressed("up") or gfx.keyPressed("w");
+
+  let action = app.update(dt, mx, my, clicked, flap);
+  if (action == "quit") {
+    running = false;
+  }
+
+  app.draw(mx, my);
   gfx.present();
 }
 
