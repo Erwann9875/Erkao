@@ -22,6 +22,36 @@ static void pluginStore(VM* vm, void* handle) {
   vm->pluginHandles[vm->pluginCount++] = handle;
 }
 
+static ErkaoModule* apiCreateModule(VM* vm, const char* name) {
+  if (!vm || !name || name[0] == '\0') return NULL;
+  ObjString* className = copyString(vm, name);
+  ObjMap* methods = newMap(vm);
+  ObjClass* klass = newClass(vm, className, methods);
+  ObjInstance* module = newInstance(vm, klass);
+  return (ErkaoModule*)module;
+}
+
+static void apiDefineModule(VM* vm, const char* name, ErkaoModule* module) {
+  if (!vm || !name || name[0] == '\0' || !module) return;
+  defineGlobal(vm, name, OBJ_VAL((ObjInstance*)module));
+}
+
+static void apiModuleAddNative(VM* vm, ErkaoModule* module, const char* name,
+                               NativeFn function, int arity) {
+  if (!vm || !module || !name || name[0] == '\0' || !function) return;
+  ObjInstance* instance = (ObjInstance*)module;
+  ObjString* fieldName = copyString(vm, name);
+  ObjNative* native = newNative(vm, function, arity, fieldName);
+  mapSet(instance->fields, fieldName, OBJ_VAL(native));
+}
+
+static void apiModuleAddValue(VM* vm, ErkaoModule* module, const char* name, Value value) {
+  if (!vm || !module || !name || name[0] == '\0') return;
+  ObjInstance* instance = (ObjInstance*)module;
+  ObjString* fieldName = copyString(vm, name);
+  mapSet(instance->fields, fieldName, value);
+}
+
 bool pluginLoad(VM* vm, const char* path, char* error, size_t errorSize) {
   if (!path || path[0] == '\0') {
     setError(error, errorSize, "plugin.load expects a path string.");
@@ -63,9 +93,17 @@ bool pluginLoad(VM* vm, const char* path, char* error, size_t errorSize) {
 #endif
 
   ErkaoApi api;
+  memset(&api, 0, sizeof(api));
   api.apiVersion = ERKAO_PLUGIN_API_VERSION;
   api.vm = vm;
   api.defineNative = defineNative;
+  api.size = sizeof(ErkaoApi);
+  api.abiVersion = ERKAO_PLUGIN_ABI_VERSION;
+  api.features = ERKAO_PLUGIN_FEATURE_MODULES;
+  api.createModule = apiCreateModule;
+  api.defineModule = apiDefineModule;
+  api.moduleAddNative = apiModuleAddNative;
+  api.moduleAddValue = apiModuleAddValue;
 
   if (!init(&api)) {
     setError(error, errorSize, "Plugin init failed.");

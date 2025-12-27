@@ -1,0 +1,5 @@
+// Adjust the extension for your OS (.dll/.so/.dylib).
+plugin.load("./examples/plugins/hello_plugin.dll");
+
+hello.say();
+print(hello.add(2, 3));

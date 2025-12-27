@@ -444,7 +444,8 @@ Event maps include:
 
 ## Plugins
 
-Plugins are DLLs that export `erkao_init` and register native functions.
+Plugins are shared libraries that export `erkao_init` and register native functions.
+The plugin ABI is versioned and extensible through `ErkaoApi.size` + feature flags.
 
 ```c
 #include "erkao_plugin.h"
@@ -457,14 +458,49 @@ static Value hello(VM* vm, int argc, Value* args) {
   return NULL_VAL;
 }
 
-bool erkao_init(ErkaoApi* api) {
-  if (api->apiVersion != ERKAO_PLUGIN_API_VERSION) return false;
-  api->defineNative(api->vm, "pluginHello", hello, 0);
+static Value add(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) return NULL_VAL;
+  return NUMBER_VAL(AS_NUMBER(args[0]) + AS_NUMBER(args[1]));
+}
+
+ERKAO_PLUGIN_EXPORT bool erkao_init(ErkaoApi* api) {
+  if (api->apiVersion < ERKAO_PLUGIN_API_VERSION) return false;
+  if ((api->features & ERKAO_PLUGIN_FEATURE_MODULES) != 0 && api->createModule) {
+    ErkaoModule* module = api->createModule(api->vm, "hello");
+    api->moduleAddNative(api->vm, module, "say", hello, 0);
+    api->moduleAddNative(api->vm, module, "add", add, 2);
+    api->defineModule(api->vm, "hello", module);
+  } else {
+    api->defineNative(api->vm, "helloSay", hello, 0);
+    api->defineNative(api->vm, "helloAdd", add, 2);
+  }
   return true;
 }
 ```
 
-Build a plugin with include paths to `include` and `src`.
+Build a plugin with include paths to `include` and `src`:
+
+```sh
+# Windows (MSVC)
+cl /LD /I include /I src examples/plugins/hello_plugin.c /Fe:hello_plugin.dll
+
+# macOS
+clang -shared -fPIC -I include -I src examples/plugins/hello_plugin.c -o hello_plugin.dylib
+
+# Linux
+gcc -shared -fPIC -I include -I src examples/plugins/hello_plugin.c -o hello_plugin.so
+```
+
+Use it from Erkao (extension depends on platform):
+
+```ek
+plugin.load("./examples/plugins/hello_plugin.dll");
+print(hello.add(2, 3));
+```
+
+If you prefer globals, the fallback in the example registers `helloSay` and `helloAdd`.
+See `examples/plugins/hello_plugin.c` and `examples/plugins/hello_plugin.ek`.
 
 ## Notes
 
