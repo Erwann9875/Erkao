@@ -8,6 +8,7 @@
 #endif
 
 #include <float.h>
+#include <ctype.h>
 #include <limits.h>
 #include <math.h>
 #include <stdint.h>
@@ -81,6 +82,66 @@ static char pickSeparator(const char* left, const char* right) {
   return '/';
 }
 
+static bool pathExists(const char* path) {
+#ifdef _WIN32
+  DWORD attrs = GetFileAttributesA(path);
+  return attrs != INVALID_FILE_ATTRIBUTES;
+#else
+  struct stat st;
+  return stat(path, &st) == 0;
+#endif
+}
+
+static bool pathIsDir(const char* path) {
+#ifdef _WIN32
+  DWORD attrs = GetFileAttributesA(path);
+  if (attrs == INVALID_FILE_ATTRIBUTES) return false;
+  return (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
+#else
+  struct stat st;
+  if (stat(path, &st) != 0) return false;
+  return S_ISDIR(st.st_mode);
+#endif
+}
+
+static bool pathIsFile(const char* path) {
+#ifdef _WIN32
+  DWORD attrs = GetFileAttributesA(path);
+  if (attrs == INVALID_FILE_ATTRIBUTES) return false;
+  return (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0;
+#else
+  struct stat st;
+  if (stat(path, &st) != 0) return false;
+  return S_ISREG(st.st_mode);
+#endif
+}
+
+static char* joinPathWithSep(const char* left, const char* right, char sep) {
+  if (!left || left[0] == '\0' || strcmp(left, ".") == 0) {
+    return copyCString(right, strlen(right));
+  }
+  if (isAbsolutePathString(right)) {
+    return copyCString(right, strlen(right));
+  }
+  size_t leftLen = strlen(left);
+  size_t rightLen = strlen(right);
+  bool needsSep = leftLen > 0 &&
+                  left[leftLen - 1] != '/' &&
+                  left[leftLen - 1] != '\\';
+  size_t total = leftLen + (needsSep ? 1 : 0) + rightLen;
+  char* buffer = (char*)malloc(total + 1);
+  if (!buffer) {
+    fprintf(stderr, "Out of memory.\n");
+    exit(1);
+  }
+  memcpy(buffer, left, leftLen);
+  size_t offset = leftLen;
+  if (needsSep) buffer[offset++] = sep;
+  memcpy(buffer + offset, right, rightLen);
+  buffer[total] = '\0';
+  return buffer;
+}
+
 typedef struct {
   char* data;
   size_t length;
@@ -129,6 +190,81 @@ static void bufferFree(ByteBuffer* buffer) {
   buffer->capacity = 0;
 }
 
+static char* copyCString(const char* src, size_t length) {
+  char* out = (char*)malloc(length + 1);
+  if (!out) {
+    fprintf(stderr, "Out of memory.\n");
+    exit(1);
+  }
+  memcpy(out, src, length);
+  out[length] = '\0';
+  return out;
+}
+
+typedef struct {
+  char** items;
+  int count;
+  int capacity;
+} StringList;
+
+static void stringListInit(StringList* list) {
+  list->items = NULL;
+  list->count = 0;
+  list->capacity = 0;
+}
+
+static void stringListFree(StringList* list) {
+  for (int i = 0; i < list->count; i++) {
+    free(list->items[i]);
+  }
+  free(list->items);
+  stringListInit(list);
+}
+
+static void stringListAdd(StringList* list, const char* value) {
+  if (list->capacity < list->count + 1) {
+    int oldCapacity = list->capacity;
+    list->capacity = oldCapacity == 0 ? 8 : oldCapacity * 2;
+    list->items = (char**)realloc(list->items, sizeof(char*) * (size_t)list->capacity);
+    if (!list->items) {
+      fprintf(stderr, "Out of memory.\n");
+      exit(1);
+    }
+  }
+  list->items[list->count++] = copyCString(value, strlen(value));
+}
+
+static void stringListAddWithLength(StringList* list, const char* value, size_t length) {
+  if (list->capacity < list->count + 1) {
+    int oldCapacity = list->capacity;
+    list->capacity = oldCapacity == 0 ? 8 : oldCapacity * 2;
+    list->items = (char**)realloc(list->items, sizeof(char*) * (size_t)list->capacity);
+    if (!list->items) {
+      fprintf(stderr, "Out of memory.\n");
+      exit(1);
+    }
+  }
+  list->items[list->count++] = copyCString(value, length);
+}
+
+static int stringListCompare(const void* a, const void* b) {
+  const char* left = *(const char* const*)a;
+  const char* right = *(const char* const*)b;
+  return strcmp(left, right);
+}
+
+static int objStringCompare(const void* a, const void* b) {
+  const ObjString* left = *(const ObjString* const*)a;
+  const ObjString* right = *(const ObjString* const*)b;
+  return strcmp(left->chars, right->chars);
+}
+
+static void stringListSort(StringList* list) {
+  if (list->count > 1) {
+    qsort(list->items, (size_t)list->count, sizeof(char*), stringListCompare);
+  }
+}
+
 static bool numberIsFinite(double value) {
 #ifdef _MSC_VER
   return _finite(value) != 0;
@@ -139,6 +275,8 @@ static bool numberIsFinite(double value) {
 
 static uint64_t gRandomState = 0;
 static bool gRandomSeeded = false;
+static bool gRandomHasSpare = false;
+static double gRandomSpare = 0.0;
 
 static void randomSeedIfNeeded(void) {
   if (gRandomSeeded) return;
@@ -164,6 +302,238 @@ static uint64_t randomNext(void) {
 static double randomNextDouble(void) {
   uint64_t value = randomNext();
   return (double)(value >> 11) * (1.0 / 9007199254740992.0);
+}
+
+static double randomNextNormal(void) {
+  if (gRandomHasSpare) {
+    gRandomHasSpare = false;
+    return gRandomSpare;
+  }
+
+  double u = 0.0;
+  double v = 0.0;
+  double s = 0.0;
+  do {
+    u = randomNextDouble() * 2.0 - 1.0;
+    v = randomNextDouble() * 2.0 - 1.0;
+    s = u * u + v * v;
+  } while (s <= 0.0 || s >= 1.0);
+
+  double factor = sqrt(-2.0 * log(s) / s);
+  gRandomSpare = v * factor;
+  gRandomHasSpare = true;
+  return u * factor;
+}
+
+static bool globSegmentHasWildcard(const char* segment) {
+  if (!segment) return false;
+  for (const char* c = segment; *c; c++) {
+    if (*c == '*' || *c == '?') return true;
+  }
+  return false;
+}
+
+static bool globMatchSegment(const char* pattern, const char* text) {
+  const char* p = pattern;
+  const char* t = text;
+  const char* star = NULL;
+  const char* starText = NULL;
+
+  while (*t) {
+    if (*p == '*') {
+      star = p++;
+      starText = t;
+      continue;
+    }
+    if (*p == '?' || *p == *t) {
+      p++;
+      t++;
+      continue;
+    }
+    if (star) {
+      p = star + 1;
+      starText++;
+      t = starText;
+      continue;
+    }
+    return false;
+  }
+
+  while (*p == '*') p++;
+  return *p == '\0';
+}
+
+static char* globRootFromPattern(const char* pattern, char sep, int* outIndex) {
+  if (isAbsolutePathString(pattern)) {
+    if (((pattern[0] >= 'A' && pattern[0] <= 'Z') ||
+         (pattern[0] >= 'a' && pattern[0] <= 'z')) &&
+        pattern[1] == ':' &&
+        (pattern[2] == '\\' || pattern[2] == '/')) {
+      char* root = (char*)malloc(4);
+      if (!root) {
+        fprintf(stderr, "Out of memory.\n");
+        exit(1);
+      }
+      root[0] = pattern[0];
+      root[1] = ':';
+      root[2] = sep;
+      root[3] = '\0';
+      *outIndex = 3;
+      return root;
+    }
+    if (pattern[0] == '\\' || pattern[0] == '/') {
+      char* root = (char*)malloc(2);
+      if (!root) {
+        fprintf(stderr, "Out of memory.\n");
+        exit(1);
+      }
+      root[0] = sep;
+      root[1] = '\0';
+      *outIndex = 1;
+      return root;
+    }
+  }
+  *outIndex = 0;
+  return copyCString(".", 1);
+}
+
+static void globSplitSegments(const char* pattern, int start, StringList* segments) {
+  stringListInit(segments);
+  const char* cursor = pattern + start;
+  while (*cursor) {
+    while (*cursor == '/' || *cursor == '\\') cursor++;
+    if (*cursor == '\0') break;
+    const char* begin = cursor;
+    while (*cursor && *cursor != '/' && *cursor != '\\') cursor++;
+    size_t length = (size_t)(cursor - begin);
+    if (length > 0) {
+      if (segments->capacity < segments->count + 1) {
+        int oldCap = segments->capacity;
+        segments->capacity = oldCap == 0 ? 8 : oldCap * 2;
+        segments->items = (char**)realloc(segments->items,
+                                          sizeof(char*) * (size_t)segments->capacity);
+        if (!segments->items) {
+          fprintf(stderr, "Out of memory.\n");
+          exit(1);
+        }
+      }
+      segments->items[segments->count++] = copyCString(begin, length);
+    }
+  }
+}
+
+static bool globListDir(const char* path, StringList* out, const char** error) {
+  stringListInit(out);
+#ifdef _WIN32
+  size_t pathLength = strlen(path);
+  bool needsSep = pathLength > 0 &&
+                  path[pathLength - 1] != '\\' &&
+                  path[pathLength - 1] != '/';
+  size_t patternLength = pathLength + (needsSep ? 2 : 1) + 1;
+  char* pattern = (char*)malloc(patternLength);
+  if (!pattern) {
+    *error = "fs.glob out of memory.";
+    return false;
+  }
+  snprintf(pattern, patternLength, "%s%s*", path, needsSep ? "\\" : "");
+
+  WIN32_FIND_DATAA data;
+  HANDLE handle = FindFirstFileA(pattern, &data);
+  free(pattern);
+  if (handle == INVALID_HANDLE_VALUE) {
+    *error = "fs.glob failed to open directory.";
+    return false;
+  }
+
+  do {
+    if (strcmp(data.cFileName, ".") == 0 || strcmp(data.cFileName, "..") == 0) {
+      continue;
+    }
+    stringListAdd(out, data.cFileName);
+  } while (FindNextFileA(handle, &data));
+  FindClose(handle);
+#else
+  DIR* dir = opendir(path);
+  if (!dir) {
+    *error = "fs.glob failed to open directory.";
+    return false;
+  }
+  struct dirent* entry;
+  while ((entry = readdir(dir)) != NULL) {
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+      continue;
+    }
+    stringListAdd(out, entry->d_name);
+  }
+  closedir(dir);
+#endif
+  stringListSort(out);
+  return true;
+}
+
+static void globWalk(const char* base, char sep, StringList* segments,
+                     int index, StringList* matches, const char** error) {
+  if (*error) return;
+  if (index >= segments->count) {
+    if (pathExists(base)) {
+      stringListAdd(matches, base);
+    }
+    return;
+  }
+
+  const char* segment = segments->items[index];
+  if (strcmp(segment, "**") == 0) {
+    globWalk(base, sep, segments, index + 1, matches, error);
+    if (!pathIsDir(base)) return;
+
+    StringList entries;
+    if (!globListDir(base, &entries, error)) {
+      return;
+    }
+    for (int i = 0; i < entries.count; i++) {
+      char* next = joinPathWithSep(base, entries.items[i], sep);
+      if (pathIsDir(next)) {
+        globWalk(next, sep, segments, index, matches, error);
+      }
+      free(next);
+      if (*error) break;
+    }
+    stringListFree(&entries);
+    return;
+  }
+
+  if (globSegmentHasWildcard(segment)) {
+    if (!pathIsDir(base)) return;
+    StringList entries;
+    if (!globListDir(base, &entries, error)) {
+      return;
+    }
+    for (int i = 0; i < entries.count; i++) {
+      if (!globMatchSegment(segment, entries.items[i])) continue;
+      char* next = joinPathWithSep(base, entries.items[i], sep);
+      if (index == segments->count - 1) {
+        if (pathExists(next)) {
+          stringListAdd(matches, next);
+        }
+      } else if (pathIsDir(next)) {
+        globWalk(next, sep, segments, index + 1, matches, error);
+      }
+      free(next);
+      if (*error) break;
+    }
+    stringListFree(&entries);
+    return;
+  }
+
+  char* next = joinPathWithSep(base, segment, sep);
+  if (index == segments->count - 1) {
+    if (pathExists(next)) {
+      stringListAdd(matches, next);
+    }
+  } else if (pathIsDir(next)) {
+    globWalk(next, sep, segments, index + 1, matches, error);
+  }
+  free(next);
 }
 
 typedef struct {
@@ -659,6 +1029,607 @@ static Value nativeJsonStringify(VM* vm, int argc, Value* args) {
   return OBJ_VAL(result);
 }
 
+typedef struct {
+  char* text;
+  int indent;
+} YamlLine;
+
+typedef struct {
+  YamlLine* lines;
+  int count;
+  int index;
+  const char* error;
+  char* buffer;
+} YamlParser;
+
+static void yamlStripComment(char* line) {
+  bool inSingle = false;
+  bool inDouble = false;
+  bool escaped = false;
+  for (int i = 0; line[i] != '\0'; i++) {
+    char c = line[i];
+    if (inDouble) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (c == '\\') {
+        escaped = true;
+        continue;
+      }
+      if (c == '"') {
+        inDouble = false;
+      }
+      continue;
+    }
+    if (inSingle) {
+      if (c == '\'') {
+        inSingle = false;
+      }
+      continue;
+    }
+    if (c == '"') {
+      inDouble = true;
+      continue;
+    }
+    if (c == '\'') {
+      inSingle = true;
+      continue;
+    }
+    if (c == '#') {
+      line[i] = '\0';
+      return;
+    }
+    if (c == '/' && line[i + 1] == '/') {
+      line[i] = '\0';
+      return;
+    }
+  }
+}
+
+static char* yamlTrimLeft(char* text) {
+  while (*text && isspace((unsigned char)*text)) text++;
+  return text;
+}
+
+static void yamlTrimRight(char* text) {
+  size_t length = strlen(text);
+  while (length > 0 && isspace((unsigned char)text[length - 1])) {
+    text[length - 1] = '\0';
+    length--;
+  }
+}
+
+static bool yamlCollectLines(YamlParser* parser, const char* source) {
+  size_t length = strlen(source);
+  parser->buffer = copyCString(source, length);
+  parser->lines = NULL;
+  parser->count = 0;
+  parser->index = 0;
+  parser->error = NULL;
+  int capacity = 0;
+
+  char* cursor = parser->buffer;
+  while (*cursor) {
+    char* lineStart = cursor;
+    char* newline = strchr(cursor, '\n');
+    if (newline) {
+      *newline = '\0';
+      cursor = newline + 1;
+    } else {
+      cursor += strlen(cursor);
+    }
+    size_t lineLen = strlen(lineStart);
+    if (lineLen > 0 && lineStart[lineLen - 1] == '\r') {
+      lineStart[lineLen - 1] = '\0';
+    }
+
+    yamlStripComment(lineStart);
+    yamlTrimRight(lineStart);
+
+    int indent = 0;
+    char* content = lineStart;
+    while (*content == ' ') {
+      indent++;
+      content++;
+    }
+    if (*content == '\t') {
+      parser->error = "yaml.parse does not allow tabs for indentation.";
+      return false;
+    }
+    content = yamlTrimLeft(content);
+    if (*content == '\0') continue;
+
+    if (parser->count >= capacity) {
+      int oldCapacity = capacity;
+      capacity = oldCapacity == 0 ? 16 : oldCapacity * 2;
+      parser->lines = (YamlLine*)realloc(parser->lines, sizeof(YamlLine) * (size_t)capacity);
+      if (!parser->lines) {
+        fprintf(stderr, "Out of memory.\n");
+        exit(1);
+      }
+    }
+    parser->lines[parser->count].text = content;
+    parser->lines[parser->count].indent = indent;
+    parser->count++;
+  }
+  return true;
+}
+
+static ObjString* yamlParseString(VM* vm, const char* text, bool* ok, const char** error) {
+  size_t length = strlen(text);
+  if (length == 0) {
+    return copyString(vm, "");
+  }
+  if (text[0] == '"') {
+    ByteBuffer buffer;
+    bufferInit(&buffer);
+    bool escaped = false;
+    for (size_t i = 1; i < length; i++) {
+      char c = text[i];
+      if (escaped) {
+        switch (c) {
+          case 'n': bufferAppendChar(&buffer, '\n'); break;
+          case 'r': bufferAppendChar(&buffer, '\r'); break;
+          case 't': bufferAppendChar(&buffer, '\t'); break;
+          case '"': bufferAppendChar(&buffer, '"'); break;
+          case '\\': bufferAppendChar(&buffer, '\\'); break;
+          default: bufferAppendChar(&buffer, c); break;
+        }
+        escaped = false;
+        continue;
+      }
+      if (c == '\\') {
+        escaped = true;
+        continue;
+      }
+      if (c == '"') {
+        ObjString* result = copyStringWithLength(vm, buffer.data ? buffer.data : "",
+                                                 (int)buffer.length);
+        bufferFree(&buffer);
+        return result;
+      }
+      bufferAppendChar(&buffer, c);
+    }
+    bufferFree(&buffer);
+    *ok = false;
+    *error = "yaml.parse unterminated string.";
+    return NULL;
+  }
+  if (text[0] == '\'') {
+    ByteBuffer buffer;
+    bufferInit(&buffer);
+    for (size_t i = 1; i < length; i++) {
+      char c = text[i];
+      if (c == '\'') {
+        if (text[i + 1] == '\'') {
+          bufferAppendChar(&buffer, '\'');
+          i++;
+          continue;
+        }
+        ObjString* result = copyStringWithLength(vm, buffer.data ? buffer.data : "",
+                                                 (int)buffer.length);
+        bufferFree(&buffer);
+        return result;
+      }
+      bufferAppendChar(&buffer, c);
+    }
+    bufferFree(&buffer);
+    *ok = false;
+    *error = "yaml.parse unterminated string.";
+    return NULL;
+  }
+  return copyString(vm, text);
+}
+
+static Value yamlParseScalar(VM* vm, const char* text, bool* ok, const char** error) {
+  char* trimmed = yamlTrimLeft((char*)text);
+  yamlTrimRight(trimmed);
+  if (*trimmed == '\0') {
+    return OBJ_VAL(copyString(vm, ""));
+  }
+  if (strcmp(trimmed, "null") == 0 || strcmp(trimmed, "~") == 0) {
+    return NULL_VAL;
+  }
+  if (strcmp(trimmed, "true") == 0) {
+    return BOOL_VAL(true);
+  }
+  if (strcmp(trimmed, "false") == 0) {
+    return BOOL_VAL(false);
+  }
+  if (trimmed[0] == '"' || trimmed[0] == '\'') {
+    ObjString* value = yamlParseString(vm, trimmed, ok, error);
+    if (!*ok) return NULL_VAL;
+    return OBJ_VAL(value);
+  }
+
+  char* end = NULL;
+  double number = strtod(trimmed, &end);
+  if (end && *end == '\0' && end != trimmed) {
+    return NUMBER_VAL(number);
+  }
+  ObjString* str = copyString(vm, trimmed);
+  return OBJ_VAL(str);
+}
+
+static char* yamlFindColon(char* text) {
+  bool inSingle = false;
+  bool inDouble = false;
+  bool escaped = false;
+  for (int i = 0; text[i] != '\0'; i++) {
+    char c = text[i];
+    if (inDouble) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (c == '\\') {
+        escaped = true;
+        continue;
+      }
+      if (c == '"') {
+        inDouble = false;
+      }
+      continue;
+    }
+    if (inSingle) {
+      if (c == '\'') {
+        inSingle = false;
+      }
+      continue;
+    }
+    if (c == '"') {
+      inDouble = true;
+      continue;
+    }
+    if (c == '\'') {
+      inSingle = true;
+      continue;
+    }
+    if (c == ':') return &text[i];
+  }
+  return NULL;
+}
+
+static Value yamlParseBlock(VM* vm, YamlParser* parser, int indent, bool* ok);
+
+static Value yamlParseList(VM* vm, YamlParser* parser, int indent, bool* ok) {
+  ObjArray* array = newArray(vm);
+  while (parser->index < parser->count) {
+    YamlLine* line = &parser->lines[parser->index];
+    if (line->indent != indent) break;
+    if (line->text[0] != '-' || (line->text[1] != '\0' && line->text[1] != ' ')) {
+      parser->error = "yaml.parse expected '-' list item.";
+      *ok = false;
+      return NULL_VAL;
+    }
+    char* itemText = line->text + 1;
+    if (*itemText == ' ') itemText++;
+    if (*itemText == '\0') {
+      parser->index++;
+      if (parser->index >= parser->count) {
+        parser->error = "yaml.parse expected nested block.";
+        *ok = false;
+        return NULL_VAL;
+      }
+      YamlLine* next = &parser->lines[parser->index];
+      if (next->indent <= indent) {
+        parser->error = "yaml.parse expected indented block.";
+        *ok = false;
+        return NULL_VAL;
+      }
+      Value value = yamlParseBlock(vm, parser, next->indent, ok);
+      if (!*ok) return NULL_VAL;
+      arrayWrite(array, value);
+    } else {
+      Value value = yamlParseScalar(vm, itemText, ok, &parser->error);
+      if (!*ok) return NULL_VAL;
+      arrayWrite(array, value);
+      parser->index++;
+    }
+  }
+  return OBJ_VAL(array);
+}
+
+static Value yamlParseMap(VM* vm, YamlParser* parser, int indent, bool* ok) {
+  ObjMap* map = newMap(vm);
+  while (parser->index < parser->count) {
+    YamlLine* line = &parser->lines[parser->index];
+    if (line->indent != indent) break;
+    char* colon = yamlFindColon(line->text);
+    if (!colon) {
+      parser->error = "yaml.parse expected ':' in mapping.";
+      *ok = false;
+      return NULL_VAL;
+    }
+    *colon = '\0';
+    char* keyText = yamlTrimLeft(line->text);
+    yamlTrimRight(keyText);
+    if (*keyText == '\0') {
+      parser->error = "yaml.parse empty key.";
+      *ok = false;
+      return NULL_VAL;
+    }
+    ObjString* key = NULL;
+    if (keyText[0] == '"' || keyText[0] == '\'') {
+      key = yamlParseString(vm, keyText, ok, &parser->error);
+      if (!*ok) return NULL_VAL;
+    } else {
+      key = copyString(vm, keyText);
+    }
+
+    char* valueText = colon + 1;
+    valueText = yamlTrimLeft(valueText);
+    yamlTrimRight(valueText);
+
+    parser->index++;
+    Value value;
+    if (*valueText == '\0') {
+      if (parser->index < parser->count &&
+          parser->lines[parser->index].indent > indent) {
+        int childIndent = parser->lines[parser->index].indent;
+        value = yamlParseBlock(vm, parser, childIndent, ok);
+        if (!*ok) return NULL_VAL;
+      } else {
+        value = NULL_VAL;
+      }
+    } else {
+      value = yamlParseScalar(vm, valueText, ok, &parser->error);
+      if (!*ok) return NULL_VAL;
+    }
+    mapSet(map, key, value);
+  }
+  return OBJ_VAL(map);
+}
+
+static Value yamlParseBlock(VM* vm, YamlParser* parser, int indent, bool* ok) {
+  if (parser->index >= parser->count) {
+    parser->error = "yaml.parse unexpected end.";
+    *ok = false;
+    return NULL_VAL;
+  }
+  YamlLine* line = &parser->lines[parser->index];
+  if (line->indent < indent) {
+    parser->error = "yaml.parse invalid indentation.";
+    *ok = false;
+    return NULL_VAL;
+  }
+  bool isList = line->text[0] == '-' &&
+                (line->text[1] == '\0' || line->text[1] == ' ');
+  if (isList) {
+    return yamlParseList(vm, parser, indent, ok);
+  }
+  return yamlParseMap(vm, parser, indent, ok);
+}
+
+static Value nativeYamlParse(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "yaml.parse expects a string.");
+  }
+  ObjString* input = (ObjString*)AS_OBJ(args[0]);
+  YamlParser parser;
+  if (!yamlCollectLines(&parser, input->chars)) {
+    free(parser.lines);
+    free(parser.buffer);
+    return runtimeErrorValue(vm, parser.error ? parser.error : "yaml.parse failed.");
+  }
+  if (parser.count == 0) {
+    free(parser.lines);
+    free(parser.buffer);
+    return NULL_VAL;
+  }
+  bool ok = true;
+  Value result = yamlParseBlock(vm, &parser, parser.lines[0].indent, &ok);
+  const char* error = parser.error;
+  free(parser.lines);
+  free(parser.buffer);
+  if (!ok) {
+    return runtimeErrorValue(vm, error ? error : "yaml.parse failed.");
+  }
+  return result;
+}
+
+static void yamlAppendIndent(ByteBuffer* buffer, int indent) {
+  for (int i = 0; i < indent; i++) {
+    bufferAppendChar(buffer, ' ');
+  }
+}
+
+static bool yamlStringNeedsQuotes(const char* text) {
+  if (!text || *text == '\0') return true;
+  if (strcmp(text, "null") == 0 || strcmp(text, "true") == 0 ||
+      strcmp(text, "false") == 0 || strcmp(text, "~") == 0) {
+    return true;
+  }
+  for (const char* c = text; *c; c++) {
+    if (isspace((unsigned char)*c)) return true;
+    if (*c == ':' || *c == '#' || *c == '-' || *c == '"' || *c == '\'' ||
+        *c == '{' || *c == '}' || *c == '[' || *c == ']' || *c == ',') {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool yamlAppendEscaped(ByteBuffer* buffer, ObjString* string) {
+  bufferAppendChar(buffer, '"');
+  for (int i = 0; i < string->length; i++) {
+    char c = string->chars[i];
+    switch (c) {
+      case '\\': bufferAppendN(buffer, "\\\\", 2); break;
+      case '"': bufferAppendN(buffer, "\\\"", 2); break;
+      case '\n': bufferAppendN(buffer, "\\n", 2); break;
+      case '\r': bufferAppendN(buffer, "\\r", 2); break;
+      case '\t': bufferAppendN(buffer, "\\t", 2); break;
+      default: bufferAppendChar(buffer, c); break;
+    }
+  }
+  bufferAppendChar(buffer, '"');
+  return true;
+}
+
+static bool yamlStringifyValue(VM* vm, ByteBuffer* buffer, Value value,
+                               int indent, int depth, const char** error);
+
+static bool yamlStringifyArray(VM* vm, ByteBuffer* buffer, ObjArray* array,
+                               int indent, int depth, const char** error) {
+  if (depth > 64) {
+    *error = "yaml.stringify exceeded max depth.";
+    return false;
+  }
+  if (array->count == 0) {
+    bufferAppendN(buffer, "[]", 2);
+    return true;
+  }
+  for (int i = 0; i < array->count; i++) {
+    yamlAppendIndent(buffer, indent);
+    bufferAppendN(buffer, "- ", 2);
+    Value item = array->items[i];
+    if (isObjType(item, OBJ_ARRAY) || isObjType(item, OBJ_MAP)) {
+      buffer->length -= 1;
+      buffer->data[buffer->length] = '\0';
+      bufferAppendChar(buffer, '\n');
+      if (!yamlStringifyValue(vm, buffer, item, indent + 2, depth + 1, error)) {
+        return false;
+      }
+    } else {
+      if (!yamlStringifyValue(vm, buffer, item, 0, depth + 1, error)) {
+        return false;
+      }
+    }
+    if (i + 1 < array->count) {
+      bufferAppendChar(buffer, '\n');
+    }
+  }
+  return true;
+}
+
+static bool yamlStringifyMap(VM* vm, ByteBuffer* buffer, ObjMap* map,
+                             int indent, int depth, const char** error) {
+  if (depth > 64) {
+    *error = "yaml.stringify exceeded max depth.";
+    return false;
+  }
+  int count = mapCount(map);
+  if (count == 0) {
+    bufferAppendN(buffer, "{}", 2);
+    return true;
+  }
+
+  ObjString** keys = (ObjString**)malloc(sizeof(ObjString*) * (size_t)count);
+  if (!keys) {
+    *error = "yaml.stringify out of memory.";
+    return false;
+  }
+  int keyCount = 0;
+  for (int i = 0; i < map->capacity; i++) {
+    MapEntryValue* entry = &map->entries[i];
+    if (!entry->key) continue;
+    keys[keyCount++] = entry->key;
+  }
+  qsort(keys, (size_t)keyCount, sizeof(ObjString*), objStringCompare);
+
+  for (int i = 0; i < keyCount; i++) {
+    ObjString* key = keys[i];
+    Value value;
+    if (!mapGet(map, key, &value)) {
+      continue;
+    }
+    yamlAppendIndent(buffer, indent);
+    if (yamlStringNeedsQuotes(key->chars)) {
+      yamlAppendEscaped(buffer, key);
+    } else {
+      bufferAppendN(buffer, key->chars, (size_t)key->length);
+    }
+    if (isObjType(value, OBJ_ARRAY) || isObjType(value, OBJ_MAP)) {
+      bufferAppendChar(buffer, ':');
+      bufferAppendChar(buffer, '\n');
+      if (!yamlStringifyValue(vm, buffer, value, indent + 2, depth + 1, error)) {
+        free(keys);
+        return false;
+      }
+    } else {
+      bufferAppendN(buffer, ": ", 2);
+      if (!yamlStringifyValue(vm, buffer, value, 0, depth + 1, error)) {
+        free(keys);
+        return false;
+      }
+    }
+    if (i + 1 < keyCount) {
+      bufferAppendChar(buffer, '\n');
+    }
+  }
+  free(keys);
+  return true;
+}
+
+static bool yamlStringifyValue(VM* vm, ByteBuffer* buffer, Value value,
+                               int indent, int depth, const char** error) {
+  (void)vm;
+  if (depth > 64) {
+    *error = "yaml.stringify exceeded max depth.";
+    return false;
+  }
+  if (IS_NULL(value)) {
+    bufferAppendN(buffer, "null", 4);
+    return true;
+  }
+  if (IS_BOOL(value)) {
+    if (AS_BOOL(value)) {
+      bufferAppendN(buffer, "true", 4);
+    } else {
+      bufferAppendN(buffer, "false", 5);
+    }
+    return true;
+  }
+  if (IS_NUMBER(value)) {
+    if (!numberIsFinite(AS_NUMBER(value))) {
+      *error = "yaml.stringify expects finite numbers.";
+      return false;
+    }
+    char num[64];
+    int length = snprintf(num, sizeof(num), "%g", AS_NUMBER(value));
+    if (length < 0) length = 0;
+    if (length >= (int)sizeof(num)) length = (int)sizeof(num) - 1;
+    bufferAppendN(buffer, num, (size_t)length);
+    return true;
+  }
+  if (isObjType(value, OBJ_STRING)) {
+    ObjString* str = (ObjString*)AS_OBJ(value);
+    if (yamlStringNeedsQuotes(str->chars)) {
+      return yamlAppendEscaped(buffer, str);
+    }
+    bufferAppendN(buffer, str->chars, (size_t)str->length);
+    return true;
+  }
+  if (isObjType(value, OBJ_ARRAY)) {
+    return yamlStringifyArray(vm, buffer, (ObjArray*)AS_OBJ(value),
+                              indent, depth + 1, error);
+  }
+  if (isObjType(value, OBJ_MAP)) {
+    return yamlStringifyMap(vm, buffer, (ObjMap*)AS_OBJ(value),
+                            indent, depth + 1, error);
+  }
+  *error = "yaml.stringify cannot serialize this value.";
+  return false;
+}
+
+static Value nativeYamlStringify(VM* vm, int argc, Value* args) {
+  (void)argc;
+  ByteBuffer buffer;
+  bufferInit(&buffer);
+  const char* error = NULL;
+  if (!yamlStringifyValue(vm, &buffer, args[0], 0, 0, &error)) {
+    bufferFree(&buffer);
+    return runtimeErrorValue(vm, error ? error : "yaml.stringify failed.");
+  }
+  ObjString* result = copyStringWithLength(vm, buffer.data ? buffer.data : "",
+                                           (int)buffer.length);
+  bufferFree(&buffer);
+  return OBJ_VAL(result);
+}
+
 static bool expectNumberArg(VM* vm, Value value, const char* message) {
   if (!IS_NUMBER(value)) {
     runtimeErrorValue(vm, message);
@@ -757,6 +1728,305 @@ static Value nativeMathClamp(VM* vm, int argc, Value* args) {
   if (value < minValue) value = minValue;
   if (value > maxValue) value = maxValue;
   return NUMBER_VAL(value);
+}
+
+static bool vecRead(VM* vm, Value value, int dims, double* out, const char* message) {
+  if (!isObjType(value, OBJ_ARRAY)) {
+    runtimeErrorValue(vm, message);
+    return false;
+  }
+  ObjArray* array = (ObjArray*)AS_OBJ(value);
+  if (array->count < dims) {
+    runtimeErrorValue(vm, message);
+    return false;
+  }
+  for (int i = 0; i < dims; i++) {
+    if (!IS_NUMBER(array->items[i])) {
+      runtimeErrorValue(vm, message);
+      return false;
+    }
+    out[i] = AS_NUMBER(array->items[i]);
+  }
+  return true;
+}
+
+static Value vecMake(VM* vm, int dims, const double* values) {
+  ObjArray* array = newArrayWithCapacity(vm, dims);
+  for (int i = 0; i < dims; i++) {
+    arrayWrite(array, NUMBER_VAL(values[i]));
+  }
+  return OBJ_VAL(array);
+}
+
+static Value vecAddN(VM* vm, int dims, Value* args, const char* message) {
+  double a[4];
+  double b[4];
+  if (!vecRead(vm, args[0], dims, a, message)) return NULL_VAL;
+  if (!vecRead(vm, args[1], dims, b, message)) return NULL_VAL;
+  double out[4];
+  for (int i = 0; i < dims; i++) {
+    out[i] = a[i] + b[i];
+  }
+  return vecMake(vm, dims, out);
+}
+
+static Value vecSubN(VM* vm, int dims, Value* args, const char* message) {
+  double a[4];
+  double b[4];
+  if (!vecRead(vm, args[0], dims, a, message)) return NULL_VAL;
+  if (!vecRead(vm, args[1], dims, b, message)) return NULL_VAL;
+  double out[4];
+  for (int i = 0; i < dims; i++) {
+    out[i] = a[i] - b[i];
+  }
+  return vecMake(vm, dims, out);
+}
+
+static Value vecScaleN(VM* vm, int dims, Value* args, const char* message) {
+  double a[4];
+  if (!vecRead(vm, args[0], dims, a, message)) return NULL_VAL;
+  if (!IS_NUMBER(args[1])) {
+    return runtimeErrorValue(vm, message);
+  }
+  double scale = AS_NUMBER(args[1]);
+  double out[4];
+  for (int i = 0; i < dims; i++) {
+    out[i] = a[i] * scale;
+  }
+  return vecMake(vm, dims, out);
+}
+
+static Value vecDotN(VM* vm, int dims, Value* args, const char* message) {
+  double a[4];
+  double b[4];
+  if (!vecRead(vm, args[0], dims, a, message)) return NULL_VAL;
+  if (!vecRead(vm, args[1], dims, b, message)) return NULL_VAL;
+  double sum = 0.0;
+  for (int i = 0; i < dims; i++) {
+    sum += a[i] * b[i];
+  }
+  return NUMBER_VAL(sum);
+}
+
+static Value vecLenN(VM* vm, int dims, Value* args, const char* message) {
+  double a[4];
+  if (!vecRead(vm, args[0], dims, a, message)) return NULL_VAL;
+  double sum = 0.0;
+  for (int i = 0; i < dims; i++) {
+    sum += a[i] * a[i];
+  }
+  return NUMBER_VAL(sqrt(sum));
+}
+
+static Value vecNormN(VM* vm, int dims, Value* args, const char* message) {
+  double a[4];
+  if (!vecRead(vm, args[0], dims, a, message)) return NULL_VAL;
+  double sum = 0.0;
+  for (int i = 0; i < dims; i++) {
+    sum += a[i] * a[i];
+  }
+  double len = sqrt(sum);
+  double out[4];
+  if (len <= 0.0) {
+    for (int i = 0; i < dims; i++) out[i] = 0.0;
+  } else {
+    for (int i = 0; i < dims; i++) out[i] = a[i] / len;
+  }
+  return vecMake(vm, dims, out);
+}
+
+static Value vecLerpN(VM* vm, int dims, Value* args, const char* message) {
+  double a[4];
+  double b[4];
+  if (!vecRead(vm, args[0], dims, a, message)) return NULL_VAL;
+  if (!vecRead(vm, args[1], dims, b, message)) return NULL_VAL;
+  if (!IS_NUMBER(args[2])) {
+    return runtimeErrorValue(vm, message);
+  }
+  double t = AS_NUMBER(args[2]);
+  double out[4];
+  for (int i = 0; i < dims; i++) {
+    out[i] = a[i] + (b[i] - a[i]) * t;
+  }
+  return vecMake(vm, dims, out);
+}
+
+static Value vecDistN(VM* vm, int dims, Value* args, const char* message) {
+  double a[4];
+  double b[4];
+  if (!vecRead(vm, args[0], dims, a, message)) return NULL_VAL;
+  if (!vecRead(vm, args[1], dims, b, message)) return NULL_VAL;
+  double sum = 0.0;
+  for (int i = 0; i < dims; i++) {
+    double d = b[i] - a[i];
+    sum += d * d;
+  }
+  return NUMBER_VAL(sqrt(sum));
+}
+
+static Value nativeVec2Make(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) {
+    return runtimeErrorValue(vm, "vec2.make expects (x, y) numbers.");
+  }
+  double values[2] = { AS_NUMBER(args[0]), AS_NUMBER(args[1]) };
+  return vecMake(vm, 2, values);
+}
+
+static Value nativeVec2Add(VM* vm, int argc, Value* args) {
+  (void)argc;
+  return vecAddN(vm, 2, args, "vec2.add expects two vec2 arrays.");
+}
+
+static Value nativeVec2Sub(VM* vm, int argc, Value* args) {
+  (void)argc;
+  return vecSubN(vm, 2, args, "vec2.sub expects two vec2 arrays.");
+}
+
+static Value nativeVec2Scale(VM* vm, int argc, Value* args) {
+  (void)argc;
+  return vecScaleN(vm, 2, args, "vec2.scale expects (vec2, scalar).");
+}
+
+static Value nativeVec2Dot(VM* vm, int argc, Value* args) {
+  (void)argc;
+  return vecDotN(vm, 2, args, "vec2.dot expects two vec2 arrays.");
+}
+
+static Value nativeVec2Len(VM* vm, int argc, Value* args) {
+  (void)argc;
+  return vecLenN(vm, 2, args, "vec2.len expects a vec2 array.");
+}
+
+static Value nativeVec2Norm(VM* vm, int argc, Value* args) {
+  (void)argc;
+  return vecNormN(vm, 2, args, "vec2.norm expects a vec2 array.");
+}
+
+static Value nativeVec2Lerp(VM* vm, int argc, Value* args) {
+  (void)argc;
+  return vecLerpN(vm, 2, args, "vec2.lerp expects (a, b, t).");
+}
+
+static Value nativeVec2Dist(VM* vm, int argc, Value* args) {
+  (void)argc;
+  return vecDistN(vm, 2, args, "vec2.dist expects two vec2 arrays.");
+}
+
+static Value nativeVec3Make(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!IS_NUMBER(args[0]) || !IS_NUMBER(args[1]) || !IS_NUMBER(args[2])) {
+    return runtimeErrorValue(vm, "vec3.make expects (x, y, z) numbers.");
+  }
+  double values[3] = { AS_NUMBER(args[0]), AS_NUMBER(args[1]), AS_NUMBER(args[2]) };
+  return vecMake(vm, 3, values);
+}
+
+static Value nativeVec3Add(VM* vm, int argc, Value* args) {
+  (void)argc;
+  return vecAddN(vm, 3, args, "vec3.add expects two vec3 arrays.");
+}
+
+static Value nativeVec3Sub(VM* vm, int argc, Value* args) {
+  (void)argc;
+  return vecSubN(vm, 3, args, "vec3.sub expects two vec3 arrays.");
+}
+
+static Value nativeVec3Scale(VM* vm, int argc, Value* args) {
+  (void)argc;
+  return vecScaleN(vm, 3, args, "vec3.scale expects (vec3, scalar).");
+}
+
+static Value nativeVec3Dot(VM* vm, int argc, Value* args) {
+  (void)argc;
+  return vecDotN(vm, 3, args, "vec3.dot expects two vec3 arrays.");
+}
+
+static Value nativeVec3Len(VM* vm, int argc, Value* args) {
+  (void)argc;
+  return vecLenN(vm, 3, args, "vec3.len expects a vec3 array.");
+}
+
+static Value nativeVec3Norm(VM* vm, int argc, Value* args) {
+  (void)argc;
+  return vecNormN(vm, 3, args, "vec3.norm expects a vec3 array.");
+}
+
+static Value nativeVec3Lerp(VM* vm, int argc, Value* args) {
+  (void)argc;
+  return vecLerpN(vm, 3, args, "vec3.lerp expects (a, b, t).");
+}
+
+static Value nativeVec3Dist(VM* vm, int argc, Value* args) {
+  (void)argc;
+  return vecDistN(vm, 3, args, "vec3.dist expects two vec3 arrays.");
+}
+
+static Value nativeVec3Cross(VM* vm, int argc, Value* args) {
+  (void)argc;
+  double a[3];
+  double b[3];
+  if (!vecRead(vm, args[0], 3, a, "vec3.cross expects two vec3 arrays.")) return NULL_VAL;
+  if (!vecRead(vm, args[1], 3, b, "vec3.cross expects two vec3 arrays.")) return NULL_VAL;
+  double out[3] = {
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0]
+  };
+  return vecMake(vm, 3, out);
+}
+
+static Value nativeVec4Make(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!IS_NUMBER(args[0]) || !IS_NUMBER(args[1]) ||
+      !IS_NUMBER(args[2]) || !IS_NUMBER(args[3])) {
+    return runtimeErrorValue(vm, "vec4.make expects (x, y, z, w) numbers.");
+  }
+  double values[4] = {
+    AS_NUMBER(args[0]), AS_NUMBER(args[1]),
+    AS_NUMBER(args[2]), AS_NUMBER(args[3])
+  };
+  return vecMake(vm, 4, values);
+}
+
+static Value nativeVec4Add(VM* vm, int argc, Value* args) {
+  (void)argc;
+  return vecAddN(vm, 4, args, "vec4.add expects two vec4 arrays.");
+}
+
+static Value nativeVec4Sub(VM* vm, int argc, Value* args) {
+  (void)argc;
+  return vecSubN(vm, 4, args, "vec4.sub expects two vec4 arrays.");
+}
+
+static Value nativeVec4Scale(VM* vm, int argc, Value* args) {
+  (void)argc;
+  return vecScaleN(vm, 4, args, "vec4.scale expects (vec4, scalar).");
+}
+
+static Value nativeVec4Dot(VM* vm, int argc, Value* args) {
+  (void)argc;
+  return vecDotN(vm, 4, args, "vec4.dot expects two vec4 arrays.");
+}
+
+static Value nativeVec4Len(VM* vm, int argc, Value* args) {
+  (void)argc;
+  return vecLenN(vm, 4, args, "vec4.len expects a vec4 array.");
+}
+
+static Value nativeVec4Norm(VM* vm, int argc, Value* args) {
+  (void)argc;
+  return vecNormN(vm, 4, args, "vec4.norm expects a vec4 array.");
+}
+
+static Value nativeVec4Lerp(VM* vm, int argc, Value* args) {
+  (void)argc;
+  return vecLerpN(vm, 4, args, "vec4.lerp expects (a, b, t).");
+}
+
+static Value nativeVec4Dist(VM* vm, int argc, Value* args) {
+  (void)argc;
+  return vecDistN(vm, 4, args, "vec4.dist expects two vec4 arrays.");
 }
 
 #ifdef _WIN32
@@ -2022,6 +3292,92 @@ static Value nativeFsListDir(VM* vm, int argc, Value* args) {
 #endif
 }
 
+static Value nativeFsIsFile(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "fs.isFile expects a path string.");
+  }
+  ObjString* path = (ObjString*)AS_OBJ(args[0]);
+  return BOOL_VAL(pathIsFile(path->chars));
+}
+
+static Value nativeFsIsDir(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "fs.isDir expects a path string.");
+  }
+  ObjString* path = (ObjString*)AS_OBJ(args[0]);
+  return BOOL_VAL(pathIsDir(path->chars));
+}
+
+static Value nativeFsSize(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "fs.size expects a path string.");
+  }
+  ObjString* path = (ObjString*)AS_OBJ(args[0]);
+  FILE* file = fopen(path->chars, "rb");
+  if (!file) {
+    return runtimeErrorValue(vm, "fs.size failed to open file.");
+  }
+  fseek(file, 0L, SEEK_END);
+  long size = ftell(file);
+  fclose(file);
+  if (size < 0) {
+    return runtimeErrorValue(vm, "fs.size failed to read file size.");
+  }
+  return NUMBER_VAL((double)size);
+}
+
+static Value nativeFsGlob(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "fs.glob expects a pattern string.");
+  }
+  ObjString* pattern = (ObjString*)AS_OBJ(args[0]);
+  const char* patternText = pattern->chars;
+  char sep = pickSeparator(patternText, NULL);
+
+  bool hasWildcard = false;
+  for (const char* c = patternText; *c; c++) {
+    if (*c == '*' || *c == '?') {
+      hasWildcard = true;
+      break;
+    }
+  }
+
+  StringList matches;
+  stringListInit(&matches);
+
+  if (!hasWildcard) {
+    if (pathExists(patternText)) {
+      stringListAdd(&matches, patternText);
+    }
+  } else {
+    int start = 0;
+    char* root = globRootFromPattern(patternText, sep, &start);
+    StringList segments;
+    globSplitSegments(patternText, start, &segments);
+
+    const char* error = NULL;
+    globWalk(root, sep, &segments, 0, &matches, &error);
+    stringListFree(&segments);
+    free(root);
+    if (error) {
+      stringListFree(&matches);
+      return runtimeErrorValue(vm, error);
+    }
+  }
+
+  stringListSort(&matches);
+  ObjArray* array = newArrayWithCapacity(vm, matches.count);
+  for (int i = 0; i < matches.count; i++) {
+    arrayWrite(array, OBJ_VAL(copyString(vm, matches.items[i])));
+  }
+  stringListFree(&matches);
+  return OBJ_VAL(array);
+}
+
 static Value nativePathJoin(VM* vm, int argc, Value* args) {
   (void)argc;
   if (!isObjType(args[0], OBJ_STRING) || !isObjType(args[1], OBJ_STRING)) {
@@ -2107,6 +3463,174 @@ static Value nativePathExtname(VM* vm, int argc, Value* args) {
   return OBJ_VAL(copyStringWithLength(vm, dot, (int)strlen(dot)));
 }
 
+static Value nativePathIsAbs(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "path.isAbs expects a path string.");
+  }
+  ObjString* path = (ObjString*)AS_OBJ(args[0]);
+  return BOOL_VAL(isAbsolutePathString(path->chars));
+}
+
+static Value nativePathStem(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "path.stem expects a path string.");
+  }
+  ObjString* path = (ObjString*)AS_OBJ(args[0]);
+  const char* sep = findLastSeparator(path->chars);
+  const char* base = sep ? sep + 1 : path->chars;
+  const char* dot = strrchr(base, '.');
+  if (!dot || dot == base) {
+    return OBJ_VAL(copyString(vm, base));
+  }
+  return OBJ_VAL(copyStringWithLength(vm, base, (int)(dot - base)));
+}
+
+static Value nativePathNormalize(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "path.normalize expects a path string.");
+  }
+  ObjString* path = (ObjString*)AS_OBJ(args[0]);
+  const char* text = path->chars;
+  bool hasBackslash = strchr(text, '\\') != NULL;
+  char sep = hasBackslash ? '\\' : '/';
+  bool isAbs = isAbsolutePathString(text);
+
+  StringList parts;
+  stringListInit(&parts);
+
+  int start = 0;
+  char drive = '\0';
+  if (isAbs && ((text[0] >= 'A' && text[0] <= 'Z') ||
+                (text[0] >= 'a' && text[0] <= 'z')) &&
+      text[1] == ':' && (text[2] == '\\' || text[2] == '/')) {
+    drive = text[0];
+    start = 3;
+  } else if (isAbs && (text[0] == '\\' || text[0] == '/')) {
+    start = 1;
+  }
+
+  const char* cursor = text + start;
+  while (*cursor) {
+    while (*cursor == '/' || *cursor == '\\') cursor++;
+    if (*cursor == '\0') break;
+    const char* begin = cursor;
+    while (*cursor && *cursor != '/' && *cursor != '\\') cursor++;
+    size_t length = (size_t)(cursor - begin);
+    if (length == 0) continue;
+    if (length == 1 && begin[0] == '.') {
+      continue;
+    }
+    if (length == 2 && begin[0] == '.' && begin[1] == '.') {
+      if (parts.count > 0 && strcmp(parts.items[parts.count - 1], "..") != 0) {
+        free(parts.items[--parts.count]);
+        parts.items[parts.count] = NULL;
+      } else if (!isAbs) {
+        stringListAdd(&parts, "..");
+      }
+      continue;
+    }
+    stringListAddWithLength(&parts, begin, length);
+  }
+
+  size_t total = 0;
+  if (isAbs) {
+    total += drive ? 3 : 1;
+  }
+  for (int i = 0; i < parts.count; i++) {
+    total += strlen(parts.items[i]);
+    if (i + 1 < parts.count) total += 1;
+  }
+  if (total == 0) {
+    if (isAbs) {
+      stringListFree(&parts);
+      if (drive) {
+        char rootBuf[4] = { drive, ':', sep, '\0' };
+        return OBJ_VAL(copyString(vm, rootBuf));
+      }
+      char rootBuf[2] = { sep, '\0' };
+      return OBJ_VAL(copyString(vm, rootBuf));
+    }
+    stringListFree(&parts);
+    return OBJ_VAL(copyString(vm, "."));
+  }
+
+  char* buffer = (char*)malloc(total + 1);
+  if (!buffer) {
+    stringListFree(&parts);
+    return runtimeErrorValue(vm, "path.normalize out of memory.");
+  }
+  size_t offset = 0;
+  if (isAbs) {
+    if (drive) {
+      buffer[offset++] = drive;
+      buffer[offset++] = ':';
+      buffer[offset++] = sep;
+    } else {
+      buffer[offset++] = sep;
+    }
+  }
+  for (int i = 0; i < parts.count; i++) {
+    size_t length = strlen(parts.items[i]);
+    memcpy(buffer + offset, parts.items[i], length);
+    offset += length;
+    if (i + 1 < parts.count) {
+      buffer[offset++] = sep;
+    }
+  }
+  buffer[offset] = '\0';
+
+  ObjString* result = copyStringWithLength(vm, buffer, (int)offset);
+  free(buffer);
+  stringListFree(&parts);
+  return OBJ_VAL(result);
+}
+
+static Value nativePathSplit(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "path.split expects a path string.");
+  }
+  ObjString* path = (ObjString*)AS_OBJ(args[0]);
+  const char* sep = findLastSeparator(path->chars);
+  const char* base = sep ? sep + 1 : path->chars;
+  const char* dot = strrchr(base, '.');
+  ObjMap* map = newMap(vm);
+
+  ObjString* keyDir = copyString(vm, "dir");
+  ObjString* keyBase = copyString(vm, "base");
+  ObjString* keyName = copyString(vm, "name");
+  ObjString* keyExt = copyString(vm, "ext");
+
+  Value dirValue;
+  if (!sep) {
+    dirValue = OBJ_VAL(copyString(vm, "."));
+  } else {
+    size_t length = (size_t)(sep - path->chars);
+    if (length == 0) length = 1;
+    dirValue = OBJ_VAL(copyStringWithLength(vm, path->chars, (int)length));
+  }
+
+  Value baseValue = OBJ_VAL(copyString(vm, base));
+  Value nameValue;
+  Value extValue;
+  if (!dot || dot == base) {
+    nameValue = OBJ_VAL(copyString(vm, base));
+    extValue = OBJ_VAL(copyString(vm, ""));
+  } else {
+    nameValue = OBJ_VAL(copyStringWithLength(vm, base, (int)(dot - base)));
+    extValue = OBJ_VAL(copyStringWithLength(vm, dot, (int)strlen(dot)));
+  }
+
+  mapSet(map, keyDir, dirValue);
+  mapSet(map, keyBase, baseValue);
+  mapSet(map, keyName, nameValue);
+  mapSet(map, keyExt, extValue);
+  return OBJ_VAL(map);
+}
+
 static Value nativeRandomSeed(VM* vm, int argc, Value* args) {
   (void)argc;
   if (!IS_NUMBER(args[0])) {
@@ -2118,6 +3642,7 @@ static Value nativeRandomSeed(VM* vm, int argc, Value* args) {
   }
   gRandomState = (uint64_t)seed;
   gRandomSeeded = true;
+  gRandomHasSpare = false;
   return NULL_VAL;
 }
 
@@ -2185,6 +3710,47 @@ static Value nativeRandomChoice(VM* vm, int argc, Value* args) {
   }
   uint64_t index = randomNext() % (uint64_t)array->count;
   return array->items[(int)index];
+}
+
+static Value nativeRandomNormal(VM* vm, int argc, Value* args) {
+  if (argc < 2) {
+    return runtimeErrorValue(vm, "random.normal expects (mean, stddev).");
+  }
+  if (!IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) {
+    return runtimeErrorValue(vm, "random.normal expects numeric bounds.");
+  }
+  double mean = AS_NUMBER(args[0]);
+  double stddev = AS_NUMBER(args[1]);
+  if (stddev < 0.0) {
+    return runtimeErrorValue(vm, "random.normal expects stddev >= 0.");
+  }
+  return NUMBER_VAL(mean + randomNextNormal() * stddev);
+}
+
+static Value nativeRandomGaussian(VM* vm, int argc, Value* args) {
+  return nativeRandomNormal(vm, argc, args);
+}
+
+static Value nativeRandomExponential(VM* vm, int argc, Value* args) {
+  if (argc < 1) {
+    return runtimeErrorValue(vm, "random.exponential expects (lambda).");
+  }
+  if (!IS_NUMBER(args[0])) {
+    return runtimeErrorValue(vm, "random.exponential expects a number.");
+  }
+  double lambda = AS_NUMBER(args[0]);
+  if (lambda <= 0.0) {
+    return runtimeErrorValue(vm, "random.exponential expects lambda > 0.");
+  }
+  double u = randomNextDouble();
+  if (u <= 0.0) {
+    u = 1e-12;
+  }
+  return NUMBER_VAL(-log(1.0 - u) / lambda);
+}
+
+static Value nativeRandomUniform(VM* vm, int argc, Value* args) {
+  return nativeRandomFloat(vm, argc, args);
 }
 
 static Value nativeStrUpper(VM* vm, int argc, Value* args) {
@@ -2773,6 +4339,97 @@ static Value nativeTimeSleep(VM* vm, int argc, Value* args) {
   return NULL_VAL;
 }
 
+static bool timeGetTm(double seconds, bool utc, struct tm* out) {
+  time_t raw = (time_t)seconds;
+#ifdef _WIN32
+  int err = utc ? gmtime_s(out, &raw) : localtime_s(out, &raw);
+  return err == 0;
+#else
+  struct tm* result = utc ? gmtime_r(&raw, out) : localtime_r(&raw, out);
+  return result != NULL;
+#endif
+}
+
+static bool valueIsTruthy(Value value) {
+  if (IS_NULL(value)) return false;
+  if (IS_BOOL(value)) return AS_BOOL(value);
+  if (IS_NUMBER(value)) return AS_NUMBER(value) != 0;
+  return true;
+}
+
+static Value nativeTimeFormat(VM* vm, int argc, Value* args) {
+  if (argc < 2) {
+    return runtimeErrorValue(vm, "time.format expects (timestamp, format, utc?).");
+  }
+  if (!IS_NUMBER(args[0]) || !isObjType(args[1], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "time.format expects (timestamp, format, utc?).");
+  }
+  bool utc = false;
+  if (argc >= 3) {
+    utc = valueIsTruthy(args[2]);
+  }
+  ObjString* format = (ObjString*)AS_OBJ(args[1]);
+  struct tm tmValue;
+  if (!timeGetTm(AS_NUMBER(args[0]), utc, &tmValue)) {
+    return runtimeErrorValue(vm, "time.format failed.");
+  }
+  char buffer[256];
+  size_t written = strftime(buffer, sizeof(buffer), format->chars, &tmValue);
+  if (written == 0) {
+    return runtimeErrorValue(vm, "time.format failed to format.");
+  }
+  return OBJ_VAL(copyStringWithLength(vm, buffer, (int)written));
+}
+
+static Value nativeTimeIso(VM* vm, int argc, Value* args) {
+  if (argc < 1 || !IS_NUMBER(args[0])) {
+    return runtimeErrorValue(vm, "time.iso expects (timestamp, utc?).");
+  }
+  bool utc = false;
+  if (argc >= 2) {
+    utc = valueIsTruthy(args[1]);
+  }
+  struct tm tmValue;
+  if (!timeGetTm(AS_NUMBER(args[0]), utc, &tmValue)) {
+    return runtimeErrorValue(vm, "time.iso failed.");
+  }
+  char buffer[32];
+  size_t written = strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%S", &tmValue);
+  if (written == 0) {
+    return runtimeErrorValue(vm, "time.iso failed to format.");
+  }
+  if (utc && written + 1 < sizeof(buffer)) {
+    buffer[written++] = 'Z';
+    buffer[written] = '\0';
+  }
+  return OBJ_VAL(copyStringWithLength(vm, buffer, (int)written));
+}
+
+static Value nativeTimeParts(VM* vm, int argc, Value* args) {
+  if (argc < 1 || !IS_NUMBER(args[0])) {
+    return runtimeErrorValue(vm, "time.parts expects (timestamp, utc?).");
+  }
+  bool utc = false;
+  if (argc >= 2) {
+    utc = valueIsTruthy(args[1]);
+  }
+  struct tm tmValue;
+  if (!timeGetTm(AS_NUMBER(args[0]), utc, &tmValue)) {
+    return runtimeErrorValue(vm, "time.parts failed.");
+  }
+  ObjMap* map = newMap(vm);
+  mapSet(map, copyString(vm, "year"), NUMBER_VAL((double)(tmValue.tm_year + 1900)));
+  mapSet(map, copyString(vm, "month"), NUMBER_VAL((double)(tmValue.tm_mon + 1)));
+  mapSet(map, copyString(vm, "day"), NUMBER_VAL((double)tmValue.tm_mday));
+  mapSet(map, copyString(vm, "hour"), NUMBER_VAL((double)tmValue.tm_hour));
+  mapSet(map, copyString(vm, "min"), NUMBER_VAL((double)tmValue.tm_min));
+  mapSet(map, copyString(vm, "sec"), NUMBER_VAL((double)tmValue.tm_sec));
+  mapSet(map, copyString(vm, "wday"), NUMBER_VAL((double)tmValue.tm_wday));
+  mapSet(map, copyString(vm, "yday"), NUMBER_VAL((double)tmValue.tm_yday));
+  mapSet(map, copyString(vm, "isdst"), BOOL_VAL(tmValue.tm_isdst > 0));
+  return OBJ_VAL(map);
+}
+
 static Value nativeProcRun(VM* vm, int argc, Value* args) {
   (void)argc;
   if (!isObjType(args[0], OBJ_STRING)) {
@@ -2948,6 +4605,10 @@ void defineStdlib(VM* vm) {
   moduleAdd(vm, fs, "exists", nativeFsExists, 1);
   moduleAdd(vm, fs, "cwd", nativeFsCwd, 0);
   moduleAdd(vm, fs, "listDir", nativeFsListDir, 1);
+  moduleAdd(vm, fs, "isFile", nativeFsIsFile, 1);
+  moduleAdd(vm, fs, "isDir", nativeFsIsDir, 1);
+  moduleAdd(vm, fs, "size", nativeFsSize, 1);
+  moduleAdd(vm, fs, "glob", nativeFsGlob, 1);
   defineGlobal(vm, "fs", OBJ_VAL(fs));
 
   ObjInstance* path = makeModule(vm, "path");
@@ -2955,12 +4616,21 @@ void defineStdlib(VM* vm) {
   moduleAdd(vm, path, "dirname", nativePathDirname, 1);
   moduleAdd(vm, path, "basename", nativePathBasename, 1);
   moduleAdd(vm, path, "extname", nativePathExtname, 1);
+  moduleAdd(vm, path, "isAbs", nativePathIsAbs, 1);
+  moduleAdd(vm, path, "normalize", nativePathNormalize, 1);
+  moduleAdd(vm, path, "stem", nativePathStem, 1);
+  moduleAdd(vm, path, "split", nativePathSplit, 1);
   defineGlobal(vm, "path", OBJ_VAL(path));
 
   ObjInstance* json = makeModule(vm, "json");
   moduleAdd(vm, json, "parse", nativeJsonParse, 1);
   moduleAdd(vm, json, "stringify", nativeJsonStringify, 1);
   defineGlobal(vm, "json", OBJ_VAL(json));
+
+  ObjInstance* yaml = makeModule(vm, "yaml");
+  moduleAdd(vm, yaml, "parse", nativeYamlParse, 1);
+  moduleAdd(vm, yaml, "stringify", nativeYamlStringify, 1);
+  defineGlobal(vm, "yaml", OBJ_VAL(yaml));
 
   ObjInstance* math = makeModule(vm, "math");
   moduleAdd(vm, math, "abs", nativeMathAbs, 1);
@@ -2981,6 +4651,10 @@ void defineStdlib(VM* vm) {
   moduleAdd(vm, random, "int", nativeRandomInt, -1);
   moduleAdd(vm, random, "float", nativeRandomFloat, -1);
   moduleAdd(vm, random, "choice", nativeRandomChoice, 1);
+  moduleAdd(vm, random, "normal", nativeRandomNormal, 2);
+  moduleAdd(vm, random, "gaussian", nativeRandomGaussian, 2);
+  moduleAdd(vm, random, "exponential", nativeRandomExponential, 1);
+  moduleAdd(vm, random, "uniform", nativeRandomUniform, -1);
   defineGlobal(vm, "random", OBJ_VAL(random));
 
   ObjInstance* str = makeModule(vm, "str");
@@ -3023,7 +4697,47 @@ void defineStdlib(VM* vm) {
   ObjInstance* timeModule = makeModule(vm, "time");
   moduleAdd(vm, timeModule, "now", nativeTimeNow, 0);
   moduleAdd(vm, timeModule, "sleep", nativeTimeSleep, 1);
+  moduleAdd(vm, timeModule, "format", nativeTimeFormat, -1);
+  moduleAdd(vm, timeModule, "iso", nativeTimeIso, -1);
+  moduleAdd(vm, timeModule, "parts", nativeTimeParts, -1);
   defineGlobal(vm, "time", OBJ_VAL(timeModule));
+
+  ObjInstance* vec2 = makeModule(vm, "vec2");
+  moduleAdd(vm, vec2, "make", nativeVec2Make, 2);
+  moduleAdd(vm, vec2, "add", nativeVec2Add, 2);
+  moduleAdd(vm, vec2, "sub", nativeVec2Sub, 2);
+  moduleAdd(vm, vec2, "scale", nativeVec2Scale, 2);
+  moduleAdd(vm, vec2, "dot", nativeVec2Dot, 2);
+  moduleAdd(vm, vec2, "len", nativeVec2Len, 1);
+  moduleAdd(vm, vec2, "norm", nativeVec2Norm, 1);
+  moduleAdd(vm, vec2, "lerp", nativeVec2Lerp, 3);
+  moduleAdd(vm, vec2, "dist", nativeVec2Dist, 2);
+  defineGlobal(vm, "vec2", OBJ_VAL(vec2));
+
+  ObjInstance* vec3 = makeModule(vm, "vec3");
+  moduleAdd(vm, vec3, "make", nativeVec3Make, 3);
+  moduleAdd(vm, vec3, "add", nativeVec3Add, 2);
+  moduleAdd(vm, vec3, "sub", nativeVec3Sub, 2);
+  moduleAdd(vm, vec3, "scale", nativeVec3Scale, 2);
+  moduleAdd(vm, vec3, "dot", nativeVec3Dot, 2);
+  moduleAdd(vm, vec3, "len", nativeVec3Len, 1);
+  moduleAdd(vm, vec3, "norm", nativeVec3Norm, 1);
+  moduleAdd(vm, vec3, "lerp", nativeVec3Lerp, 3);
+  moduleAdd(vm, vec3, "dist", nativeVec3Dist, 2);
+  moduleAdd(vm, vec3, "cross", nativeVec3Cross, 2);
+  defineGlobal(vm, "vec3", OBJ_VAL(vec3));
+
+  ObjInstance* vec4 = makeModule(vm, "vec4");
+  moduleAdd(vm, vec4, "make", nativeVec4Make, 4);
+  moduleAdd(vm, vec4, "add", nativeVec4Add, 2);
+  moduleAdd(vm, vec4, "sub", nativeVec4Sub, 2);
+  moduleAdd(vm, vec4, "scale", nativeVec4Scale, 2);
+  moduleAdd(vm, vec4, "dot", nativeVec4Dot, 2);
+  moduleAdd(vm, vec4, "len", nativeVec4Len, 1);
+  moduleAdd(vm, vec4, "norm", nativeVec4Norm, 1);
+  moduleAdd(vm, vec4, "lerp", nativeVec4Lerp, 3);
+  moduleAdd(vm, vec4, "dist", nativeVec4Dist, 2);
+  defineGlobal(vm, "vec4", OBJ_VAL(vec4));
 
   ObjInstance* http = makeModule(vm, "http");
   moduleAdd(vm, http, "get", nativeHttpGet, 1);

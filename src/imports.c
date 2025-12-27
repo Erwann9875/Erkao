@@ -62,6 +62,152 @@ static char* copyCString(const char* src, size_t length) {
   return out;
 }
 
+typedef struct {
+  char** parts;
+  int count;
+  int capacity;
+} PathParts;
+
+static void pathPartsInit(PathParts* parts) {
+  parts->parts = NULL;
+  parts->count = 0;
+  parts->capacity = 0;
+}
+
+static void pathPartsFree(PathParts* parts) {
+  for (int i = 0; i < parts->count; i++) {
+    free(parts->parts[i]);
+  }
+  free(parts->parts);
+  pathPartsInit(parts);
+}
+
+static void pathPartsPush(PathParts* parts, const char* start, size_t length) {
+  if (parts->capacity < parts->count + 1) {
+    int oldCapacity = parts->capacity;
+    parts->capacity = oldCapacity == 0 ? 8 : oldCapacity * 2;
+    parts->parts = (char**)realloc(parts->parts,
+                                   sizeof(char*) * (size_t)parts->capacity);
+    if (!parts->parts) {
+      fprintf(stderr, "Out of memory.\n");
+      exit(1);
+    }
+  }
+  parts->parts[parts->count++] = copyCString(start, length);
+}
+
+static void pathPartsPop(PathParts* parts) {
+  if (parts->count <= 0) return;
+  free(parts->parts[parts->count - 1]);
+  parts->count--;
+}
+
+static char* normalizePath(const char* path) {
+  if (!path) return NULL;
+  char sep = strchr(path, '\\') ? '\\' : '/';
+  bool isAbs = isAbsolutePath(path);
+  bool unc = false;
+  int start = 0;
+  char drive = '\0';
+
+  if (isAbs &&
+      ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) &&
+      path[1] == ':' && (path[2] == '\\' || path[2] == '/')) {
+    drive = path[0];
+    start = 3;
+  } else if (isAbs && (path[0] == '\\' || path[0] == '/')) {
+    if ((path[1] == '\\' || path[1] == '/') && path[1] != '\0') {
+      unc = true;
+      start = 2;
+    } else {
+      start = 1;
+    }
+  }
+
+  PathParts parts;
+  pathPartsInit(&parts);
+
+  const char* cursor = path + start;
+  while (*cursor) {
+    while (*cursor == '/' || *cursor == '\\') cursor++;
+    if (*cursor == '\0') break;
+    const char* begin = cursor;
+    while (*cursor && *cursor != '/' && *cursor != '\\') cursor++;
+    size_t length = (size_t)(cursor - begin);
+    if (length == 0) continue;
+    if (length == 1 && begin[0] == '.') {
+      continue;
+    }
+    if (length == 2 && begin[0] == '.' && begin[1] == '.') {
+      if (parts.count > 0 && strcmp(parts.parts[parts.count - 1], "..") != 0) {
+        pathPartsPop(&parts);
+      } else if (!isAbs) {
+        pathPartsPush(&parts, begin, length);
+      }
+      continue;
+    }
+    pathPartsPush(&parts, begin, length);
+  }
+
+  size_t total = 0;
+  if (isAbs) {
+    if (drive) {
+      total += 3;
+    } else {
+      total += unc ? 2 : 1;
+    }
+  }
+  for (int i = 0; i < parts.count; i++) {
+    total += strlen(parts.parts[i]);
+    if (i + 1 < parts.count) {
+      total += 1;
+    }
+  }
+
+  if (total == 0) {
+    pathPartsFree(&parts);
+    if (isAbs) {
+      if (drive) {
+        char root[4] = { drive, ':', sep, '\0' };
+        return copyCString(root, 3);
+      }
+      char root[3] = { sep, unc ? sep : '\0', '\0' };
+      return copyCString(root, unc ? 2 : 1);
+    }
+    return copyCString(".", 1);
+  }
+
+  char* buffer = (char*)malloc(total + 1);
+  if (!buffer) {
+    fprintf(stderr, "Out of memory.\n");
+    exit(1);
+  }
+  size_t offset = 0;
+  if (isAbs) {
+    if (drive) {
+      buffer[offset++] = drive;
+      buffer[offset++] = ':';
+      buffer[offset++] = sep;
+    } else {
+      buffer[offset++] = sep;
+      if (unc) {
+        buffer[offset++] = sep;
+      }
+    }
+  }
+  for (int i = 0; i < parts.count; i++) {
+    if (offset > 0 && buffer[offset - 1] != sep) {
+      buffer[offset++] = sep;
+    }
+    size_t length = strlen(parts.parts[i]);
+    memcpy(buffer + offset, parts.parts[i], length);
+    offset += length;
+  }
+  buffer[offset] = '\0';
+  pathPartsFree(&parts);
+  return buffer;
+}
+
 static char* pathDirname(const char* path) {
   const char* lastSlash = strrchr(path, '/');
   const char* lastBackslash = strrchr(path, '\\');
@@ -881,7 +1027,12 @@ static char* resolvePackagePath(const char* packagesDir, const char* name,
   free(nameDir);
   char* resolved = resolvePackageEntry(versionDir, subpath);
   free(versionDir);
-  return resolved;
+  if (resolved) {
+    char* normalized = normalizePath(resolved);
+    free(resolved);
+    return normalized;
+  }
+  return NULL;
 }
 
 static char* resolveFromModulePaths(VM* vm, const char* importPath) {
@@ -937,7 +1088,12 @@ char* resolveImportPath(VM* vm, const char* currentPath, const char* importPath)
       }
     }
     free(base);
-    return resolved;
+    if (resolved) {
+      char* normalized = normalizePath(resolved);
+      free(resolved);
+      return normalized;
+    }
+    return NULL;
   }
 
   char* name = NULL;
@@ -1031,6 +1187,9 @@ char* resolveImportPath(VM* vm, const char* currentPath, const char* importPath)
 
   char* resolved = resolveFromModulePaths(vm, importPath);
   if (resolved) {
+    char* normalized = normalizePath(resolved);
+    free(resolved);
+    resolved = normalized;
     free(name);
     free(subpath);
     free(packagesDir);

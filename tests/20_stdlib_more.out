@@ -1,0 +1,23 @@
+isFile true
+isDir true
+pathAbs true
+pathNorm tests/glob/a.txt
+pathStem bar
+pathSplit foo bar.txt bar .txt
+glob [a.txt, b.txt]
+globDeep [deep.txt]
+yamlName Erkao
+yamlCount 2
+yamlItem b
+yamlFlag true
+yamlString a: 1
+vlen 5
+vnorm [0.6, 0.8]
+cross [0, 0, 1]
+gaussType number
+expType number
+uniformType number
+timeFmt 1970-01-01 00:00:00
+timeIso 1970-01-01T00:00:00Z
+timeYear 1970
+timeMonth 1

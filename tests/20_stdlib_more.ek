@@ -1,0 +1,47 @@
+print("isFile", fs.isFile("tests/01_basic.ek"));
+print("isDir", fs.isDir("tests"));
+print("pathAbs", path.isAbs("C:/") or path.isAbs("/tmp"));
+print("pathNorm", path.normalize("tests/./glob/../glob/a.txt"));
+print("pathStem", path.stem("foo/bar.txt"));
+let split = path.split("foo/bar.txt");
+print("pathSplit", split["dir"], split["base"], split["name"], split["ext"]);
+
+let hits = fs.glob("tests/glob/*.txt");
+let names = [];
+foreach (p in hits) {
+  push(names, path.basename(p));
+}
+print("glob", names);
+
+let deep = fs.glob("tests/glob/**/deep.txt");
+let deepNames = [];
+foreach (p in deep) {
+  push(deepNames, path.basename(p));
+}
+print("globDeep", deepNames);
+
+let yamlText = "name: Erkao\ncount: 2\nitems:\n  - a\n  - b\nnested:\n  flag: true\n  value: 3\n";
+let obj = yaml.parse(yamlText);
+print("yamlName", obj["name"]);
+print("yamlCount", obj["count"]);
+print("yamlItem", obj["items"][1]);
+print("yamlFlag", obj["nested"]["flag"]);
+print("yamlString", yaml.stringify({a: 1}));
+
+let v = vec2.make(3, 4);
+print("vlen", vec2.len(v));
+print("vnorm", vec2.norm(v));
+let a = vec3.make(1, 0, 0);
+let b = vec3.make(0, 1, 0);
+print("cross", vec3.cross(a, b));
+
+random.seed(42);
+print("gaussType", type(random.gaussian(0, 1)));
+print("expType", type(random.exponential(2)));
+print("uniformType", type(random.uniform(0, 1)));
+
+print("timeFmt", time.format(0, "%Y-%m-%d %H:%M:%S", true));
+print("timeIso", time.iso(0, true));
+let parts = time.parts(0, true);
+print("timeYear", parts["year"]);
+print("timeMonth", parts["month"]);

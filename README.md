@@ -325,12 +325,22 @@ See `examples/packages_semver.ek` for a full example.
 - `fs.writeText(path, text)`
 - `fs.listDir(path)`
 - `fs.cwd()`
+- `fs.isFile(path)`
+- `fs.isDir(path)`
+- `fs.size(path)`
+- `fs.glob(pattern)`
 - `path.join(left, right)`
 - `path.dirname(path)`
 - `path.basename(path)`
 - `path.extname(path)`
+- `path.isAbs(path)`
+- `path.normalize(path)`
+- `path.stem(path)`
+- `path.split(path)`
 - `json.parse(text)`
 - `json.stringify(value)`
+- `yaml.parse(text)`
+- `yaml.stringify(value)`
 - `math.abs(x)`
 - `math.floor(x)`
 - `math.ceil(x)`
@@ -346,6 +356,10 @@ See `examples/packages_semver.ek` for a full example.
 - `random.int(max)` / `random.int(min, max)`
 - `random.float()` / `random.float(min, max)`
 - `random.choice(array)`
+- `random.normal(mean, stddev)`
+- `random.gaussian(mean, stddev)`
+- `random.exponential(lambda)`
+- `random.uniform()` / `random.uniform(min, max)`
 - `str.upper(text)`
 - `str.lower(text)`
 - `str.trim(text)`
@@ -381,6 +395,9 @@ See `examples/packages_semver.ek` for a full example.
 - `proc.run(cmd)`
 - `time.now()`
 - `time.sleep(seconds)`
+- `time.format(timestamp, format, utc?)`
+- `time.iso(timestamp, utc?)`
+- `time.parts(timestamp, utc?)`
 - `env.get(name)`
 - `env.set(name, value)`
 - `env.has(name)`
@@ -388,6 +405,16 @@ See `examples/packages_semver.ek` for a full example.
 - `env.all()`
 - `env.args()`
 - `plugin.load(path)`
+- `vec2.make(x, y)` / `vec3.make(x, y, z)` / `vec4.make(x, y, z, w)`
+- `vec2.add(a, b)` / `vec3.add(a, b)` / `vec4.add(a, b)`
+- `vec2.sub(a, b)` / `vec3.sub(a, b)` / `vec4.sub(a, b)`
+- `vec2.scale(v, s)` / `vec3.scale(v, s)` / `vec4.scale(v, s)`
+- `vec2.dot(a, b)` / `vec3.dot(a, b)` / `vec4.dot(a, b)`
+- `vec2.len(v)` / `vec3.len(v)` / `vec4.len(v)`
+- `vec2.norm(v)` / `vec3.norm(v)` / `vec4.norm(v)`
+- `vec2.lerp(a, b, t)` / `vec3.lerp(a, b, t)` / `vec4.lerp(a, b, t)`
+- `vec2.dist(a, b)` / `vec3.dist(a, b)` / `vec4.dist(a, b)`
+- `vec3.cross(a, b)`
 
 ## Graphics (gfx)
 
