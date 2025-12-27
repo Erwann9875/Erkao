@@ -1,11 +1,13 @@
 import "alpha" as alpha;
 import "alpha/utils" as utils;
+import "alpha/util" as util;
 import "alpha@2.0.0" as alpha2;
 import "alpha@^1.0.0" as alphaRange;
 import "beta" as beta;
 
 print(alpha.version);
 print(utils.util);
+print(util.util);
 print(alpha2.version);
 print(alphaRange.version);
 print(beta.version);

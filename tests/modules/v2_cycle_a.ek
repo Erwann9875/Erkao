@@ -1,0 +1,4 @@
+import * as b from "./v2_cycle_b.ek";
+
+export let name = "A";
+export let fromB = b.name;

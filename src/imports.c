@@ -753,21 +753,134 @@ static void parseModuleSpec(const char* importPath, char** outName,
   }
 }
 
+typedef struct {
+  char* name;
+  char* path;
+} PackageExport;
+
+typedef struct {
+  char* mainPath;
+  PackageExport* exports;
+  int count;
+  int capacity;
+} PackageMeta;
+
+static void packageMetaInit(PackageMeta* meta) {
+  meta->mainPath = NULL;
+  meta->exports = NULL;
+  meta->count = 0;
+  meta->capacity = 0;
+}
+
+static void packageMetaFree(PackageMeta* meta) {
+  free(meta->mainPath);
+  for (int i = 0; i < meta->count; i++) {
+    free(meta->exports[i].name);
+    free(meta->exports[i].path);
+  }
+  free(meta->exports);
+  packageMetaInit(meta);
+}
+
+static void packageMetaAddExport(PackageMeta* meta, const char* name, const char* path) {
+  if (!name || !path) return;
+  for (int i = 0; i < meta->count; i++) {
+    if (strcmp(meta->exports[i].name, name) == 0) {
+      free(meta->exports[i].path);
+      meta->exports[i].path = copyCString(path, strlen(path));
+      return;
+    }
+  }
+  if (meta->capacity < meta->count + 1) {
+    int oldCap = meta->capacity;
+    meta->capacity = oldCap == 0 ? 4 : oldCap * 2;
+    meta->exports = (PackageExport*)realloc(meta->exports,
+                                            sizeof(PackageExport) * (size_t)meta->capacity);
+    if (!meta->exports) {
+      fprintf(stderr, "Out of memory.\n");
+      exit(1);
+    }
+  }
+  meta->exports[meta->count].name = copyCString(name, strlen(name));
+  meta->exports[meta->count].path = copyCString(path, strlen(path));
+  meta->count++;
+}
+
+static bool readPackageMeta(const char* packageDir, PackageMeta* out) {
+  packageMetaInit(out);
+  if (!packageDir) return false;
+  char* manifestPath = joinPaths(packageDir, "erkao.mod");
+  FILE* file = fopen(manifestPath, "rb");
+  free(manifestPath);
+  if (!file) return false;
+
+  char buffer[512];
+  while (fgets(buffer, sizeof(buffer), file)) {
+    stripComment(buffer);
+    char* line = buffer;
+    while (*line && isspace((unsigned char)*line)) line++;
+    if (*line == '\0') continue;
+
+    char* ctx = NULL;
+    char* token = nextToken(line, " \t\r\n", &ctx);
+    if (!token) continue;
+    if (strcmp(token, "main") == 0) {
+      char* path = nextToken(NULL, " \t\r\n", &ctx);
+      if (path && path[0] != '\0') {
+        free(out->mainPath);
+        out->mainPath = copyCString(path, strlen(path));
+      }
+    } else if (strcmp(token, "export") == 0 || strcmp(token, "exports") == 0) {
+      char* name = nextToken(NULL, " \t\r\n", &ctx);
+      char* path = nextToken(NULL, " \t\r\n", &ctx);
+      if (name && path) {
+        packageMetaAddExport(out, name, path);
+      }
+    }
+  }
+
+  fclose(file);
+  return true;
+}
+
+static char* resolvePackageEntry(const char* versionDir, const char* subpath) {
+  if (!versionDir) return NULL;
+  PackageMeta meta;
+  bool hasMeta = readPackageMeta(versionDir, &meta);
+
+  char* base = NULL;
+  if (subpath && subpath[0] != '\0') {
+    if (hasMeta) {
+      for (int i = 0; i < meta.count; i++) {
+        if (strcmp(meta.exports[i].name, subpath) == 0) {
+          base = joinPaths(versionDir, meta.exports[i].path);
+          break;
+        }
+      }
+    }
+    if (!base) {
+      base = joinPaths(versionDir, subpath);
+    }
+  } else if (hasMeta && meta.mainPath) {
+    base = joinPaths(versionDir, meta.mainPath);
+  } else {
+    base = copyCString(versionDir, strlen(versionDir));
+  }
+
+  char* resolved = resolveModuleFile(base);
+  free(base);
+  if (hasMeta) packageMetaFree(&meta);
+  return resolved;
+}
+
 static char* resolvePackagePath(const char* packagesDir, const char* name,
                                 const char* version, const char* subpath) {
   if (!packagesDir || !name || !version) return NULL;
   char* nameDir = joinPaths(packagesDir, name);
   char* versionDir = joinPaths(nameDir, version);
   free(nameDir);
-  char* base = NULL;
-  if (subpath && subpath[0] != '\0') {
-    base = joinPaths(versionDir, subpath);
-  } else {
-    base = copyCString(versionDir, strlen(versionDir));
-  }
+  char* resolved = resolvePackageEntry(versionDir, subpath);
   free(versionDir);
-  char* resolved = resolveModuleFile(base);
-  free(base);
   return resolved;
 }
 

@@ -211,7 +211,8 @@ static void codeEmitShort(CodeBuilder* out, uint16_t value, Token token) {
   codeEmitByte(out, (uint8_t)(value & 0xff), token);
 }
 
-static int instructionLength(uint8_t op) {
+static int instructionLength(const Chunk* chunk, int offset) {
+  uint8_t op = chunk->code[offset];
   switch (op) {
     case OP_CONSTANT:
     case OP_GET_VAR:
@@ -224,12 +225,18 @@ static int instructionLength(uint8_t op) {
     case OP_GET_THIS:
     case OP_CLOSURE:
     case OP_EXPORT:
+    case OP_EXPORT_VALUE:
     case OP_JUMP:
     case OP_JUMP_IF_FALSE:
     case OP_LOOP:
     case OP_ARRAY:
     case OP_MAP:
       return 3;
+    case OP_EXPORT_FROM: {
+      if (offset + 3 > chunk->count) return 1;
+      uint16_t count = (uint16_t)((chunk->code[offset + 1] << 8) | chunk->code[offset + 2]);
+      return 3 + (int)count * 4;
+    }
     case OP_CALL:
     case OP_CALL_OPTIONAL:
       return 2;
@@ -239,6 +246,8 @@ static int instructionLength(uint8_t op) {
       return 5;
     case OP_IMPORT:
       return 4;
+    case OP_IMPORT_MODULE:
+      return 1;
     default:
       return 1;
   }
@@ -330,7 +339,7 @@ static void optimizeChunk(VM* vm, Chunk* chunk) {
       }
     }
     uint8_t op = chunk->code[offset];
-    int length = instructionLength(op);
+    int length = instructionLength(chunk, offset);
     if (offset + length > chunk->count) {
       length = 1;
     }
@@ -512,6 +521,11 @@ static Token advance(Compiler* c) {
 static bool check(Compiler* c, ErkaoTokenType type) {
   if (isAtEnd(c)) return false;
   return peek(c).type == type;
+}
+
+static bool checkNext(Compiler* c, ErkaoTokenType type) {
+  if (c->current + 1 >= c->tokens->count) return false;
+  return c->tokens->tokens[c->current + 1].type == type;
 }
 
 static bool match(Compiler* c, ErkaoTokenType type) {
@@ -808,6 +822,11 @@ static void emitExportName(Compiler* c, Token name) {
   int nameIdx = emitStringConstant(c, name);
   emitByte(c, OP_EXPORT, name);
   emitShort(c, (uint16_t)nameIdx, name);
+}
+
+static void emitExportValue(Compiler* c, uint16_t nameIdx, Token token) {
+  emitByte(c, OP_EXPORT_VALUE, token);
+  emitShort(c, nameIdx, token);
 }
 
 static void emitGc(Compiler* c) {
@@ -1682,6 +1701,36 @@ static void returnStatement(Compiler* c) {
 
 static void importStatement(Compiler* c) {
   Token keyword = previous(c);
+  if (match(c, TOKEN_STAR)) {
+    consume(c, TOKEN_AS, "Expect 'as' after '*'.");
+    Token alias = consume(c, TOKEN_IDENTIFIER, "Expect name after 'as'.");
+    consume(c, TOKEN_FROM, "Expect 'from' after import alias.");
+    expression(c);
+    consume(c, TOKEN_SEMICOLON, "Expect ';' after import.");
+    emitByte(c, OP_IMPORT, keyword);
+    emitByte(c, 1, keyword);
+    uint16_t aliasIdx = (uint16_t)emitStringConstant(c, alias);
+    emitShort(c, aliasIdx, keyword);
+    emitGc(c);
+    return;
+  }
+
+  if (check(c, TOKEN_IDENTIFIER) && checkNext(c, TOKEN_FROM)) {
+    Token alias = consume(c, TOKEN_IDENTIFIER, "Expect name after 'import'.");
+    consume(c, TOKEN_FROM, "Expect 'from' after import name.");
+    expression(c);
+    consume(c, TOKEN_SEMICOLON, "Expect ';' after import.");
+    emitByte(c, OP_IMPORT_MODULE, keyword);
+    int defaultIdx = emitStringConstantFromChars(c, "default", 7);
+    emitByte(c, OP_GET_PROPERTY, keyword);
+    emitShort(c, (uint16_t)defaultIdx, keyword);
+    int nameIdx = emitStringConstant(c, alias);
+    emitByte(c, OP_DEFINE_VAR, alias);
+    emitShort(c, (uint16_t)nameIdx, alias);
+    emitGc(c);
+    return;
+  }
+
   expression(c);
   Token alias; memset(&alias, 0, sizeof(Token));
   bool hasAlias = false;
@@ -1821,11 +1870,174 @@ static void enumDeclaration(Compiler* c, bool isExport) {
   emitGc(c);
 }
 
+typedef struct {
+  uint16_t from;
+  uint16_t to;
+} ExportName;
+
+static ExportName* parseExportList(Compiler* c, int* outCount) {
+  int count = 0;
+  int capacity = 4;
+  ExportName* names = (ExportName*)malloc(sizeof(ExportName) * (size_t)capacity);
+  if (!names) {
+    fprintf(stderr, "Out of memory.\n");
+    exit(1);
+  }
+
+  if (!check(c, TOKEN_RIGHT_BRACE)) {
+    do {
+      Token from;
+      if (match(c, TOKEN_IDENTIFIER) || match(c, TOKEN_DEFAULT)) {
+        from = previous(c);
+      } else {
+        errorAtCurrent(c, "Expect export name.");
+        break;
+      }
+      Token to = from;
+      if (match(c, TOKEN_AS)) {
+        to = consume(c, TOKEN_IDENTIFIER, "Expect export name after 'as'.");
+      }
+      if (count >= capacity) {
+        int oldCap = capacity;
+        capacity = GROW_CAPACITY(oldCap);
+        names = GROW_ARRAY(ExportName, names, oldCap, capacity);
+        if (!names) {
+          fprintf(stderr, "Out of memory.\n");
+          exit(1);
+        }
+      }
+      names[count].from = (uint16_t)emitStringConstant(c, from);
+      names[count].to = (uint16_t)emitStringConstant(c, to);
+      count++;
+    } while (match(c, TOKEN_COMMA));
+  }
+  consume(c, TOKEN_RIGHT_BRACE, "Expect '}' after export list.");
+
+  *outCount = count;
+  return names;
+}
+
 static void exportDeclaration(Compiler* c) {
   Token keyword = previous(c);
   bool allowExport = c->enclosing == NULL && c->scopeDepth == 0;
   if (!allowExport) {
     errorAt(c, keyword, "Export declarations must be at top level.");
+  }
+
+  if (match(c, TOKEN_DEFAULT)) {
+    if (match(c, TOKEN_FUN)) {
+      Token name = consume(c, TOKEN_IDENTIFIER, "Expect function name.");
+      ObjFunction* function = compileFunction(c, name, false);
+      if (!function) return;
+      int constant = makeConstant(c, OBJ_VAL(function), name);
+      emitByte(c, OP_CLOSURE, name);
+      emitShort(c, (uint16_t)constant, name);
+      int nameIdx = emitStringConstant(c, name);
+      emitByte(c, OP_DEFINE_VAR, name);
+      emitShort(c, (uint16_t)nameIdx, name);
+      if (allowExport) {
+        emitGetVarConstant(c, nameIdx);
+        int defaultIdx = emitStringConstantFromChars(c, "default", 7);
+        emitExportValue(c, (uint16_t)defaultIdx, name);
+      }
+      emitGc(c);
+      return;
+    }
+    if (match(c, TOKEN_CLASS)) {
+      Token name = consume(c, TOKEN_IDENTIFIER, "Expect class name.");
+      consume(c, TOKEN_LEFT_BRACE, "Expect '{' before class body.");
+
+      int nameConst = emitStringConstant(c, name);
+      emitByte(c, OP_NULL, noToken());
+      emitByte(c, OP_DEFINE_VAR, name);
+      emitShort(c, (uint16_t)nameConst, name);
+
+      int methodCount = 0;
+      while (!check(c, TOKEN_RIGHT_BRACE) && !isAtEnd(c)) {
+        if (!match(c, TOKEN_FUN)) {
+          errorAtCurrent(c, "Expect 'fun' before method declaration.");
+          synchronize(c);
+          break;
+        }
+        Token methodName = consume(c, TOKEN_IDENTIFIER, "Expect method name.");
+        bool isInit = methodName.length == 4 && memcmp(methodName.start, "init", 4) == 0;
+        ObjFunction* method = compileFunction(c, methodName, isInit);
+        if (!method) return;
+        int constant = makeConstant(c, OBJ_VAL(method), methodName);
+        emitByte(c, OP_CLOSURE, methodName);
+        emitShort(c, (uint16_t)constant, methodName);
+        methodCount++;
+      }
+      consume(c, TOKEN_RIGHT_BRACE, "Expect '}' after class body.");
+
+      emitByte(c, OP_CLASS, name);
+      emitShort(c, (uint16_t)nameConst, name);
+      emitShort(c, (uint16_t)methodCount, name);
+      if (allowExport) {
+        emitGetVarConstant(c, nameConst);
+        int defaultIdx = emitStringConstantFromChars(c, "default", 7);
+        emitExportValue(c, (uint16_t)defaultIdx, name);
+      }
+      emitGc(c);
+      return;
+    }
+    expression(c);
+    consume(c, TOKEN_SEMICOLON, "Expect ';' after export.");
+    if (allowExport) {
+      int defaultIdx = emitStringConstantFromChars(c, "default", 7);
+      emitExportValue(c, (uint16_t)defaultIdx, keyword);
+    } else {
+      emitByte(c, OP_POP, keyword);
+    }
+    return;
+  }
+
+  if (match(c, TOKEN_STAR)) {
+    consume(c, TOKEN_FROM, "Expect 'from' after '*'.");
+    expression(c);
+    consume(c, TOKEN_SEMICOLON, "Expect ';' after export.");
+    if (allowExport) {
+      emitByte(c, OP_IMPORT_MODULE, keyword);
+      emitByte(c, OP_EXPORT_FROM, keyword);
+      emitShort(c, 0, keyword);
+    } else {
+      emitByte(c, OP_POP, keyword);
+    }
+    emitGc(c);
+    return;
+  }
+
+  if (match(c, TOKEN_LEFT_BRACE)) {
+    int nameCount = 0;
+    ExportName* names = parseExportList(c, &nameCount);
+    bool hasFrom = match(c, TOKEN_FROM);
+    if (hasFrom) {
+      expression(c);
+    }
+    consume(c, TOKEN_SEMICOLON, "Expect ';' after export.");
+
+    if (allowExport) {
+      if (hasFrom) {
+        emitByte(c, OP_IMPORT_MODULE, keyword);
+        emitByte(c, OP_EXPORT_FROM, keyword);
+        emitShort(c, (uint16_t)nameCount, keyword);
+        for (int i = 0; i < nameCount; i++) {
+          emitShort(c, names[i].from, keyword);
+          emitShort(c, names[i].to, keyword);
+        }
+      } else {
+        for (int i = 0; i < nameCount; i++) {
+          emitGetVarConstant(c, names[i].from);
+          emitExportValue(c, names[i].to, keyword);
+        }
+      }
+    } else if (hasFrom) {
+      emitByte(c, OP_POP, keyword);
+    }
+
+    free(names);
+    emitGc(c);
+    return;
   }
 
   if (match(c, TOKEN_LET)) {

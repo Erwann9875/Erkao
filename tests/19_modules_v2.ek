@@ -1,0 +1,14 @@
+import * as named from "./modules/v2_named.ek";
+import greet from "./modules/v2_default_fun.ek";
+import defValue from "./modules/v2_default_value.ek";
+import * as re from "./modules/v2_reexport.ek";
+import * as cycle from "./modules/v2_cycle_a.ek";
+
+print(named.answer);
+print(named.renamed);
+print(greet("Erkao"));
+print(defValue);
+print(re.value);
+print(re.renamed);
+print(re.def);
+print(cycle.fromB);

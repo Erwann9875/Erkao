@@ -49,6 +49,31 @@ static int byteInstruction(const char* name, const Chunk* chunk, int offset) {
   return offset + 2;
 }
 
+static int exportFromInstruction(const Chunk* chunk, int offset) {
+  uint16_t count = (uint16_t)((chunk->code[offset + 1] << 8) | chunk->code[offset + 2]);
+  printf("%-16s count=%u", "OP_EXPORT_FROM", count);
+  int cursor = offset + 3;
+  for (uint16_t i = 0; i < count; i++) {
+    uint16_t from = (uint16_t)((chunk->code[cursor] << 8) | chunk->code[cursor + 1]);
+    uint16_t to = (uint16_t)((chunk->code[cursor + 2] << 8) | chunk->code[cursor + 3]);
+    cursor += 4;
+    printf("\n   |               ");
+    if (from < (uint16_t)chunk->constantsCount) {
+      printValue(chunk->constants[from]);
+    } else {
+      printf("<invalid>");
+    }
+    printf(" as ");
+    if (to < (uint16_t)chunk->constantsCount) {
+      printValue(chunk->constants[to]);
+    } else {
+      printf("<invalid>");
+    }
+  }
+  printf("\n");
+  return cursor;
+}
+
 static int invokeInstruction(const char* name, const Chunk* chunk, int offset) {
   uint16_t constant = (uint16_t)((chunk->code[offset + 1] << 8) | chunk->code[offset + 2]);
   uint8_t argc = chunk->code[offset + 3];
@@ -175,8 +200,14 @@ static int disassembleInstruction(const Chunk* chunk, int offset) {
       printf("\n");
       return offset + 4;
     }
+    case OP_IMPORT_MODULE:
+      return simpleInstruction("OP_IMPORT_MODULE", chunk, offset);
     case OP_EXPORT:
       return constantInstruction("OP_EXPORT", chunk, offset);
+    case OP_EXPORT_VALUE:
+      return constantInstruction("OP_EXPORT_VALUE", chunk, offset);
+    case OP_EXPORT_FROM:
+      return exportFromInstruction(chunk, offset);
     case OP_ARRAY:
       return shortInstruction("OP_ARRAY", chunk, offset);
     case OP_ARRAY_APPEND:

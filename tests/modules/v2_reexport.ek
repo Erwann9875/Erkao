@@ -1,0 +1,3 @@
+export * from "./v2_named.ek";
+export { answer as value } from "./v2_named.ek";
+export { default as def } from "./v2_default_value.ek";

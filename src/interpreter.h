@@ -22,6 +22,7 @@ typedef struct {
   ObjString* moduleAlias;
   ObjString* moduleKey;
   bool moduleHasAlias;
+  bool modulePushResult;
 } CallFrame;
 
 typedef struct Env {

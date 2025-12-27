@@ -288,6 +288,87 @@ static ObjString* moduleNameFromPath(VM* vm, const char* path) {
   return copyStringWithLength(vm, base, length);
 }
 
+static bool beginModuleImport(VM* vm, CallFrame** frame, ObjString* pathString,
+                              ObjString* alias, bool hasAlias, bool pushResult) {
+  char* resolvedPath = resolveImportPath(
+      vm, vm->currentProgram ? vm->currentProgram->path : NULL,
+      pathString->chars);
+  if (!resolvedPath) {
+    runtimeError(vm, currentToken(*frame), "Failed to resolve import path.");
+    return false;
+  }
+
+  Token pathToken;
+  memset(&pathToken, 0, sizeof(Token));
+  pathToken.start = resolvedPath;
+  pathToken.length = (int)strlen(resolvedPath);
+
+  Value cached;
+  if (mapGetByToken(vm->modules, pathToken, &cached)) {
+    if (IS_OBJ(cached)) {
+      if (pushResult) {
+        push(vm, cached);
+      }
+      if (hasAlias && alias) {
+        envDefine(vm->env, alias, cached);
+      }
+      free(resolvedPath);
+      return true;
+    }
+  }
+
+  ObjString* key = copyStringWithLength(vm, resolvedPath, pathToken.length);
+
+  Env* moduleEnv = newEnv(vm, vm->globals);
+  Env* previousEnv = vm->env;
+  vm->env = moduleEnv;
+  ObjFunction* moduleFunction =
+      loadModuleFunction(vm, currentToken(*frame), resolvedPath);
+  vm->env = previousEnv;
+
+  if (!moduleFunction) {
+    mapSet(vm->modules, key, NULL_VAL);
+    free(resolvedPath);
+    return false;
+  }
+
+  ObjClass* klass = newClass(vm, moduleNameFromPath(vm, resolvedPath), newMap(vm));
+  ObjInstance* moduleInstance = newInstanceWithFields(vm, klass, newMap(vm));
+  mapSet(vm->modules, key, OBJ_VAL(moduleInstance));
+
+  push(vm, OBJ_VAL(moduleFunction));
+  if (vm->frameCount == FRAMES_MAX) {
+    Token token;
+    memset(&token, 0, sizeof(Token));
+    runtimeError(vm, token, "Stack overflow.");
+    free(resolvedPath);
+    return false;
+  }
+
+  CallFrame* moduleFrame = &vm->frames[vm->frameCount++];
+  moduleFrame->function = moduleFunction;
+  moduleFrame->ip = moduleFunction->chunk->code;
+  moduleFrame->slots = vm->stackTop - 1;
+  moduleFrame->previousEnv = previousEnv;
+  moduleFrame->previousProgram = vm->currentProgram;
+  moduleFrame->receiver = NULL_VAL;
+  moduleFrame->argCount = 0;
+  moduleFrame->isModule = true;
+  moduleFrame->discardResult = !pushResult;
+  moduleFrame->moduleInstance = moduleInstance;
+  moduleFrame->moduleAlias = alias;
+  moduleFrame->moduleKey = key;
+  moduleFrame->moduleHasAlias = hasAlias;
+  moduleFrame->modulePushResult = pushResult;
+
+  vm->env = moduleEnv;
+  vm->currentProgram = moduleFunction->program;
+
+  free(resolvedPath);
+  *frame = moduleFrame;
+  return true;
+}
+
 static bool findMethodByName(ObjClass* klass, ObjString* name, ObjFunction** out) {
   Value value;
   if (mapGet(klass->methods, name, &value)) {
@@ -387,6 +468,7 @@ static bool callFunction(VM* vm, ObjFunction* function, Value receiver,
   frame->moduleAlias = NULL;
   frame->moduleKey = NULL;
   frame->moduleHasAlias = false;
+  frame->modulePushResult = false;
 
   Env* env = newEnv(vm, function->closure);
   if (hasReceiver) {
@@ -1018,6 +1100,9 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
             envDefine(vm->env, finished->moduleAlias, OBJ_VAL(finished->moduleInstance));
           }
         }
+        if (finished->isModule && finished->modulePushResult && finished->moduleInstance) {
+          result = OBJ_VAL(finished->moduleInstance);
+        }
         if (finished->function->isInitializer) {
           result = finished->receiver;
         }
@@ -1072,83 +1157,21 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
         }
 
         ObjString* pathString = asString(pathValue);
-        char* resolvedPath = resolveImportPath(
-            vm, vm->currentProgram ? vm->currentProgram->path : NULL,
-            pathString->chars);
-        if (!resolvedPath) {
-          runtimeError(vm, currentToken(frame), "Failed to resolve import path.");
+        if (!beginModuleImport(vm, &frame, pathString, alias, hasAlias != 0, false)) {
           return false;
         }
-
-        Token pathToken;
-        memset(&pathToken, 0, sizeof(Token));
-        pathToken.start = resolvedPath;
-        pathToken.length = (int)strlen(resolvedPath);
-
-        Value cached;
-        if (mapGetByToken(vm->modules, pathToken, &cached)) {
-          if (IS_OBJ(cached)) {
-            if (hasAlias) {
-              envDefine(vm->env, alias, cached);
-            }
-            free(resolvedPath);
-            break;
-          }
-          if (IS_BOOL(cached) && AS_BOOL(cached)) {
-            runtimeError(vm, currentToken(frame), "Circular import detected.");
-            free(resolvedPath);
-            return false;
-          }
-        }
-
-        ObjString* key = copyStringWithLength(vm, resolvedPath, pathToken.length);
-        mapSet(vm->modules, key, BOOL_VAL(true));
-
-        Env* moduleEnv = newEnv(vm, vm->globals);
-        Env* previousEnv = vm->env;
-        vm->env = moduleEnv;
-        ObjFunction* moduleFunction =
-            loadModuleFunction(vm, currentToken(frame), resolvedPath);
-        vm->env = previousEnv;
-
-        if (!moduleFunction) {
-          mapSet(vm->modules, key, NULL_VAL);
-          free(resolvedPath);
+        break;
+      }
+      case OP_IMPORT_MODULE: {
+        Value pathValue = pop(vm);
+        if (!isString(pathValue)) {
+          runtimeError(vm, currentToken(frame), "Import path must be a string.");
           return false;
         }
-
-        ObjClass* klass = newClass(vm, moduleNameFromPath(vm, resolvedPath), newMap(vm));
-        ObjInstance* moduleInstance = newInstanceWithFields(vm, klass, newMap(vm));
-
-        push(vm, OBJ_VAL(moduleFunction));
-        if (vm->frameCount == FRAMES_MAX) {
-          Token token;
-          memset(&token, 0, sizeof(Token));
-          runtimeError(vm, token, "Stack overflow.");
+        ObjString* pathString = asString(pathValue);
+        if (!beginModuleImport(vm, &frame, pathString, NULL, false, true)) {
           return false;
         }
-
-        CallFrame* moduleFrame = &vm->frames[vm->frameCount++];
-        moduleFrame->function = moduleFunction;
-        moduleFrame->ip = moduleFunction->chunk->code;
-        moduleFrame->slots = vm->stackTop - 1;
-        moduleFrame->previousEnv = previousEnv;
-        moduleFrame->previousProgram = vm->currentProgram;
-        moduleFrame->receiver = NULL_VAL;
-        moduleFrame->argCount = 0;
-        moduleFrame->isModule = true;
-        moduleFrame->discardResult = true;
-        moduleFrame->moduleInstance = moduleInstance;
-        moduleFrame->moduleAlias = alias;
-        moduleFrame->moduleKey = key;
-        moduleFrame->moduleHasAlias = hasAlias != 0;
-
-        vm->env = moduleEnv;
-        vm->currentProgram = moduleFunction->program;
-
-        free(resolvedPath);
-
-        frame = &vm->frames[vm->frameCount - 1];
         break;
       }
       case OP_EXPORT: {
@@ -1162,6 +1185,47 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
           return false;
         }
         mapSet(frame->moduleInstance->fields, name, value);
+        break;
+      }
+      case OP_EXPORT_VALUE: {
+        ObjString* name = (ObjString*)AS_OBJ(READ_CONSTANT());
+        Value value = pop(vm);
+        if (!frame->isModule || !frame->moduleInstance) {
+          break;
+        }
+        mapSet(frame->moduleInstance->fields, name, value);
+        break;
+      }
+      case OP_EXPORT_FROM: {
+        uint16_t count = READ_SHORT();
+        Value moduleValue = pop(vm);
+        if (!frame->isModule || !frame->moduleInstance) {
+          break;
+        }
+        if (!isObjType(moduleValue, OBJ_INSTANCE)) {
+          runtimeError(vm, currentToken(frame), "Export source must be a module.");
+          return false;
+        }
+        ObjInstance* moduleInstance = (ObjInstance*)AS_OBJ(moduleValue);
+        ObjMap* fields = moduleInstance->fields;
+        if (count == 0) {
+          for (int i = 0; i < fields->capacity; i++) {
+            MapEntryValue* entry = &fields->entries[i];
+            if (!entry->key) continue;
+            mapSet(frame->moduleInstance->fields, entry->key, entry->value);
+          }
+          break;
+        }
+        for (uint16_t i = 0; i < count; i++) {
+          ObjString* from = (ObjString*)AS_OBJ(READ_CONSTANT());
+          ObjString* to = (ObjString*)AS_OBJ(READ_CONSTANT());
+          Value value;
+          if (!mapGet(fields, from, &value)) {
+            runtimeError(vm, currentToken(frame), "Cannot re-export missing name.");
+            return false;
+          }
+          mapSet(frame->moduleInstance->fields, to, value);
+        }
         break;
       }
       case OP_ARRAY: {
@@ -1226,6 +1290,7 @@ static bool callScript(VM* vm, ObjFunction* function) {
   frame->moduleAlias = NULL;
   frame->moduleKey = NULL;
   frame->moduleHasAlias = false;
+  frame->modulePushResult = false;
 
   vm->currentProgram = function->program;
   return true;
