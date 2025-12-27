@@ -2789,9 +2789,35 @@ static Value nativeEnvGet(VM* vm, int argc, Value* args) {
     return runtimeErrorValue(vm, "env.get expects a name string.");
   }
   ObjString* name = (ObjString*)AS_OBJ(args[0]);
+#ifdef _WIN32
+  DWORD length = GetEnvironmentVariableA(name->chars, NULL, 0);
+  if (length == 0) {
+    DWORD err = GetLastError();
+    if (err == ERROR_ENVVAR_NOT_FOUND) {
+      return NULL_VAL;
+    }
+    if (err == ERROR_SUCCESS) {
+      return OBJ_VAL(copyString(vm, ""));
+    }
+    return runtimeErrorValue(vm, "env.get failed.");
+  }
+  char* buffer = (char*)malloc((size_t)length);
+  if (!buffer) {
+    return runtimeErrorValue(vm, "env.get out of memory.");
+  }
+  DWORD written = GetEnvironmentVariableA(name->chars, buffer, length);
+  if (written == 0 && GetLastError() == ERROR_ENVVAR_NOT_FOUND) {
+    free(buffer);
+    return NULL_VAL;
+  }
+  ObjString* result = copyStringWithLength(vm, buffer, (int)written);
+  free(buffer);
+  return OBJ_VAL(result);
+#else
   const char* value = getenv(name->chars);
   if (!value) return NULL_VAL;
   return OBJ_VAL(copyString(vm, value));
+#endif
 }
 
 static Value nativeEnvSet(VM* vm, int argc, Value* args) {
@@ -2819,7 +2845,18 @@ static Value nativeEnvHas(VM* vm, int argc, Value* args) {
     return runtimeErrorValue(vm, "env.has expects a name string.");
   }
   ObjString* name = (ObjString*)AS_OBJ(args[0]);
+#ifdef _WIN32
+  DWORD length = GetEnvironmentVariableA(name->chars, NULL, 0);
+  if (length == 0) {
+    DWORD err = GetLastError();
+    if (err == ERROR_ENVVAR_NOT_FOUND) return BOOL_VAL(false);
+    if (err != ERROR_SUCCESS) return BOOL_VAL(false);
+    return BOOL_VAL(true);
+  }
+  return BOOL_VAL(true);
+#else
   return BOOL_VAL(getenv(name->chars) != NULL);
+#endif
 }
 
 static Value nativeEnvUnset(VM* vm, int argc, Value* args) {
