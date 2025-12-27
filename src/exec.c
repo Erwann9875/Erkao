@@ -121,6 +121,162 @@ static Value concatenateStrings(VM* vm, ObjString* a, ObjString* b) {
   return OBJ_VAL(result);
 }
 
+typedef struct {
+  char* data;
+  int length;
+  int capacity;
+} StringBuilder;
+
+static void sbInit(StringBuilder* sb) {
+  sb->data = NULL;
+  sb->length = 0;
+  sb->capacity = 0;
+}
+
+static void sbEnsure(StringBuilder* sb, int needed) {
+  if (sb->capacity >= needed) return;
+  int newCap = sb->capacity == 0 ? 64 : sb->capacity;
+  while (newCap < needed) {
+    newCap *= 2;
+  }
+  char* next = (char*)realloc(sb->data, (size_t)newCap);
+  if (!next) {
+    fprintf(stderr, "Out of memory.\n");
+    exit(1);
+  }
+  sb->data = next;
+  sb->capacity = newCap;
+}
+
+static void sbAppendN(StringBuilder* sb, const char* text, int length) {
+  if (length <= 0) return;
+  sbEnsure(sb, sb->length + length + 1);
+  memcpy(sb->data + sb->length, text, (size_t)length);
+  sb->length += length;
+  sb->data[sb->length] = '\0';
+}
+
+static void sbAppendChar(StringBuilder* sb, char c) {
+  sbEnsure(sb, sb->length + 2);
+  sb->data[sb->length++] = c;
+  sb->data[sb->length] = '\0';
+}
+
+static void appendValue(StringBuilder* sb, Value value);
+
+static void appendArray(StringBuilder* sb, ObjArray* array) {
+  sbAppendChar(sb, '[');
+  for (int i = 0; i < array->count; i++) {
+    if (i > 0) sbAppendN(sb, ", ", 2);
+    appendValue(sb, array->items[i]);
+  }
+  sbAppendChar(sb, ']');
+}
+
+static void appendMap(StringBuilder* sb, ObjMap* map) {
+  sbAppendChar(sb, '{');
+  int printed = 0;
+  for (int i = 0; i < map->capacity; i++) {
+    if (!map->entries[i].key) continue;
+    if (printed > 0) sbAppendN(sb, ", ", 2);
+    sbAppendN(sb, map->entries[i].key->chars, map->entries[i].key->length);
+    sbAppendN(sb, ": ", 2);
+    appendValue(sb, map->entries[i].value);
+    printed++;
+  }
+  sbAppendChar(sb, '}');
+}
+
+static void appendObject(StringBuilder* sb, Obj* obj) {
+  switch (obj->type) {
+    case OBJ_STRING: {
+      ObjString* string = (ObjString*)obj;
+      sbAppendN(sb, string->chars, string->length);
+      break;
+    }
+    case OBJ_FUNCTION: {
+      ObjFunction* function = (ObjFunction*)obj;
+      if (function->name && function->name->chars) {
+        sbAppendN(sb, "<fun ", 5);
+        sbAppendN(sb, function->name->chars, function->name->length);
+        sbAppendChar(sb, '>');
+      } else {
+        sbAppendN(sb, "<fun>", 5);
+      }
+      break;
+    }
+    case OBJ_NATIVE: {
+      ObjNative* native = (ObjNative*)obj;
+      if (native->name && native->name->chars) {
+        sbAppendN(sb, "<native ", 8);
+        sbAppendN(sb, native->name->chars, native->name->length);
+        sbAppendChar(sb, '>');
+      } else {
+        sbAppendN(sb, "<native>", 8);
+      }
+      break;
+    }
+    case OBJ_CLASS: {
+      ObjClass* klass = (ObjClass*)obj;
+      sbAppendN(sb, "<class ", 7);
+      sbAppendN(sb, klass->name->chars, klass->name->length);
+      sbAppendChar(sb, '>');
+      break;
+    }
+    case OBJ_INSTANCE: {
+      ObjInstance* instance = (ObjInstance*)obj;
+      sbAppendChar(sb, '<');
+      sbAppendN(sb, instance->klass->name->chars, instance->klass->name->length);
+      sbAppendN(sb, " instance>", 10);
+      break;
+    }
+    case OBJ_ARRAY:
+      appendArray(sb, (ObjArray*)obj);
+      break;
+    case OBJ_MAP:
+      appendMap(sb, (ObjMap*)obj);
+      break;
+    case OBJ_BOUND_METHOD:
+      sbAppendN(sb, "<bound method>", 14);
+      break;
+  }
+}
+
+static void appendValue(StringBuilder* sb, Value value) {
+  switch (value.type) {
+    case VAL_NULL:
+      sbAppendN(sb, "null", 4);
+      break;
+    case VAL_BOOL:
+      if (AS_BOOL(value)) {
+        sbAppendN(sb, "true", 4);
+      } else {
+        sbAppendN(sb, "false", 5);
+      }
+      break;
+    case VAL_NUMBER: {
+      char buffer[64];
+      int length = snprintf(buffer, sizeof(buffer), "%g", AS_NUMBER(value));
+      if (length < 0) length = 0;
+      if (length >= (int)sizeof(buffer)) {
+        length = (int)sizeof(buffer) - 1;
+      }
+      sbAppendN(sb, buffer, length);
+      break;
+    }
+    case VAL_OBJ:
+      appendObject(sb, AS_OBJ(value));
+      break;
+  }
+}
+
+static ObjString* stringifyValue(VM* vm, Value value) {
+  StringBuilder sb;
+  sbInit(&sb);
+  appendValue(&sb, value);
+  return takeStringWithLength(vm, sb.data, sb.length);
+}
+
 static ObjString* moduleNameFromPath(VM* vm, const char* path) {
   const char* lastSlash = strrchr(path, '/');
   const char* lastBackslash = strrchr(path, '\\');
@@ -405,6 +561,10 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
       case OP_SET_VAR: {
         ObjString* name = (ObjString*)AS_OBJ(READ_CONSTANT());
         Value value = peek(vm, 0);
+        if (envIsConst(vm->env, name)) {
+          runtimeError(vm, currentToken(frame), "Cannot assign to const variable.");
+          return false;
+        }
         if (!envAssignByName(vm->env, name, value)) {
           char suggestion[64];
           char message[256];
@@ -426,6 +586,12 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
         envDefine(vm->env, name, value);
         break;
       }
+      case OP_DEFINE_CONST: {
+        ObjString* name = (ObjString*)AS_OBJ(READ_CONSTANT());
+        Value value = pop(vm);
+        envDefineConst(vm->env, name, value);
+        break;
+      }
       case OP_GET_THIS: {
         ObjString* name = (ObjString*)AS_OBJ(READ_CONSTANT());
         Value value;
@@ -439,6 +605,80 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
       case OP_GET_PROPERTY: {
         ObjString* name = (ObjString*)AS_OBJ(READ_CONSTANT());
         Value object = pop(vm);
+        if (isObjType(object, OBJ_INSTANCE)) {
+          ObjInstance* instance = (ObjInstance*)AS_OBJ(object);
+          ObjMap* fields = instance->fields;
+          if (cache && cache->kind == IC_FIELD && cache->map == fields) {
+            int index = cache->index;
+            if (index >= 0 && index < fields->capacity &&
+                fields->entries[index].key == name) {
+              push(vm, fields->entries[index].value);
+              break;
+            }
+          }
+
+          Value value;
+          int index = -1;
+          if (mapGetIndex(fields, name, &value, &index)) {
+            if (cache) {
+              cache->kind = IC_FIELD;
+              cache->map = fields;
+              cache->key = name;
+              cache->index = index;
+              cache->klass = NULL;
+              cache->method = NULL;
+            }
+            push(vm, value);
+            break;
+          }
+
+          if (cache && cache->kind == IC_METHOD &&
+              cache->klass == instance->klass &&
+              cache->key == name && cache->method) {
+            ObjBoundMethod* bound = newBoundMethod(vm, object, cache->method);
+            push(vm, OBJ_VAL(bound));
+            break;
+          }
+
+          ObjFunction* method = NULL;
+          if (findMethodByName(instance->klass, name, &method)) {
+            if (cache) {
+              cache->kind = IC_METHOD;
+              cache->klass = instance->klass;
+              cache->key = name;
+              cache->method = method;
+              cache->map = NULL;
+              cache->index = -1;
+            }
+            ObjBoundMethod* bound = newBoundMethod(vm, object, method);
+            push(vm, OBJ_VAL(bound));
+            break;
+          }
+
+          {
+            char suggestion[64];
+            char message[256];
+            if (suggestNameFromInstance(instance, name->chars, name->length,
+                                        suggestion, sizeof(suggestion))) {
+              snprintf(message, sizeof(message),
+                       "Undefined property. Did you mean '%s'?", suggestion);
+              runtimeError(vm, currentToken(frame), message);
+            } else {
+              runtimeError(vm, currentToken(frame), "Undefined property.");
+            }
+          }
+          return false;
+        }
+        runtimeError(vm, currentToken(frame), "Only instances have properties.");
+        return false;
+      }
+      case OP_GET_PROPERTY_OPTIONAL: {
+        ObjString* name = (ObjString*)AS_OBJ(READ_CONSTANT());
+        Value object = pop(vm);
+        if (IS_NULL(object)) {
+          push(vm, NULL_VAL);
+          break;
+        }
         if (isObjType(object, OBJ_INSTANCE)) {
           ObjInstance* instance = (ObjInstance*)AS_OBJ(object);
           ObjMap* fields = instance->fields;
@@ -632,6 +872,12 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
         push(vm, NUMBER_VAL(-AS_NUMBER(value)));
         break;
       }
+      case OP_STRINGIFY: {
+        Value value = pop(vm);
+        ObjString* string = stringifyValue(vm, value);
+        push(vm, OBJ_VAL(string));
+        break;
+      }
       case OP_JUMP: {
         uint16_t offset = READ_SHORT();
         frame->ip += offset;
@@ -654,6 +900,18 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
         frame = &vm->frames[vm->frameCount - 1];
         break;
       }
+      case OP_CALL_OPTIONAL: {
+        int argCount = READ_BYTE();
+        Value callee = peek(vm, argCount);
+        if (IS_NULL(callee)) {
+          vm->stackTop -= argCount + 1;
+          push(vm, NULL_VAL);
+          break;
+        }
+        if (!callValue(vm, callee, argCount)) return false;
+        frame = &vm->frames[vm->frameCount - 1];
+        break;
+      }
       case OP_ARG_COUNT:
         push(vm, NUMBER_VAL((double)frame->argCount));
         break;
@@ -666,10 +924,15 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
       case OP_RETURN: {
         Value result = pop(vm);
         CallFrame* finished = frame;
+        Env* finishedEnv = vm->env;
         vm->frameCount--;
         vm->env = finished->previousEnv;
         vm->currentProgram = finished->previousProgram;
         if (finished->isModule && finished->moduleInstance && finished->moduleKey) {
+          if (finishedEnv && mapCount(finished->moduleInstance->fields) == 0) {
+            finished->moduleInstance->fields = finishedEnv->values;
+            gcWriteBarrier(vm, (Obj*)finished->moduleInstance, OBJ_VAL(finishedEnv->values));
+          }
           mapSet(vm->modules, finished->moduleKey, OBJ_VAL(finished->moduleInstance));
           if (finished->moduleHasAlias && finished->moduleAlias) {
             envDefine(vm->env, finished->moduleAlias, OBJ_VAL(finished->moduleInstance));
@@ -775,7 +1038,7 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
         }
 
         ObjClass* klass = newClass(vm, moduleNameFromPath(vm, resolvedPath), newMap(vm));
-        ObjInstance* moduleInstance = newInstanceWithFields(vm, klass, moduleEnv->values);
+        ObjInstance* moduleInstance = newInstanceWithFields(vm, klass, newMap(vm));
 
         push(vm, OBJ_VAL(moduleFunction));
         if (vm->frameCount == FRAMES_MAX) {
@@ -806,6 +1069,19 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
         free(resolvedPath);
 
         frame = &vm->frames[vm->frameCount - 1];
+        break;
+      }
+      case OP_EXPORT: {
+        ObjString* name = (ObjString*)AS_OBJ(READ_CONSTANT());
+        if (!frame->isModule || !frame->moduleInstance) {
+          break;
+        }
+        Value value;
+        if (!envGetByName(vm->env, name, &value)) {
+          runtimeError(vm, currentToken(frame), "Cannot export undefined name.");
+          return false;
+        }
+        mapSet(frame->moduleInstance->fields, name, value);
         break;
       }
       case OP_ARRAY: {

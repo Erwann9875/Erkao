@@ -200,12 +200,17 @@ print(greet(name));
 ## Syntax overview
 
 - Variables: `let x = 3;`
+- Constants: `const x = 3;`
 - Control flow: `if (...) { ... } else { ... }`, `while (...) { ... }`
+- Match: `match (value) { case 1: ... }` (alias of `switch`)
 - Imports: `import "path/to/file.ek" as name;`
 - Functions: `fun name(a, b) { return a + b; }`
 - Classes: `class Name { fun init(...) { ... } fun method(...) { ... } }`
 - Arrays: `[1, 2, 3]`, indexing with `arr[0]`
 - Maps: `{ key: value, "other": value }`, indexing with `map["key"]`
+- Enums: `enum Color { Red, Green, Blue }`, access with `Color["Red"]`
+- Strings: `"Hello ${name}"` and multiline `"""line 1\nline 2"""`
+- Optional chaining: `user?.profile` returns `null` if `user` is `null`
 
 ## Imports
 
@@ -222,6 +227,15 @@ Semantics:
 - If the path has no extension, `.ek` is appended.
 - Each file is loaded and executed at most once.
 - `as name` binds the module object; use `name.symbol` to access exports.
+- If a module contains any `export` statements, only exported names are exposed.
+  Otherwise all top-level bindings are exposed (backward compatible).
+
+Exports (top-level only):
+
+```ek
+export let answer = 42;
+export fun greet(name) { return "Hi " + name; }
+```
 
 ## Packaging
 
@@ -265,7 +279,7 @@ import "alpha/utils" as utils;
 
 ## Keywords
 
-`let`, `fun`, `class`, `if`, `else`, `while`, `import`, `as`, `return`, `true`, `false`, `null`, `this`, `and`, `or`
+`and`, `as`, `break`, `case`, `class`, `const`, `continue`, `default`, `else`, `enum`, `export`, `false`, `for`, `foreach`, `from`, `fun`, `if`, `import`, `in`, `let`, `match`, `null`, `or`, `return`, `switch`, `this`, `true`, `while`
 
 ## Built-in functions
 

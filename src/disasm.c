@@ -78,8 +78,12 @@ static int disassembleInstruction(const Chunk* chunk, int offset) {
       return constantInstruction("OP_SET_VAR", chunk, offset);
     case OP_DEFINE_VAR:
       return constantInstruction("OP_DEFINE_VAR", chunk, offset);
+    case OP_DEFINE_CONST:
+      return constantInstruction("OP_DEFINE_CONST", chunk, offset);
     case OP_GET_PROPERTY:
       return constantInstruction("OP_GET_PROPERTY", chunk, offset);
+    case OP_GET_PROPERTY_OPTIONAL:
+      return constantInstruction("OP_GET_PROPERTY_OPTIONAL", chunk, offset);
     case OP_SET_PROPERTY:
       return constantInstruction("OP_SET_PROPERTY", chunk, offset);
     case OP_GET_THIS:
@@ -110,6 +114,8 @@ static int disassembleInstruction(const Chunk* chunk, int offset) {
       return simpleInstruction("OP_NOT", chunk, offset);
     case OP_NEGATE:
       return simpleInstruction("OP_NEGATE", chunk, offset);
+    case OP_STRINGIFY:
+      return simpleInstruction("OP_STRINGIFY", chunk, offset);
     case OP_JUMP:
       return jumpInstruction("OP_JUMP", 1, chunk, offset);
     case OP_JUMP_IF_FALSE:
@@ -118,6 +124,8 @@ static int disassembleInstruction(const Chunk* chunk, int offset) {
       return jumpInstruction("OP_LOOP", -1, chunk, offset);
     case OP_CALL:
       return byteInstruction("OP_CALL", chunk, offset);
+    case OP_CALL_OPTIONAL:
+      return byteInstruction("OP_CALL_OPTIONAL", chunk, offset);
     case OP_ARG_COUNT:
       return simpleInstruction("OP_ARG_COUNT", chunk, offset);
     case OP_CLOSURE:
@@ -152,6 +160,8 @@ static int disassembleInstruction(const Chunk* chunk, int offset) {
       printf("\n");
       return offset + 4;
     }
+    case OP_EXPORT:
+      return constantInstruction("OP_EXPORT", chunk, offset);
     case OP_ARRAY:
       return shortInstruction("OP_ARRAY", chunk, offset);
     case OP_ARRAY_APPEND:

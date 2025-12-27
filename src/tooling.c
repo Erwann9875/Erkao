@@ -308,6 +308,7 @@ int lintFile(const char* path) {
         loopDepth++;
         break;
       case TOKEN_SWITCH:
+      case TOKEN_MATCH:
         switchDepth++;
         break;
       case TOKEN_LEFT_BRACE:

@@ -154,6 +154,7 @@ Env* newEnv(VM* vm, Env* enclosing) {
   }
   env->enclosing = enclosing;
   env->values = newMap(vm);
+  env->consts = newMap(vm);
   env->next = vm->envs;
   env->marked = false;
   vm->envs = env;
@@ -177,6 +178,22 @@ bool envAssignByName(Env* env, ObjString* name, Value value) {
 
 void envDefine(Env* env, ObjString* name, Value value) {
   mapSet(env->values, name, value);
+}
+
+void envDefineConst(Env* env, ObjString* name, Value value) {
+  mapSet(env->values, name, value);
+  mapSet(env->consts, name, BOOL_VAL(true));
+}
+
+bool envIsConst(Env* env, ObjString* name) {
+  for (Env* current = env; current != NULL; current = current->enclosing) {
+    Value existing;
+    if (mapGet(current->values, name, &existing)) {
+      Value flag;
+      return mapGet(current->consts, name, &flag);
+    }
+  }
+  return false;
 }
 
 void defineNative(VM* vm, const char* name, NativeFn function, int arity) {

@@ -1,0 +1,45 @@
+const answer = 42;
+print("answer", answer);
+
+let name = "Erkao";
+let score = 7;
+print("interpolate", "Hello ${name}, score ${score + 1}");
+
+let poem = """line 1
+line 2""";
+print("poem");
+print(poem);
+
+class User {
+  fun init(name) {
+    this.name = name;
+  }
+
+  fun greet() {
+    return "hi " + this.name;
+  }
+}
+
+let user = null;
+print("optional", user?.name);
+print("optional call", user?.greet());
+
+let u2 = User("Ada");
+print("optional", u2?.name);
+
+enum Color { Red, Green = 3, Blue }
+print("enum", Color["Red"], Color["Green"], Color["Blue"]);
+
+match (2) {
+  case 1:
+    print("match", "one");
+    break;
+  case 2:
+    print("match", "two");
+    break;
+  default:
+    print("match", "other");
+}
+
+import "./modules/exported.ek" as mod;
+print("export", mod.value, mod.add(5));

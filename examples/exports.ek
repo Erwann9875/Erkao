@@ -1,0 +1,5 @@
+export let answer = 42;
+
+export fun greet(name) {
+  return "Hi " + name;
+}

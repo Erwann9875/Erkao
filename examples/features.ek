@@ -1,0 +1,35 @@
+const title = "Erkao";
+let name = "Ada";
+print("Hello ${name} from ${title}");
+
+let block = """One
+Two""";
+print(block);
+
+enum Level { Low, Medium = 5, High }
+print("levels", Level["Low"], Level["Medium"], Level["High"]);
+
+match (2) {
+  case 1:
+    print("match", "one");
+    break;
+  case 2:
+    print("match", "two");
+    break;
+  default:
+    print("match", "other");
+}
+
+class User {
+  fun init(name) {
+    this.name = name;
+  }
+}
+
+let user = null;
+print("optional", user?.name);
+let u2 = User("Rin");
+print("optional", u2?.name);
+
+import "./exports.ek" as mod;
+print("export", mod.answer, mod.greet("Erkao"));

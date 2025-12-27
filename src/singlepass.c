@@ -83,9 +83,12 @@ static const KeywordEntry keywordEntries[] = {
   {TOKEN_BREAK, "break"},
   {TOKEN_CASE, "case"},
   {TOKEN_CLASS, "class"},
+  {TOKEN_CONST, "const"},
   {TOKEN_CONTINUE, "continue"},
   {TOKEN_DEFAULT, "default"},
   {TOKEN_ELSE, "else"},
+  {TOKEN_ENUM, "enum"},
+  {TOKEN_EXPORT, "export"},
   {TOKEN_FALSE, "false"},
   {TOKEN_FOR, "for"},
   {TOKEN_FOREACH, "foreach"},
@@ -95,6 +98,7 @@ static const KeywordEntry keywordEntries[] = {
   {TOKEN_IMPORT, "import"},
   {TOKEN_IN, "in"},
   {TOKEN_LET, "let"},
+  {TOKEN_MATCH, "match"},
   {TOKEN_NULL, "null"},
   {TOKEN_OR, "or"},
   {TOKEN_RETURN, "return"},
@@ -122,6 +126,7 @@ static const char* tokenDescription(ErkaoTokenType type) {
     case TOKEN_RIGHT_BRACKET: return "']'";
     case TOKEN_COMMA: return "','";
     case TOKEN_DOT: return "'.'";
+    case TOKEN_QUESTION_DOT: return "'?.'";
     case TOKEN_MINUS: return "'-'";
     case TOKEN_PLUS: return "'+'";
     case TOKEN_SEMICOLON: return "';'";
@@ -138,15 +143,21 @@ static const char* tokenDescription(ErkaoTokenType type) {
     case TOKEN_LESS_EQUAL: return "'<='";
     case TOKEN_IDENTIFIER: return "identifier";
     case TOKEN_STRING: return "string";
+    case TOKEN_STRING_SEGMENT: return "string segment";
     case TOKEN_NUMBER: return "number";
+    case TOKEN_INTERP_START: return "'${'";
+    case TOKEN_INTERP_END: return "interpolation end";
     case TOKEN_AND: return "'and'";
     case TOKEN_AS: return "'as'";
     case TOKEN_BREAK: return "'break'";
     case TOKEN_CASE: return "'case'";
     case TOKEN_CLASS: return "'class'";
+    case TOKEN_CONST: return "'const'";
     case TOKEN_CONTINUE: return "'continue'";
     case TOKEN_DEFAULT: return "'default'";
     case TOKEN_ELSE: return "'else'";
+    case TOKEN_ENUM: return "'enum'";
+    case TOKEN_EXPORT: return "'export'";
     case TOKEN_FALSE: return "'false'";
     case TOKEN_FOR: return "'for'";
     case TOKEN_FOREACH: return "'foreach'";
@@ -156,6 +167,7 @@ static const char* tokenDescription(ErkaoTokenType type) {
     case TOKEN_IMPORT: return "'import'";
     case TOKEN_IN: return "'in'";
     case TOKEN_LET: return "'let'";
+    case TOKEN_MATCH: return "'match'";
     case TOKEN_NULL: return "'null'";
     case TOKEN_OR: return "'or'";
     case TOKEN_RETURN: return "'return'";
@@ -236,9 +248,10 @@ static void synchronize(Compiler* c) {
   while (!isAtEnd(c)) {
     if (previous(c).type == TOKEN_SEMICOLON) return;
     switch (peek(c).type) {
-      case TOKEN_CLASS: case TOKEN_FUN: case TOKEN_LET: case TOKEN_IMPORT:
-      case TOKEN_FROM: case TOKEN_IF: case TOKEN_WHILE: case TOKEN_FOR:
-      case TOKEN_FOREACH: case TOKEN_SWITCH: case TOKEN_RETURN:
+      case TOKEN_CLASS: case TOKEN_FUN: case TOKEN_LET: case TOKEN_CONST:
+      case TOKEN_ENUM: case TOKEN_EXPORT: case TOKEN_IMPORT: case TOKEN_FROM:
+      case TOKEN_IF: case TOKEN_WHILE: case TOKEN_FOR: case TOKEN_FOREACH:
+      case TOKEN_SWITCH: case TOKEN_MATCH: case TOKEN_RETURN:
       case TOKEN_BREAK: case TOKEN_CONTINUE:
         return;
       default:
@@ -337,6 +350,12 @@ static void emitDefineVarConstant(Compiler* c, int idx) {
   emitShort(c, (uint16_t)idx, noToken());
 }
 
+static void emitExportName(Compiler* c, Token name) {
+  int nameIdx = emitStringConstant(c, name);
+  emitByte(c, OP_EXPORT, name);
+  emitShort(c, (uint16_t)nameIdx, name);
+}
+
 static void emitGc(Compiler* c) {
   emitByte(c, OP_GC, noToken());
 }
@@ -398,10 +417,8 @@ static char* copyTokenLexeme(Token token) {
   return buffer;
 }
 
-static char* parseStringLiteral(Token token) {
-  int length = token.length - 2;
+static char* parseStringChars(const char* src, int length) {
   if (length < 0) length = 0;
-  const char* src = token.start + 1;
   char* buffer = (char*)malloc((size_t)length + 1);
   if (!buffer) { fprintf(stderr, "Out of memory.\n"); exit(1); }
   int out = 0;
@@ -423,6 +440,31 @@ static char* parseStringLiteral(Token token) {
   }
   buffer[out] = '\0';
   return buffer;
+}
+
+static bool isTripleQuoted(Token token) {
+  if (token.length < 6) return false;
+  return token.start[0] == '"' && token.start[1] == '"' && token.start[2] == '"' &&
+         token.start[token.length - 1] == '"' &&
+         token.start[token.length - 2] == '"' &&
+         token.start[token.length - 3] == '"';
+}
+
+static char* parseStringLiteral(Token token) {
+  int startOffset = 1;
+  int endOffset = 1;
+  if (isTripleQuoted(token)) {
+    startOffset = 3;
+    endOffset = 3;
+  }
+  int length = token.length - startOffset - endOffset;
+  if (length < 0) length = 0;
+  const char* src = token.start + startOffset;
+  return parseStringChars(src, length);
+}
+
+static char* parseStringSegment(Token token) {
+  return parseStringChars(token.start, token.length);
 }
 
 static void expression(Compiler* c);
@@ -464,12 +506,40 @@ static void number(Compiler* c, bool canAssign) {
   emitConstant(c, NUMBER_VAL(value), token);
 }
 
+static double parseNumberToken(Token token) {
+  char* temp = copyTokenLexeme(token);
+  double value = strtod(temp, NULL);
+  free(temp);
+  return value;
+}
+
 static void string(Compiler* c, bool canAssign) {
   (void)canAssign;
   Token token = previous(c);
   char* value = parseStringLiteral(token);
   ObjString* str = takeStringWithLength(c->vm, value, (int)strlen(value));
   emitConstant(c, OBJ_VAL(str), token);
+}
+
+static void stringSegment(Compiler* c, bool canAssign) {
+  (void)canAssign;
+  Token segment = previous(c);
+  char* value = parseStringSegment(segment);
+  ObjString* str = takeStringWithLength(c->vm, value, (int)strlen(value));
+  emitConstant(c, OBJ_VAL(str), segment);
+
+  while (match(c, TOKEN_INTERP_START)) {
+    expression(c);
+    consume(c, TOKEN_INTERP_END, "Expect '}' after interpolation.");
+    emitByte(c, OP_STRINGIFY, segment);
+    emitByte(c, OP_ADD, segment);
+
+    Token tail = consume(c, TOKEN_STRING_SEGMENT, "Expect string segment after interpolation.");
+    char* tailValue = parseStringSegment(tail);
+    ObjString* tailStr = takeStringWithLength(c->vm, tailValue, (int)strlen(tailValue));
+    emitConstant(c, OBJ_VAL(tailStr), tail);
+    emitByte(c, OP_ADD, tail);
+  }
 }
 
 static void literal(Compiler* c, bool canAssign) {
@@ -523,6 +593,7 @@ static void unary(Compiler* c, bool canAssign) {
 
 static void binary(Compiler* c, bool canAssign) {
   (void)canAssign;
+  c->pendingOptionalCall = false;
   Token op = previous(c);
   ParseRule* rule = getRule(op.type);
   parsePrecedence(c, (Precedence)(rule->precedence + 1));
@@ -543,6 +614,7 @@ static void binary(Compiler* c, bool canAssign) {
 
 static void andExpr(Compiler* c, bool canAssign) {
   (void)canAssign;
+  c->pendingOptionalCall = false;
   Token op = previous(c);
   int jumpIfFalse = emitJump(c, OP_JUMP_IF_FALSE, op);
   emitByte(c, OP_POP, noToken());
@@ -552,6 +624,7 @@ static void andExpr(Compiler* c, bool canAssign) {
 
 static void orExpr(Compiler* c, bool canAssign) {
   (void)canAssign;
+  c->pendingOptionalCall = false;
   Token op = previous(c);
   int jumpIfFalse = emitJump(c, OP_JUMP_IF_FALSE, op);
   int jumpToEnd = emitJump(c, OP_JUMP, op);
@@ -564,6 +637,8 @@ static void orExpr(Compiler* c, bool canAssign) {
 static void call(Compiler* c, bool canAssign) {
   (void)canAssign;
   Token paren = previous(c);
+  bool optionalCall = c->pendingOptionalCall;
+  c->pendingOptionalCall = false;
   int argc = 0;
   if (!check(c, TOKEN_RIGHT_PAREN)) {
     do {
@@ -575,11 +650,12 @@ static void call(Compiler* c, bool canAssign) {
     } while (match(c, TOKEN_COMMA));
   }
   consume(c, TOKEN_RIGHT_PAREN, "Expect ')' after arguments.");
-  emitByte(c, OP_CALL, paren);
+  emitByte(c, optionalCall ? OP_CALL_OPTIONAL : OP_CALL, paren);
   emitByte(c, (uint8_t)argc, paren);
 }
 
 static void dot(Compiler* c, bool canAssign) {
+  c->pendingOptionalCall = false;
   Token name = consume(c, TOKEN_IDENTIFIER, "Expect property name after '.'.");
   int nameIdx = emitStringConstant(c, name);
   if (canAssign && match(c, TOKEN_EQUAL)) {
@@ -592,7 +668,17 @@ static void dot(Compiler* c, bool canAssign) {
   }
 }
 
+static void optionalDot(Compiler* c, bool canAssign) {
+  (void)canAssign;
+  Token name = consume(c, TOKEN_IDENTIFIER, "Expect property name after '?.'.");
+  int nameIdx = emitStringConstant(c, name);
+  emitByte(c, OP_GET_PROPERTY_OPTIONAL, name);
+  emitShort(c, (uint16_t)nameIdx, name);
+  c->pendingOptionalCall = true;
+}
+
 static void index_(Compiler* c, bool canAssign) {
+  c->pendingOptionalCall = false;
   Token bracket = previous(c);
   expression(c);
   consume(c, TOKEN_RIGHT_BRACKET, "Expect ']' after index.");
@@ -668,6 +754,7 @@ static void initRules(void) {
   rules[TOKEN_LEFT_BRACKET] = (ParseRule){array, index_, PREC_CALL};
   rules[TOKEN_LEFT_BRACE] = (ParseRule){map, NULL, PREC_NONE};
   rules[TOKEN_DOT] = (ParseRule){NULL, dot, PREC_CALL};
+  rules[TOKEN_QUESTION_DOT] = (ParseRule){NULL, optionalDot, PREC_CALL};
   rules[TOKEN_MINUS] = (ParseRule){unary, binary, PREC_TERM};
   rules[TOKEN_PLUS] = (ParseRule){NULL, binary, PREC_TERM};
   rules[TOKEN_SLASH] = (ParseRule){NULL, binary, PREC_FACTOR};
@@ -681,6 +768,7 @@ static void initRules(void) {
   rules[TOKEN_LESS_EQUAL] = (ParseRule){NULL, binary, PREC_COMPARISON};
   rules[TOKEN_IDENTIFIER] = (ParseRule){variable, NULL, PREC_NONE};
   rules[TOKEN_STRING] = (ParseRule){string, NULL, PREC_NONE};
+  rules[TOKEN_STRING_SEGMENT] = (ParseRule){stringSegment, NULL, PREC_NONE};
   rules[TOKEN_NUMBER] = (ParseRule){number, NULL, PREC_NONE};
   rules[TOKEN_AND] = (ParseRule){NULL, andExpr, PREC_AND};
   rules[TOKEN_OR] = (ParseRule){NULL, orExpr, PREC_OR};
@@ -718,6 +806,7 @@ static void parsePrecedence(Compiler* c, Precedence prec) {
 }
 
 static void expression(Compiler* c) {
+  c->pendingOptionalCall = false;
   parsePrecedence(c, PREC_ASSIGNMENT);
 }
 
@@ -728,17 +817,25 @@ static void expressionStatement(Compiler* c) {
   emitGc(c);
 }
 
-static void varDeclaration(Compiler* c) {
+static void varDeclaration(Compiler* c, bool isConst, bool isExport) {
   Token name = consume(c, TOKEN_IDENTIFIER, "Expect variable name.");
-  if (match(c, TOKEN_EQUAL)) {
+  bool hasInitializer = match(c, TOKEN_EQUAL);
+  if (hasInitializer) {
     expression(c);
   } else {
+    if (isConst) {
+      errorAt(c, name, "Const declarations require an initializer.");
+    }
     emitByte(c, OP_NULL, noToken());
   }
   consume(c, TOKEN_SEMICOLON, "Expect ';' after variable declaration.");
   int nameIdx = emitStringConstant(c, name);
-  emitByte(c, OP_DEFINE_VAR, name);
+  emitByte(c, isConst ? OP_DEFINE_CONST : OP_DEFINE_VAR, name);
   emitShort(c, (uint16_t)nameIdx, name);
+  if (isExport) {
+    emitByte(c, OP_EXPORT, name);
+    emitShort(c, (uint16_t)nameIdx, name);
+  }
   emitGc(c);
 }
 
@@ -822,7 +919,9 @@ static void forStatement(Compiler* c) {
 
   if (match(c, TOKEN_SEMICOLON)) {
   } else if (match(c, TOKEN_LET)) {
-    varDeclaration(c);
+    varDeclaration(c, false, false);
+  } else if (match(c, TOKEN_CONST)) {
+    varDeclaration(c, true, false);
   } else {
     expression(c);
     consume(c, TOKEN_SEMICOLON, "Expect ';' after loop initializer.");
@@ -989,12 +1088,17 @@ static void foreachStatement(Compiler* c) {
 
 static void switchStatement(Compiler* c) {
   Token keyword = previous(c);
+  const char* keywordName = keyword.type == TOKEN_MATCH ? "match" : "switch";
+  char message[64];
   emitByte(c, OP_BEGIN_SCOPE, noToken());
   c->scopeDepth++;
-  consume(c, TOKEN_LEFT_PAREN, "Expect '(' after 'switch'.");
+  snprintf(message, sizeof(message), "Expect '(' after '%s'.", keywordName);
+  consume(c, TOKEN_LEFT_PAREN, message);
   expression(c);
-  consume(c, TOKEN_RIGHT_PAREN, "Expect ')' after switch value.");
-  consume(c, TOKEN_LEFT_BRACE, "Expect '{' after switch value.");
+  snprintf(message, sizeof(message), "Expect ')' after %s value.", keywordName);
+  consume(c, TOKEN_RIGHT_PAREN, message);
+  snprintf(message, sizeof(message), "Expect '{' after %s value.", keywordName);
+  consume(c, TOKEN_LEFT_BRACE, message);
 
   int switchValue = emitTempNameConstant(c, "switch");
   emitDefineVarConstant(c, switchValue);
@@ -1138,7 +1242,7 @@ static void fromImportStatement(Compiler* c) {
 
 static ObjFunction* compileFunction(Compiler* c, Token name, bool isMethod);
 
-static void functionDeclaration(Compiler* c) {
+static void functionDeclaration(Compiler* c, bool isExport) {
   Token name = consume(c, TOKEN_IDENTIFIER, "Expect function name.");
   ObjFunction* function = compileFunction(c, name, false);
   if (!function) return;
@@ -1148,10 +1252,14 @@ static void functionDeclaration(Compiler* c) {
   int nameIdx = emitStringConstant(c, name);
   emitByte(c, OP_DEFINE_VAR, name);
   emitShort(c, (uint16_t)nameIdx, name);
+  if (isExport) {
+    emitByte(c, OP_EXPORT, name);
+    emitShort(c, (uint16_t)nameIdx, name);
+  }
   emitGc(c);
 }
 
-static void classDeclaration(Compiler* c) {
+static void classDeclaration(Compiler* c, bool isExport) {
   Token name = consume(c, TOKEN_IDENTIFIER, "Expect class name.");
   consume(c, TOKEN_LEFT_BRACE, "Expect '{' before class body.");
 
@@ -1181,16 +1289,113 @@ static void classDeclaration(Compiler* c) {
   emitByte(c, OP_CLASS, name);
   emitShort(c, (uint16_t)nameConst, name);
   emitShort(c, (uint16_t)methodCount, name);
+  if (isExport) {
+    emitByte(c, OP_EXPORT, name);
+    emitShort(c, (uint16_t)nameConst, name);
+  }
   emitGc(c);
 }
 
-static void declaration(Compiler* c) {
+static void enumDeclaration(Compiler* c, bool isExport) {
+  Token name = consume(c, TOKEN_IDENTIFIER, "Expect enum name.");
+  consume(c, TOKEN_LEFT_BRACE, "Expect '{' before enum body.");
+
+  emitByte(c, OP_MAP, noToken());
+  emitShort(c, 0, noToken());
+  int sizeOffset = c->chunk->count - 2;
+  int count = 0;
+  double nextValue = 0.0;
+
+  if (!check(c, TOKEN_RIGHT_BRACE)) {
+    do {
+      Token member = consume(c, TOKEN_IDENTIFIER, "Expect enum member name.");
+      char* memberName = copyTokenLexeme(member);
+      ObjString* keyStr = takeStringWithLength(c->vm, memberName, member.length);
+      emitConstant(c, OBJ_VAL(keyStr), member);
+
+      double value = nextValue;
+      if (match(c, TOKEN_EQUAL)) {
+        bool negative = false;
+        if (match(c, TOKEN_MINUS)) {
+          negative = true;
+        }
+        Token numToken = consume(c, TOKEN_NUMBER, "Expect number after '='.");
+        value = parseNumberToken(numToken);
+        if (negative) value = -value;
+        nextValue = value + 1.0;
+      } else {
+        nextValue = value + 1.0;
+      }
+
+      emitConstant(c, NUMBER_VAL(value), member);
+      emitByte(c, OP_MAP_SET, member);
+      count++;
+    } while (match(c, TOKEN_COMMA));
+  }
+
+  consume(c, TOKEN_RIGHT_BRACE, "Expect '}' after enum body.");
+
+  c->chunk->code[sizeOffset] = (uint8_t)((count >> 8) & 0xff);
+  c->chunk->code[sizeOffset + 1] = (uint8_t)(count & 0xff);
+
+  int nameIdx = emitStringConstant(c, name);
+  emitByte(c, OP_DEFINE_VAR, name);
+  emitShort(c, (uint16_t)nameIdx, name);
+  if (isExport) {
+    emitByte(c, OP_EXPORT, name);
+    emitShort(c, (uint16_t)nameIdx, name);
+  }
+  emitGc(c);
+}
+
+static void exportDeclaration(Compiler* c) {
+  Token keyword = previous(c);
+  bool allowExport = c->enclosing == NULL && c->scopeDepth == 0;
+  if (!allowExport) {
+    errorAt(c, keyword, "Export declarations must be at top level.");
+  }
+
+  if (match(c, TOKEN_LET)) {
+    varDeclaration(c, false, allowExport);
+    return;
+  }
+  if (match(c, TOKEN_CONST)) {
+    varDeclaration(c, true, allowExport);
+    return;
+  }
+  if (match(c, TOKEN_FUN)) {
+    functionDeclaration(c, allowExport);
+    return;
+  }
   if (match(c, TOKEN_CLASS)) {
-    classDeclaration(c);
+    classDeclaration(c, allowExport);
+    return;
+  }
+  if (match(c, TOKEN_ENUM)) {
+    enumDeclaration(c, allowExport);
+    return;
+  }
+
+  Token name = consume(c, TOKEN_IDENTIFIER, "Expect declaration or identifier after 'export'.");
+  consume(c, TOKEN_SEMICOLON, "Expect ';' after export.");
+  if (allowExport) {
+    emitExportName(c, name);
+  }
+}
+
+static void declaration(Compiler* c) {
+  if (match(c, TOKEN_EXPORT)) {
+    exportDeclaration(c);
+  } else if (match(c, TOKEN_CLASS)) {
+    classDeclaration(c, false);
   } else if (match(c, TOKEN_FUN)) {
-    functionDeclaration(c);
+    functionDeclaration(c, false);
+  } else if (match(c, TOKEN_CONST)) {
+    varDeclaration(c, true, false);
   } else if (match(c, TOKEN_LET)) {
-    varDeclaration(c);
+    varDeclaration(c, false, false);
+  } else if (match(c, TOKEN_ENUM)) {
+    enumDeclaration(c, false);
   } else if (match(c, TOKEN_IMPORT)) {
     importStatement(c);
   } else if (match(c, TOKEN_FROM)) {
@@ -1210,7 +1415,7 @@ static void statement(Compiler* c) {
     forStatement(c);
   } else if (match(c, TOKEN_FOREACH)) {
     foreachStatement(c);
-  } else if (match(c, TOKEN_SWITCH)) {
+  } else if (match(c, TOKEN_SWITCH) || match(c, TOKEN_MATCH)) {
     switchStatement(c);
   } else if (match(c, TOKEN_RETURN)) {
     returnStatement(c);
@@ -1329,6 +1534,7 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer)
   fnCompiler.chunk = chunk;
   fnCompiler.scopeDepth = 0;
   fnCompiler.tempIndex = 0;
+  fnCompiler.pendingOptionalCall = false;
   fnCompiler.breakContext = NULL;
   fnCompiler.enclosing = c;
 
@@ -1403,6 +1609,7 @@ ObjFunction* compile(VM* vm, const TokenArray* tokens, const char* source,
   c.chunk = chunk;
   c.scopeDepth = 0;
   c.tempIndex = 0;
+  c.pendingOptionalCall = false;
   c.breakContext = NULL;
   c.enclosing = NULL;
   vm->compiler = &c;

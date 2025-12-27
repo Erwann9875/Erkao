@@ -15,14 +15,17 @@ const documents = new TextDocuments(TextDocument);
 
 const KEYWORDS = [
   "let",
+  "const",
   "fun",
   "class",
+  "enum",
   "if",
   "else",
   "while",
   "for",
   "foreach",
   "switch",
+  "match",
   "case",
   "default",
   "break",
@@ -30,6 +33,7 @@ const KEYWORDS = [
   "import",
   "from",
   "as",
+  "export",
   "return",
   "true",
   "false",
@@ -150,6 +154,20 @@ function parseSymbols(doc) {
     const name = match[1];
     const nameIndex = match.index + match[0].indexOf(name);
     addSymbol(doc, symbols, byName, name, SymbolKind.Variable, nameIndex);
+  }
+
+  const constRegex = /\bconst\s+([A-Za-z_][A-Za-z0-9_]*)/g;
+  while ((match = constRegex.exec(text)) !== null) {
+    const name = match[1];
+    const nameIndex = match.index + match[0].indexOf(name);
+    addSymbol(doc, symbols, byName, name, SymbolKind.Variable, nameIndex);
+  }
+
+  const enumRegex = /\benum\s+([A-Za-z_][A-Za-z0-9_]*)/g;
+  while ((match = enumRegex.exec(text)) !== null) {
+    const name = match[1];
+    const nameIndex = match.index + match[0].indexOf(name);
+    addSymbol(doc, symbols, byName, name, SymbolKind.Enum, nameIndex);
   }
 
   return { symbols, byName };

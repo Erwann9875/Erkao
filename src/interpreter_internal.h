@@ -7,6 +7,8 @@ Env* newEnv(VM* vm, Env* enclosing);
 bool envGetByName(Env* env, ObjString* name, Value* out);
 bool envAssignByName(Env* env, ObjString* name, Value value);
 void envDefine(Env* env, ObjString* name, Value value);
+void envDefineConst(Env* env, ObjString* name, Value value);
+bool envIsConst(Env* env, ObjString* name);
 
 void runtimeError(VM* vm, Token token, const char* message);
 bool isTruthy(Value value);

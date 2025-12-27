@@ -27,6 +27,7 @@ typedef struct {
 typedef struct Env {
   struct Env* enclosing;
   ObjMap* values;
+  ObjMap* consts;
   struct Env* next;
   bool marked;
 } Env;

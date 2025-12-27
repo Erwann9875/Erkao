@@ -1,0 +1,11 @@
+answer 42
+interpolate Hello Erkao, score 8
+poem
+line 1
+line 2
+optional null
+optional call null
+optional Ada
+enum 0 3 4
+match two
+export 10 15

@@ -62,6 +62,7 @@ static void markObject(VM* vm, Obj* object) {
 
 static void blackenEnv(VM* vm, Env* env) {
   markObject(vm, (Obj*)env->values);
+  markObject(vm, (Obj*)env->consts);
   markEnv(vm, env->enclosing);
 }
 
@@ -138,6 +139,9 @@ static void markYoungFromEnv(VM* vm, Env* env) {
   for (Env* current = env; current; current = current->enclosing) {
     if (current->values && current->values->obj.generation == OBJ_GEN_YOUNG) {
       markYoungObject(vm, (Obj*)current->values);
+    }
+    if (current->consts && current->consts->obj.generation == OBJ_GEN_YOUNG) {
+      markYoungObject(vm, (Obj*)current->consts);
     }
   }
 }
@@ -219,6 +223,9 @@ static bool valueHasYoung(Value value) {
 static bool envHasYoungValues(Env* env) {
   for (Env* current = env; current; current = current->enclosing) {
     if (current->values && current->values->obj.generation == OBJ_GEN_YOUNG) {
+      return true;
+    }
+    if (current->consts && current->consts->obj.generation == OBJ_GEN_YOUNG) {
       return true;
     }
   }

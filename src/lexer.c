@@ -7,6 +7,12 @@ typedef struct {
   int column;
   int startLine;
   int startColumn;
+  bool inString;
+  bool stringIsMultiline;
+  bool inInterpolation;
+  int interpolationDepth;
+  bool hasPendingToken;
+  Token pendingToken;
 } Scanner;
 
 static void initScanner(Scanner* scanner, const char* source) {
@@ -16,6 +22,12 @@ static void initScanner(Scanner* scanner, const char* source) {
   scanner->column = 1;
   scanner->startLine = 1;
   scanner->startColumn = 1;
+  scanner->inString = false;
+  scanner->stringIsMultiline = false;
+  scanner->inInterpolation = false;
+  scanner->interpolationDepth = 0;
+  scanner->hasPendingToken = false;
+  memset(&scanner->pendingToken, 0, sizeof(Token));
 }
 
 void initTokenArray(TokenArray* array) {
@@ -62,11 +74,28 @@ static char peekNext(Scanner* scanner) {
   return scanner->current[1];
 }
 
+static char peekNextNext(Scanner* scanner) {
+  if (isAtEnd(scanner)) return '\0';
+  if (scanner->current[1] == '\0') return '\0';
+  return scanner->current[2];
+}
+
 static bool match(Scanner* scanner, char expected) {
   if (isAtEnd(scanner)) return false;
   if (*scanner->current != expected) return false;
   advance(scanner);
   return true;
+}
+
+static Token makeTokenFromSpan(const char* start, const char* end,
+                               int line, int column, ErkaoTokenType type) {
+  Token token;
+  token.type = type;
+  token.start = start;
+  token.length = (int)(end - start);
+  token.line = line;
+  token.column = column;
+  return token;
 }
 
 static Token makeToken(Scanner* scanner, ErkaoTokenType type) {
@@ -165,14 +194,25 @@ static ErkaoTokenType identifierType(Scanner* scanner) {
         switch (scanner->start[1]) {
           case 'a': return checkKeyword(scanner, 1, 3, "ase", TOKEN_CASE);
           case 'l': return checkKeyword(scanner, 1, 4, "lass", TOKEN_CLASS);
-          case 'o': return checkKeyword(scanner, 1, 7, "ontinue", TOKEN_CONTINUE);
+          case 'o': {
+            ErkaoTokenType type = checkKeyword(scanner, 1, 4, "onst", TOKEN_CONST);
+            if (type != TOKEN_IDENTIFIER) return type;
+            return checkKeyword(scanner, 1, 7, "ontinue", TOKEN_CONTINUE);
+          }
         }
       }
       return TOKEN_IDENTIFIER;
     case 'd':
       return checkKeyword(scanner, 1, 6, "efault", TOKEN_DEFAULT);
     case 'e':
-      return checkKeyword(scanner, 1, 3, "lse", TOKEN_ELSE);
+      if ((int)(scanner->current - scanner->start) > 1) {
+        switch (scanner->start[1]) {
+          case 'l': return checkKeyword(scanner, 1, 3, "lse", TOKEN_ELSE);
+          case 'n': return checkKeyword(scanner, 1, 3, "num", TOKEN_ENUM);
+          case 'x': return checkKeyword(scanner, 1, 5, "xport", TOKEN_EXPORT);
+        }
+      }
+      return TOKEN_IDENTIFIER;
     case 'f':
       if ((int)(scanner->current - scanner->start) > 1) {
         switch (scanner->start[1]) {
@@ -198,6 +238,8 @@ static ErkaoTokenType identifierType(Scanner* scanner) {
       return TOKEN_IDENTIFIER;
     case 'l':
       return checkKeyword(scanner, 1, 2, "et", TOKEN_LET);
+    case 'm':
+      return checkKeyword(scanner, 1, 4, "atch", TOKEN_MATCH);
     case 'n':
       return checkKeyword(scanner, 1, 3, "ull", TOKEN_NULL);
     case 'o':
@@ -238,26 +280,143 @@ static Token number(Scanner* scanner) {
   return makeToken(scanner, TOKEN_NUMBER);
 }
 
-static Token string(Scanner* scanner) {
-  while (!isAtEnd(scanner) && peek(scanner) != '"') {
-    if (peek(scanner) == '\n') {
+static Token scanStringSegment(Scanner* scanner) {
+  const char* segmentStart = scanner->current;
+  int segmentLine = scanner->line;
+  int segmentColumn = scanner->column;
+
+  for (;;) {
+    if (isAtEnd(scanner)) return errorToken(scanner, "Unterminated string.");
+
+    char c = peek(scanner);
+    if (!scanner->stringIsMultiline && c == '\n') {
       return errorToken(scanner, "Unterminated string.");
     }
-    if (peek(scanner) == '\\' && peekNext(scanner) != '\0') {
+
+    if (c == '\\' && peekNext(scanner) != '\0') {
       advance(scanner);
       advance(scanner);
       continue;
     }
+
+    if (c == '$' && peekNext(scanner) == '{') {
+      Token segment = makeTokenFromSpan(
+          segmentStart, scanner->current, segmentLine, segmentColumn, TOKEN_STRING_SEGMENT);
+      const char* interpStart = scanner->current;
+      int interpLine = scanner->line;
+      int interpColumn = scanner->column;
+      advance(scanner);
+      advance(scanner);
+      scanner->pendingToken = makeTokenFromSpan(
+          interpStart, scanner->current, interpLine, interpColumn, TOKEN_INTERP_START);
+      scanner->hasPendingToken = true;
+      scanner->inInterpolation = true;
+      scanner->interpolationDepth = 0;
+      scanner->start = scanner->current;
+      scanner->startLine = scanner->line;
+      scanner->startColumn = scanner->column;
+      return segment;
+    }
+
+    if (c == '"' &&
+        (!scanner->stringIsMultiline ||
+         (peekNext(scanner) == '"' && peekNextNext(scanner) == '"'))) {
+      Token segment = makeTokenFromSpan(
+          segmentStart, scanner->current, segmentLine, segmentColumn, TOKEN_STRING_SEGMENT);
+      if (scanner->stringIsMultiline) {
+        advance(scanner);
+        advance(scanner);
+        advance(scanner);
+      } else {
+        advance(scanner);
+      }
+      scanner->inString = false;
+      scanner->stringIsMultiline = false;
+      return segment;
+    }
+
+    advance(scanner);
+  }
+}
+
+static Token scanStringLiteral(Scanner* scanner, bool multiline, bool allowInterpolation) {
+  const char* literalStart = scanner->start;
+  int literalLine = scanner->startLine;
+  int literalColumn = scanner->startColumn;
+
+  if (multiline) {
+    advance(scanner);
     advance(scanner);
   }
 
-  if (isAtEnd(scanner)) return errorToken(scanner, "Unterminated string.");
+  const char* segmentStart = scanner->current;
+  int segmentLine = scanner->line;
+  int segmentColumn = scanner->column;
 
-  advance(scanner);
-  return makeToken(scanner, TOKEN_STRING);
+  for (;;) {
+    if (isAtEnd(scanner)) return errorToken(scanner, "Unterminated string.");
+
+    char c = peek(scanner);
+    if (!multiline && c == '\n') {
+      return errorToken(scanner, "Unterminated string.");
+    }
+
+    if (c == '\\' && peekNext(scanner) != '\0') {
+      advance(scanner);
+      advance(scanner);
+      continue;
+    }
+
+    if (allowInterpolation && c == '$' && peekNext(scanner) == '{') {
+      Token segment = makeTokenFromSpan(
+          segmentStart, scanner->current, segmentLine, segmentColumn, TOKEN_STRING_SEGMENT);
+      const char* interpStart = scanner->current;
+      int interpLine = scanner->line;
+      int interpColumn = scanner->column;
+      advance(scanner);
+      advance(scanner);
+      scanner->pendingToken = makeTokenFromSpan(
+          interpStart, scanner->current, interpLine, interpColumn, TOKEN_INTERP_START);
+      scanner->hasPendingToken = true;
+      scanner->inInterpolation = true;
+      scanner->interpolationDepth = 0;
+      scanner->inString = true;
+      scanner->stringIsMultiline = multiline;
+      scanner->start = scanner->current;
+      scanner->startLine = scanner->line;
+      scanner->startColumn = scanner->column;
+      return segment;
+    }
+
+    if (c == '"' &&
+        (!multiline || (peekNext(scanner) == '"' && peekNextNext(scanner) == '"'))) {
+      if (multiline) {
+        advance(scanner);
+        advance(scanner);
+        advance(scanner);
+      } else {
+        advance(scanner);
+      }
+      scanner->start = literalStart;
+      scanner->startLine = literalLine;
+      scanner->startColumn = literalColumn;
+      return makeToken(scanner, TOKEN_STRING);
+    }
+
+    advance(scanner);
+  }
 }
 
 static Token scanToken(Scanner* scanner) {
+  if (scanner->hasPendingToken) {
+    scanner->hasPendingToken = false;
+    return scanner->pendingToken;
+  }
+
+  if (scanner->inString) {
+    return scanStringSegment(scanner);
+  }
+
   skipWhitespace(scanner);
   scanner->start = scanner->current;
   scanner->startLine = scanner->line;
@@ -266,6 +425,25 @@ static Token scanToken(Scanner* scanner) {
   if (isAtEnd(scanner)) return makeToken(scanner, TOKEN_EOF);
 
   char c = advance(scanner);
+
+  if (scanner->inInterpolation) {
+    if (c == '{') {
+      scanner->interpolationDepth++;
+      return makeToken(scanner, TOKEN_LEFT_BRACE);
+    }
+    if (c == '}') {
+      if (scanner->interpolationDepth == 0) {
+        scanner->inInterpolation = false;
+        scanner->inString = true;
+        scanner->start = scanner->current;
+        scanner->startLine = scanner->line;
+        scanner->startColumn = scanner->column;
+        return makeToken(scanner, TOKEN_INTERP_END);
+      }
+      scanner->interpolationDepth--;
+      return makeToken(scanner, TOKEN_RIGHT_BRACE);
+    }
+  }
 
   if (isAlpha(c)) return identifier(scanner);
   if (isDigit(c)) return number(scanner);
@@ -291,6 +469,9 @@ static Token scanToken(Scanner* scanner) {
       return makeToken(scanner, TOKEN_MINUS);
     case '+':
       return makeToken(scanner, TOKEN_PLUS);
+    case '?':
+      if (match(scanner, '.')) return makeToken(scanner, TOKEN_QUESTION_DOT);
+      return errorToken(scanner, "Unexpected character.");
     case ';':
       return makeToken(scanner, TOKEN_SEMICOLON);
     case '*':
@@ -308,7 +489,10 @@ static Token scanToken(Scanner* scanner) {
     case '/':
       return makeToken(scanner, TOKEN_SLASH);
     case '"':
-      return string(scanner);
+      if (peek(scanner) == '"' && peekNext(scanner) == '"') {
+        return scanStringLiteral(scanner, true, !scanner->inInterpolation);
+      }
+      return scanStringLiteral(scanner, false, !scanner->inInterpolation);
   }
 
   return errorToken(scanner, "Unexpected character.");
@@ -351,6 +535,7 @@ const char* tokenTypeName(ErkaoTokenType type) {
     case TOKEN_RIGHT_BRACKET: return "RIGHT_BRACKET";
     case TOKEN_COMMA: return "COMMA";
     case TOKEN_DOT: return "DOT";
+    case TOKEN_QUESTION_DOT: return "QUESTION_DOT";
     case TOKEN_MINUS: return "MINUS";
     case TOKEN_PLUS: return "PLUS";
     case TOKEN_SEMICOLON: return "SEMICOLON";
@@ -367,15 +552,22 @@ const char* tokenTypeName(ErkaoTokenType type) {
     case TOKEN_LESS_EQUAL: return "LESS_EQUAL";
     case TOKEN_IDENTIFIER: return "IDENTIFIER";
     case TOKEN_STRING: return "STRING";
+    case TOKEN_STRING_SEGMENT: return "STRING_SEGMENT";
     case TOKEN_NUMBER: return "NUMBER";
+    case TOKEN_INTERP_START: return "INTERP_START";
+    case TOKEN_INTERP_END: return "INTERP_END";
     case TOKEN_AND: return "AND";
     case TOKEN_AS: return "AS";
     case TOKEN_CLASS: return "CLASS";
+    case TOKEN_CONST: return "CONST";
     case TOKEN_ELSE: return "ELSE";
+    case TOKEN_ENUM: return "ENUM";
+    case TOKEN_EXPORT: return "EXPORT";
     case TOKEN_FALSE: return "FALSE";
     case TOKEN_FUN: return "FUN";
     case TOKEN_IF: return "IF";
     case TOKEN_IMPORT: return "IMPORT";
+    case TOKEN_MATCH: return "MATCH";
     case TOKEN_NULL: return "NULL";
     case TOKEN_OR: return "OR";
     case TOKEN_RETURN: return "RETURN";

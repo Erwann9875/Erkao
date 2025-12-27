@@ -35,6 +35,7 @@ typedef struct Compiler {
   Chunk* chunk;
   int scopeDepth;
   int tempIndex;
+  bool pendingOptionalCall;
   BreakContext* breakContext;
   struct Compiler* enclosing;
 } Compiler;

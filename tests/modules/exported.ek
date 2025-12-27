@@ -1,0 +1,6 @@
+export let value = 10;
+let hidden = 3;
+
+export fun add(x) {
+  return x + value;
+}
