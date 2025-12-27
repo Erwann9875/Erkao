@@ -377,8 +377,20 @@ static bool parseManifest(const char* path, PackageManifest* out, const char** e
       out->version = copyCString(version);
     } else if (strcmp(token, "require") == 0) {
       char* name = strtok(NULL, " \t\r\n");
-      char* version = strtok(NULL, " \t\r\n");
+      char* version = strtok(NULL, "\r\n");
       if (!name || !version) {
+        fclose(file);
+        if (error) *error = "Invalid require line.";
+        manifestFree(out);
+        return false;
+      }
+      while (*version && isspace((unsigned char)*version)) version++;
+      char* versionEnd = version + strlen(version);
+      while (versionEnd > version && isspace((unsigned char)versionEnd[-1])) {
+        versionEnd--;
+      }
+      *versionEnd = '\0';
+      if (*version == '\0') {
         fclose(file);
         if (error) *error = "Invalid require line.";
         manifestFree(out);
@@ -408,15 +420,19 @@ static bool writeManifest(const char* path, const PackageManifest* manifest) {
   return true;
 }
 
-static bool writeLock(const char* path, const PackageManifest* manifest) {
+static bool writeLockFromDeps(const char* path, const PackageDep* deps, int count) {
   FILE* file = fopen(path, "wb");
   if (!file) return false;
   fprintf(file, "lock 1\n");
-  for (int i = 0; i < manifest->count; i++) {
-    fprintf(file, "%s %s\n", manifest->deps[i].name, manifest->deps[i].version);
+  for (int i = 0; i < count; i++) {
+    fprintf(file, "%s %s\n", deps[i].name, deps[i].version);
   }
   fclose(file);
   return true;
+}
+
+static bool writeLock(const char* path, const PackageManifest* manifest) {
+  return writeLockFromDeps(path, manifest->deps, manifest->count);
 }
 
 static int readLock(const char* path, PackageDep** outDeps, int* outCount) {
@@ -455,6 +471,413 @@ static int readLock(const char* path, PackageDep** outDeps, int* outCount) {
   *outDeps = deps;
   *outCount = count;
   return 0;
+}
+
+typedef struct {
+  int major;
+  int minor;
+  int patch;
+} Semver;
+
+typedef struct {
+  Semver min;
+  Semver max;
+  bool hasMin;
+  bool hasMax;
+  bool minInclusive;
+  bool maxInclusive;
+} SemverRange;
+
+static void semverRangeInit(SemverRange* range) {
+  range->hasMin = false;
+  range->hasMax = false;
+  range->minInclusive = false;
+  range->maxInclusive = false;
+}
+
+static int compareSemver(const Semver* a, const Semver* b) {
+  if (a->major != b->major) return a->major < b->major ? -1 : 1;
+  if (a->minor != b->minor) return a->minor < b->minor ? -1 : 1;
+  if (a->patch != b->patch) return a->patch < b->patch ? -1 : 1;
+  return 0;
+}
+
+static bool parseSemverParts(const char* text, Semver* out, int* outParts) {
+  if (!text || !isdigit((unsigned char)text[0])) return false;
+  int parts = 0;
+  long values[3] = {0, 0, 0};
+  const char* p = text;
+  while (*p && parts < 3) {
+    if (!isdigit((unsigned char)*p)) return false;
+    long value = 0;
+    while (*p && isdigit((unsigned char)*p)) {
+      value = value * 10 + (*p - '0');
+      p++;
+    }
+    values[parts++] = value;
+    if (*p == '.') {
+      p++;
+      if (*p == '\0') return false;
+      continue;
+    }
+    break;
+  }
+  if (*p != '\0') return false;
+  out->major = (int)values[0];
+  out->minor = parts > 1 ? (int)values[1] : 0;
+  out->patch = parts > 2 ? (int)values[2] : 0;
+  if (outParts) *outParts = parts;
+  return true;
+}
+
+static char* nextToken(char* text, const char* delimiters, char** context) {
+  char* start = text ? text : (context ? *context : NULL);
+  if (!start) return NULL;
+  start += strspn(start, delimiters);
+  if (*start == '\0') {
+    if (context) *context = NULL;
+    return NULL;
+  }
+  char* end = start + strcspn(start, delimiters);
+  if (*end != '\0') {
+    *end = '\0';
+    if (context) *context = end + 1;
+  } else if (context) {
+    *context = NULL;
+  }
+  return start;
+}
+
+static void semverRangeApplyMin(SemverRange* range, const Semver* min, bool inclusive) {
+  if (!range->hasMin) {
+    range->min = *min;
+    range->minInclusive = inclusive;
+    range->hasMin = true;
+    return;
+  }
+  int cmp = compareSemver(min, &range->min);
+  if (cmp > 0 || (cmp == 0 && !inclusive && range->minInclusive)) {
+    range->min = *min;
+    range->minInclusive = inclusive;
+  }
+}
+
+static void semverRangeApplyMax(SemverRange* range, const Semver* max, bool inclusive) {
+  if (!range->hasMax) {
+    range->max = *max;
+    range->maxInclusive = inclusive;
+    range->hasMax = true;
+    return;
+  }
+  int cmp = compareSemver(max, &range->max);
+  if (cmp < 0 || (cmp == 0 && !inclusive && range->maxInclusive)) {
+    range->max = *max;
+    range->maxInclusive = inclusive;
+  }
+}
+
+static bool semverMatchesRange(const Semver* version, const SemverRange* range) {
+  if (range->hasMin) {
+    int cmp = compareSemver(version, &range->min);
+    if (cmp < 0 || (cmp == 0 && !range->minInclusive)) return false;
+  }
+  if (range->hasMax) {
+    int cmp = compareSemver(version, &range->max);
+    if (cmp > 0 || (cmp == 0 && !range->maxInclusive)) return false;
+  }
+  return true;
+}
+
+static bool parseWildcardRange(const char* token, SemverRange* out) {
+  if (!token || token[0] == '\0') return false;
+  if (strcmp(token, "*") == 0 || strcmp(token, "x") == 0 || strcmp(token, "X") == 0) {
+    semverRangeInit(out);
+    return true;
+  }
+  if (!strchr(token, '*') && !strchr(token, 'x') && !strchr(token, 'X')) return false;
+
+  char* copy = copyCString(token);
+  char* parts[3] = {NULL, NULL, NULL};
+  int count = 0;
+  char* ctx = NULL;
+  char* piece = nextToken(copy, ".", &ctx);
+  while (piece && count < 3) {
+    parts[count++] = piece;
+    piece = nextToken(NULL, ".", &ctx);
+  }
+  if (piece != NULL) {
+    free(copy);
+    return false;
+  }
+
+  bool wildcard[3] = {false, false, false};
+  int values[3] = {0, 0, 0};
+  for (int i = 0; i < count; i++) {
+    if (strcmp(parts[i], "*") == 0 || strcmp(parts[i], "x") == 0 || strcmp(parts[i], "X") == 0) {
+      wildcard[i] = true;
+      continue;
+    }
+    if (parts[i][0] == '\0') {
+      free(copy);
+      return false;
+    }
+    int value = 0;
+    for (const char* c = parts[i]; *c; c++) {
+      if (!isdigit((unsigned char)*c)) {
+        free(copy);
+        return false;
+      }
+      value = value * 10 + (*c - '0');
+    }
+    values[i] = value;
+  }
+  for (int i = 0; i < count; i++) {
+    if (wildcard[i]) {
+      for (int j = i + 1; j < count; j++) {
+        if (!wildcard[j]) {
+          free(copy);
+          return false;
+        }
+      }
+      break;
+    }
+  }
+
+  semverRangeInit(out);
+  if (wildcard[0]) {
+    free(copy);
+    return true;
+  }
+  if (count >= 2 && wildcard[1]) {
+    Semver min = {values[0], 0, 0};
+    Semver max = {values[0] + 1, 0, 0};
+    semverRangeApplyMin(out, &min, true);
+    semverRangeApplyMax(out, &max, false);
+    free(copy);
+    return true;
+  }
+  if (count >= 3 && wildcard[2]) {
+    Semver min = {values[0], values[1], 0};
+    Semver max = {values[0], values[1] + 1, 0};
+    semverRangeApplyMin(out, &min, true);
+    semverRangeApplyMax(out, &max, false);
+    free(copy);
+    return true;
+  }
+
+  free(copy);
+  return false;
+}
+
+static bool applyRangeToken(const char* token, SemverRange* range) {
+  if (!token || token[0] == '\0') return false;
+
+  SemverRange wildcard;
+  if (parseWildcardRange(token, &wildcard)) {
+    if (wildcard.hasMin) semverRangeApplyMin(range, &wildcard.min, wildcard.minInclusive);
+    if (wildcard.hasMax) semverRangeApplyMax(range, &wildcard.max, wildcard.maxInclusive);
+    return true;
+  }
+
+  if (token[0] == '^' || token[0] == '~') {
+    Semver base;
+    int parts = 0;
+    if (!parseSemverParts(token + 1, &base, &parts)) return false;
+    Semver max = base;
+    if (token[0] == '^') {
+      if (base.major > 0) {
+        max.major = base.major + 1;
+        max.minor = 0;
+        max.patch = 0;
+      } else if (base.minor > 0) {
+        max.minor = base.minor + 1;
+        max.patch = 0;
+      } else {
+        max.patch = base.patch + 1;
+      }
+    } else {
+      if (parts <= 1) {
+        max.major = base.major + 1;
+        max.minor = 0;
+        max.patch = 0;
+      } else {
+        max.minor = base.minor + 1;
+        max.patch = 0;
+      }
+    }
+    semverRangeApplyMin(range, &base, true);
+    semverRangeApplyMax(range, &max, false);
+    return true;
+  }
+
+  const char* op = NULL;
+  if (strncmp(token, ">=", 2) == 0 || strncmp(token, "<=", 2) == 0) {
+    op = token;
+  } else if (token[0] == '>' || token[0] == '<' || token[0] == '=') {
+    op = token;
+  }
+
+  if (op) {
+    int opLen = (op[1] == '=' ? 2 : 1);
+    Semver base;
+    int parts = 0;
+    if (!parseSemverParts(token + opLen, &base, &parts)) return false;
+    if (op[0] == '>') {
+      semverRangeApplyMin(range, &base, opLen == 2);
+      return true;
+    }
+    if (op[0] == '<') {
+      semverRangeApplyMax(range, &base, opLen == 2);
+      return true;
+    }
+    if (op[0] == '=') {
+      semverRangeApplyMin(range, &base, true);
+      semverRangeApplyMax(range, &base, true);
+      return true;
+    }
+  }
+
+  Semver exact;
+  if (parseSemverParts(token, &exact, NULL)) {
+    semverRangeApplyMin(range, &exact, true);
+    semverRangeApplyMax(range, &exact, true);
+    return true;
+  }
+
+  return false;
+}
+
+static bool parseVersionRange(const char* text, SemverRange* out) {
+  if (!text) return false;
+  char* copy = copyCString(text);
+  char* start = copy;
+  while (*start && isspace((unsigned char)*start)) start++;
+  char* end = start + strlen(start);
+  while (end > start && isspace((unsigned char)end[-1])) {
+    end--;
+  }
+  *end = '\0';
+  if (*start == '\0') {
+    free(copy);
+    return false;
+  }
+
+  semverRangeInit(out);
+  bool any = false;
+  if (strpbrk(start, " \t") != NULL) {
+    char* ctx = NULL;
+    char* token = nextToken(start, " \t\r\n", &ctx);
+    while (token) {
+      if (!applyRangeToken(token, out)) {
+        free(copy);
+        return false;
+      }
+      any = true;
+      token = nextToken(NULL, " \t\r\n", &ctx);
+    }
+  } else {
+    if (!applyRangeToken(start, out)) {
+      free(copy);
+      return false;
+    }
+    any = true;
+  }
+
+  free(copy);
+  return any;
+}
+
+static char* findBestVersionInDir(const char* baseDir, const SemverRange* range) {
+  if (!baseDir || !isDirectory(baseDir)) return NULL;
+  char* best = NULL;
+  Semver bestVersion = {0, 0, 0};
+  bool hasBest = false;
+#ifdef _WIN32
+  size_t length = strlen(baseDir);
+  char* pattern = (char*)malloc(length + 3);
+  if (!pattern) {
+    fprintf(stderr, "Out of memory.\n");
+    exit(1);
+  }
+  memcpy(pattern, baseDir, length);
+  pattern[length] = '\\';
+  pattern[length + 1] = '*';
+  pattern[length + 2] = '\0';
+
+  WIN32_FIND_DATAA data;
+  HANDLE handle = FindFirstFileA(pattern, &data);
+  free(pattern);
+  if (handle == INVALID_HANDLE_VALUE) return NULL;
+  do {
+    if (strcmp(data.cFileName, ".") == 0 || strcmp(data.cFileName, "..") == 0) {
+      continue;
+    }
+    if (!(data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+    Semver candidate;
+    if (!parseSemverParts(data.cFileName, &candidate, NULL)) continue;
+    if (!semverMatchesRange(&candidate, range)) continue;
+    if (!hasBest || compareSemver(&candidate, &bestVersion) > 0) {
+      free(best);
+      best = copyCString(data.cFileName);
+      bestVersion = candidate;
+      hasBest = true;
+    }
+  } while (FindNextFileA(handle, &data));
+  FindClose(handle);
+#else
+  DIR* dir = opendir(baseDir);
+  if (!dir) return NULL;
+  struct dirent* entry;
+  while ((entry = readdir(dir)) != NULL) {
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+      continue;
+    }
+    char* candidatePath = joinPaths(baseDir, entry->d_name);
+    bool isDir = isDirectory(candidatePath);
+    free(candidatePath);
+    if (!isDir) continue;
+    Semver candidate;
+    if (!parseSemverParts(entry->d_name, &candidate, NULL)) continue;
+    if (!semverMatchesRange(&candidate, range)) continue;
+    if (!hasBest || compareSemver(&candidate, &bestVersion) > 0) {
+      free(best);
+      best = copyCString(entry->d_name);
+      bestVersion = candidate;
+      hasBest = true;
+    }
+  }
+  closedir(dir);
+#endif
+  return best;
+}
+
+static char* selectBestRangeVersion(const char* packagesDir, const char* globalDir,
+                                    const char* name, const SemverRange* range) {
+  char* localBest = NULL;
+  char* globalBest = NULL;
+  if (packagesDir) {
+    char* nameDir = joinPaths(packagesDir, name);
+    localBest = findBestVersionInDir(nameDir, range);
+    free(nameDir);
+  }
+  if (globalDir) {
+    char* nameDir = joinPaths(globalDir, name);
+    globalBest = findBestVersionInDir(nameDir, range);
+    free(nameDir);
+  }
+  if (localBest && globalBest) {
+    Semver localSemver;
+    Semver globalSemver;
+    if (parseSemverParts(localBest, &localSemver, NULL) &&
+        parseSemverParts(globalBest, &globalSemver, NULL) &&
+        compareSemver(&globalSemver, &localSemver) > 0) {
+      free(localBest);
+      return globalBest;
+    }
+    free(globalBest);
+    return localBest;
+  }
+  return localBest ? localBest : globalBest;
 }
 
 static void freeDeps(PackageDep* deps, int count) {
@@ -726,11 +1149,49 @@ static int cmdPkgInstall(void) {
 
   char* packagesDir = joinPaths(projectRoot, "packages");
   char* globalDir = resolveGlobalPackagesDir();
+  PackageDep* resolvedDeps = NULL;
+  int resolvedCount = 0;
+  if (manifest.count > 0) {
+    resolvedDeps = (PackageDep*)calloc((size_t)manifest.count, sizeof(PackageDep));
+    if (!resolvedDeps) {
+      fprintf(stderr, "Out of memory.\n");
+      manifestFree(&manifest);
+      free(packagesDir);
+      free(globalDir);
+      free(manifestPath);
+      free(projectRoot);
+      free(cwd);
+      return 1;
+    }
+  }
 
   for (int i = 0; i < manifest.count; i++) {
     PackageDep* dep = &manifest.deps[i];
+    char* resolvedVersion = NULL;
+    SemverRange range;
+    if (parseVersionRange(dep->version, &range)) {
+      resolvedVersion = selectBestRangeVersion(packagesDir, globalDir, dep->name, &range);
+      if (!resolvedVersion) {
+        fprintf(stderr, "Missing package %s@%s.\n", dep->name, dep->version);
+        freeDeps(resolvedDeps, resolvedCount);
+        manifestFree(&manifest);
+        free(packagesDir);
+        free(globalDir);
+        free(manifestPath);
+        free(projectRoot);
+        free(cwd);
+        return 1;
+      }
+    } else {
+      resolvedVersion = copyCString(dep->version);
+    }
+
+    resolvedDeps[i].name = copyCString(dep->name);
+    resolvedDeps[i].version = resolvedVersion;
+    resolvedCount++;
+
     char* localRoot = joinPaths(packagesDir, dep->name);
-    char* localDir = joinPaths(localRoot, dep->version);
+    char* localDir = joinPaths(localRoot, resolvedVersion);
     free(localRoot);
     if (isDirectory(localDir)) {
       free(localDir);
@@ -738,14 +1199,15 @@ static int cmdPkgInstall(void) {
     }
     if (globalDir) {
       char* globalRoot = joinPaths(globalDir, dep->name);
-      char* globalPkg = joinPaths(globalRoot, dep->version);
+      char* globalPkg = joinPaths(globalRoot, resolvedVersion);
       free(globalRoot);
       if (isDirectory(globalPkg)) {
         if (!copyDirRecursive(globalPkg, localDir)) {
           fprintf(stderr, "Failed to copy %s@%s from cache.\n",
-                  dep->name, dep->version);
+                  dep->name, resolvedVersion);
           free(globalPkg);
           free(localDir);
+          freeDeps(resolvedDeps, resolvedCount);
           manifestFree(&manifest);
           free(packagesDir);
           free(globalDir);
@@ -760,8 +1222,9 @@ static int cmdPkgInstall(void) {
       }
       free(globalPkg);
     }
-    fprintf(stderr, "Missing package %s@%s.\n", dep->name, dep->version);
+    fprintf(stderr, "Missing package %s@%s.\n", dep->name, resolvedVersion);
     free(localDir);
+    freeDeps(resolvedDeps, resolvedCount);
     manifestFree(&manifest);
     free(packagesDir);
     free(globalDir);
@@ -772,9 +1235,10 @@ static int cmdPkgInstall(void) {
   }
 
   char* lockPath = joinPaths(projectRoot, ERKAO_LOCK_NAME);
-  writeLock(lockPath, &manifest);
+  writeLockFromDeps(lockPath, resolvedDeps, resolvedCount);
   free(lockPath);
 
+  freeDeps(resolvedDeps, resolvedCount);
   manifestFree(&manifest);
   free(packagesDir);
   free(globalDir);

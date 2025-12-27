@@ -1,0 +1,7 @@
+import "alpha@^1.0.0" as alpha;
+import "alpha@2.0.0" as alpha2;
+import "alpha/utils" as utils;
+
+print(alpha.version);
+print(alpha2.version);
+print(utils.util);
