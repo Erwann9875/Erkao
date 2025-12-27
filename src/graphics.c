@@ -37,6 +37,27 @@ static int gKeyCount = 0;
 static int gMouseX = 0, gMouseY = 0;
 static Uint32 gMouseState = 0;
 static Uint32 gMousePrevState = 0;
+static bool gTextInputEnabled = false;
+
+typedef enum {
+  GFX_EVENT_KEY_DOWN,
+  GFX_EVENT_KEY_UP,
+  GFX_EVENT_TEXT,
+  GFX_EVENT_QUIT
+} GfxEventType;
+
+typedef struct {
+  GfxEventType type;
+  SDL_Scancode scancode;
+  Uint8 repeat;
+  char text[SDL_TEXTINPUTEVENT_TEXT_SIZE];
+} GfxEvent;
+
+#define GFX_EVENT_QUEUE_CAPACITY 256
+
+static GfxEvent gEventQueue[GFX_EVENT_QUEUE_CAPACITY];
+static int gEventHead = 0;
+static int gEventTail = 0;
 
 static TTF_Font* gDefaultFont = NULL;
 static int gDefaultFontSize = 16;
@@ -224,6 +245,105 @@ static SDL_Scancode getKeyCode(const char* name) {
   return SDL_SCANCODE_UNKNOWN;
 }
 
+static const char* getKeyNameFromCode(SDL_Scancode code) {
+  for (int i = 0; gKeyMappings[i].name != NULL; i++) {
+    if (gKeyMappings[i].code == code) {
+      return gKeyMappings[i].name;
+    }
+  }
+  const char* sdlName = SDL_GetScancodeName(code);
+  if (!sdlName || sdlName[0] == '\0') return NULL;
+  return sdlName;
+}
+
+static void clearEventQueue(void) {
+  gEventHead = 0;
+  gEventTail = 0;
+}
+
+static void pushEvent(const GfxEvent* event) {
+  int nextTail = (gEventTail + 1) % GFX_EVENT_QUEUE_CAPACITY;
+  if (nextTail == gEventHead) {
+    gEventHead = (gEventHead + 1) % GFX_EVENT_QUEUE_CAPACITY;
+  }
+  gEventQueue[gEventTail] = *event;
+  gEventTail = nextTail;
+}
+
+static bool popEvent(GfxEvent* out) {
+  if (gEventHead == gEventTail) return false;
+  *out = gEventQueue[gEventHead];
+  gEventHead = (gEventHead + 1) % GFX_EVENT_QUEUE_CAPACITY;
+  return true;
+}
+
+static void queueKeyEvent(GfxEventType type, SDL_Scancode scancode, Uint8 repeat) {
+  GfxEvent event;
+  event.type = type;
+  event.scancode = scancode;
+  event.repeat = repeat;
+  event.text[0] = '\0';
+  pushEvent(&event);
+}
+
+static void queueTextEvent(const char* text) {
+  GfxEvent event;
+  event.type = GFX_EVENT_TEXT;
+  event.scancode = SDL_SCANCODE_UNKNOWN;
+  event.repeat = 0;
+  strncpy(event.text, text ? text : "", SDL_TEXTINPUTEVENT_TEXT_SIZE);
+  event.text[SDL_TEXTINPUTEVENT_TEXT_SIZE - 1] = '\0';
+  pushEvent(&event);
+}
+
+static void queueQuitEvent(void) {
+  GfxEvent event;
+  event.type = GFX_EVENT_QUIT;
+  event.scancode = SDL_SCANCODE_UNKNOWN;
+  event.repeat = 0;
+  event.text[0] = '\0';
+  pushEvent(&event);
+}
+
+static Value gfxEventToValue(VM* vm, const GfxEvent* event) {
+  ObjMap* result = newMap(vm);
+  const char* typeName = "unknown";
+
+  switch (event->type) {
+    case GFX_EVENT_KEY_DOWN:
+      typeName = "keyDown";
+      break;
+    case GFX_EVENT_KEY_UP:
+      typeName = "keyUp";
+      break;
+    case GFX_EVENT_TEXT:
+      typeName = "text";
+      break;
+    case GFX_EVENT_QUIT:
+      typeName = "quit";
+      break;
+  }
+
+  mapSet(result, copyString(vm, "type"), OBJ_VAL(copyString(vm, typeName)));
+
+  if (event->type == GFX_EVENT_KEY_DOWN || event->type == GFX_EVENT_KEY_UP) {
+    mapSet(result, copyString(vm, "scancode"), NUMBER_VAL((double)event->scancode));
+    const char* keyName = getKeyNameFromCode(event->scancode);
+    if (keyName) {
+      mapSet(result, copyString(vm, "key"), OBJ_VAL(copyString(vm, keyName)));
+    }
+    if (event->type == GFX_EVENT_KEY_DOWN) {
+      mapSet(result, copyString(vm, "repeat"), BOOL_VAL(event->repeat != 0));
+    }
+  }
+
+  if (event->type == GFX_EVENT_TEXT) {
+    mapSet(result, copyString(vm, "text"), OBJ_VAL(copyString(vm, event->text)));
+  }
+
+  return OBJ_VAL(result);
+}
+
 static CachedTexture* getTexture(VM* vm, const char* path) {
   (void)vm;
   for (int i = 0; i < gTextureCount; i++) {
@@ -326,17 +446,33 @@ static void updateInput(void) {
 
 static bool processEvents(void) {
   SDL_Event event;
+  bool keepRunning = true;
   while (SDL_PollEvent(&event)) {
-    if (event.type == SDL_QUIT) {
-      gRunning = false;
-      return false;
-    }
-    if (event.type == SDL_KEYDOWN && event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
-      gRunning = false;
-      return false;
+    switch (event.type) {
+      case SDL_QUIT:
+        gRunning = false;
+        keepRunning = false;
+        queueQuitEvent();
+        break;
+      case SDL_KEYDOWN:
+        if (event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
+          gRunning = false;
+          keepRunning = false;
+          queueQuitEvent();
+          break;
+        }
+        queueKeyEvent(GFX_EVENT_KEY_DOWN, event.key.keysym.scancode,
+                      event.key.repeat ? 1 : 0);
+        break;
+      case SDL_KEYUP:
+        queueKeyEvent(GFX_EVENT_KEY_UP, event.key.keysym.scancode, 0);
+        break;
+      case SDL_TEXTINPUT:
+        queueTextEvent(event.text.text);
+        break;
     }
   }
-  return true;
+  return keepRunning;
 }
 
 static Value nativeGfxInit(VM* vm, int argc, Value* args) {
@@ -404,6 +540,10 @@ static Value nativeGfxInit(VM* vm, int argc, Value* args) {
   }
 
   SDL_SetRenderDrawBlendMode(gRenderer, SDL_BLENDMODE_BLEND);
+
+  clearEventQueue();
+  SDL_StartTextInput();
+  gTextInputEnabled = true;
 
   gInitialized = true;
   gRunning = true;
@@ -876,6 +1016,42 @@ static Value nativeGfxPoll(VM* vm, int argc, Value* args) {
   return BOOL_VAL(processEvents());
 }
 
+static Value nativeGfxPollEvent(VM* vm, int argc, Value* args) {
+  (void)argc; (void)args;
+  if (!gInitialized) return NULL_VAL;
+
+  if (gEventHead == gEventTail) {
+    updateInput();
+    processEvents();
+  }
+
+  GfxEvent event;
+  if (!popEvent(&event)) return NULL_VAL;
+  return gfxEventToValue(vm, &event);
+}
+
+static Value nativeGfxTextInput(VM* vm, int argc, Value* args) {
+  (void)vm;
+  if (!gInitialized) return BOOL_VAL(false);
+
+  if (argc >= 1) {
+    if (!IS_BOOL(args[0])) {
+      return gfxError(vm, "gfx.textInput expects (bool?)");
+    }
+    bool enable = AS_BOOL(args[0]);
+    if (enable && !gTextInputEnabled) {
+      SDL_StartTextInput();
+      gTextInputEnabled = true;
+    } else if (!enable && gTextInputEnabled) {
+      SDL_StopTextInput();
+      gTextInputEnabled = false;
+    }
+    return NULL_VAL;
+  }
+
+  return BOOL_VAL(gTextInputEnabled);
+}
+
 static Value nativeGfxSound(VM* vm, int argc, Value* args) {
   if (argc < 1 || !isObjType(args[0], OBJ_STRING)) {
     return gfxError(vm, "gfx.sound expects (path)");
@@ -989,6 +1165,7 @@ void defineGraphicsModule(VM* vm,
   moduleAddFn(vm, gfx, "quit", nativeGfxQuit, 0);
   moduleAddFn(vm, gfx, "run", nativeGfxRun, -1);
   moduleAddFn(vm, gfx, "poll", nativeGfxPoll, 0);
+  moduleAddFn(vm, gfx, "pollEvent", nativeGfxPollEvent, 0);
 
   moduleAddFn(vm, gfx, "clear", nativeGfxClear, -1);
   moduleAddFn(vm, gfx, "present", nativeGfxPresent, 0);
@@ -1008,6 +1185,7 @@ void defineGraphicsModule(VM* vm,
 
   moduleAddFn(vm, gfx, "key", nativeGfxKey, 1);
   moduleAddFn(vm, gfx, "keyPressed", nativeGfxKeyPressed, 1);
+  moduleAddFn(vm, gfx, "textInput", nativeGfxTextInput, -1);
   moduleAddFn(vm, gfx, "mouse", nativeGfxMouse, 0);
   moduleAddFn(vm, gfx, "mouseDown", nativeGfxMouseDown, -1);
   moduleAddFn(vm, gfx, "mouseClicked", nativeGfxMouseClicked, -1);
@@ -1059,6 +1237,12 @@ void graphicsCleanup(void) {
   if (gKeyPrevState) { free(gKeyPrevState); gKeyPrevState = NULL; }
   gKeyState = NULL;
   gKeyCount = 0;
+
+  if (gTextInputEnabled) {
+    SDL_StopTextInput();
+    gTextInputEnabled = false;
+  }
+  clearEventQueue();
 
   if (gRenderer) { SDL_DestroyRenderer(gRenderer); gRenderer = NULL; }
   if (gWindow) { SDL_DestroyWindow(gWindow); gWindow = NULL; }

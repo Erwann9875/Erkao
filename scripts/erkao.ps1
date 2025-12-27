@@ -1,6 +1,10 @@
 param(
   [string]$Action,
-  [string]$Generator
+  [string]$Generator,
+  [string]$Preset,
+  [switch]$UseVcpkg,
+  [string]$VcpkgRoot,
+  [string]$VcpkgTriplet
 )
 
 $ErrorActionPreference = "Stop"
@@ -103,6 +107,109 @@ function Require-RepoRoot {
   }
 }
 
+function Get-RepoRoot {
+  return [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
+}
+
+function Resolve-VcpkgRoot {
+  param([string]$Requested)
+  if ($Requested) {
+    return $Requested
+  }
+  if ($env:VCPKG_ROOT) {
+    return $env:VCPKG_ROOT
+  }
+  $repoRoot = Get-RepoRoot
+  return (Join-Path $repoRoot "vcpkg")
+}
+
+function Resolve-VcpkgTriplet {
+  param([string]$Requested)
+  if ($Requested) {
+    return $Requested
+  }
+  if ($env:VCPKG_DEFAULT_TRIPLET) {
+    return $env:VCPKG_DEFAULT_TRIPLET
+  }
+  $arch = $env:VSCMD_ARG_TGT_ARCH
+  if (-not $arch) {
+    $arch = $env:PROCESSOR_ARCHITECTURE
+  }
+  switch ($arch) {
+    "x64" { return "x64-windows" }
+    "AMD64" { return "x64-windows" }
+    "arm64" { return "arm64-windows" }
+    default { return "x86-windows" }
+  }
+}
+
+function Ensure-Vcpkg {
+  param([string]$Root)
+  $vcpkgExe = Join-Path $Root "vcpkg.exe"
+  if (Test-Path -LiteralPath $vcpkgExe) {
+    return $vcpkgExe
+  }
+
+  if (-not (Test-Command "git")) {
+    throw "git is required to install vcpkg automatically. Install git or set VCPKG_ROOT."
+  }
+
+  if (-not (Test-Path -LiteralPath $Root)) {
+    Write-Host "Cloning vcpkg into $Root"
+    git clone https://github.com/microsoft/vcpkg $Root | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+      throw "vcpkg clone failed (exit code $LASTEXITCODE)."
+    }
+  }
+
+  $bootstrap = Join-Path $Root "bootstrap-vcpkg.bat"
+  if (-not (Test-Path -LiteralPath $bootstrap)) {
+    throw "vcpkg bootstrap script not found at $bootstrap"
+  }
+
+  Write-Host "Bootstrapping vcpkg..."
+  & $bootstrap | Out-Host
+  if ($LASTEXITCODE -ne 0) {
+    throw "vcpkg bootstrap failed (exit code $LASTEXITCODE)."
+  }
+
+  if (-not (Test-Path -LiteralPath $vcpkgExe)) {
+    throw "vcpkg bootstrap failed. Expected $vcpkgExe."
+  }
+  return $vcpkgExe
+}
+
+function Ensure-VcpkgSdl {
+  param(
+    [string]$VcpkgExe,
+    [string]$Triplet
+  )
+  $vcpkgRoot = Split-Path -Parent $VcpkgExe
+  Push-Location $vcpkgRoot
+  try {
+    & $VcpkgExe install "sdl2:$Triplet" "sdl2-image:$Triplet" "sdl2-ttf:$Triplet" "sdl2-mixer:$Triplet" | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+      throw "vcpkg install failed (exit code $LASTEXITCODE)."
+    }
+  } finally {
+    Pop-Location
+  }
+}
+
+function Should-UseVcpkg {
+  param([string]$PresetName, [string]$GeneratorName)
+  if ($UseVcpkg.IsPresent) {
+    return $true
+  }
+  if ($PresetName -and $PresetName -match "^msvc-") {
+    return $true
+  }
+  if ($GeneratorName -and ((Is-VisualStudioGenerator $GeneratorName) -or ($GeneratorName -eq "NMake Makefiles"))) {
+    return $true
+  }
+  return $false
+}
+
 function Install-WithWinget {
   param([string]$Id)
   Write-Host "winget install --id $Id -e --source winget"
@@ -151,6 +258,23 @@ function Build-Project {
     throw "CMake not found. Run option 1 first."
   }
 
+  if ($Preset) {
+    $useVcpkg = Should-UseVcpkg -PresetName $Preset -GeneratorName $null
+    $cmakeArgs = @("--preset", $Preset)
+    if ($useVcpkg) {
+      $resolvedVcpkgRoot = Resolve-VcpkgRoot -Requested $VcpkgRoot
+      $resolvedTriplet = Resolve-VcpkgTriplet -Requested $VcpkgTriplet
+      $vcpkgExe = Ensure-Vcpkg -Root $resolvedVcpkgRoot
+      Ensure-VcpkgSdl -VcpkgExe $vcpkgExe -Triplet $resolvedTriplet
+      $toolchain = Join-Path $resolvedVcpkgRoot "scripts/buildsystems/vcpkg.cmake"
+      $cmakeArgs += "-DCMAKE_TOOLCHAIN_FILE=$toolchain"
+      $cmakeArgs += "-DVCPKG_TARGET_TRIPLET=$resolvedTriplet"
+    }
+    cmake @cmakeArgs
+    cmake --build --preset $Preset
+    return
+  }
+
   $resolvedGenerator = Resolve-Generator -Requested $Generator
   if (-not $resolvedGenerator) {
     throw "No CMake generator found. Install Visual Studio Build Tools or Ninja, or pass -Generator."
@@ -171,8 +295,25 @@ function Build-Project {
     throw "No C compiler detected. Run option 1 or install a compiler (Visual Studio Build Tools, MinGW, or LLVM)."
   }
 
+  $useVcpkg = Should-UseVcpkg -PresetName $null -GeneratorName $resolvedGenerator
+  $toolchain = $null
+  $resolvedTriplet = $null
+  if ($useVcpkg) {
+    $resolvedVcpkgRoot = Resolve-VcpkgRoot -Requested $VcpkgRoot
+    $resolvedTriplet = Resolve-VcpkgTriplet -Requested $VcpkgTriplet
+    $vcpkgExe = Ensure-Vcpkg -Root $resolvedVcpkgRoot
+    Ensure-VcpkgSdl -VcpkgExe $vcpkgExe -Triplet $resolvedTriplet
+    $toolchain = Join-Path $resolvedVcpkgRoot "scripts/buildsystems/vcpkg.cmake"
+  }
+
   $buildDir = "build"
   $cmakeArgs = @("-S", ".", "-B", $buildDir, "-G", $resolvedGenerator)
+  if ($toolchain) {
+    $cmakeArgs += "-DCMAKE_TOOLCHAIN_FILE=$toolchain"
+  }
+  if ($resolvedTriplet) {
+    $cmakeArgs += "-DVCPKG_TARGET_TRIPLET=$resolvedTriplet"
+  }
   cmake @cmakeArgs
   cmake --build $buildDir
 }
@@ -191,6 +332,8 @@ function Show-Menu {
   Write-Host "Erkao setup"
   Write-Host "1) Install prerequisites (CMake, compiler)"
   Write-Host "2) Build"
+  Write-Host "   (Use -Preset msys2-debug or -Preset msvc-debug to use CMakePresets.json)"
+  Write-Host "   (MSVC builds auto-install vcpkg; set VCPKG_ROOT to reuse an existing install)"
   Write-Host "3) Format check (tests/examples)"
 }
 

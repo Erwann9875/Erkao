@@ -20,6 +20,36 @@ On Windows, you can use the setup script:
 If you install Visual Studio Build Tools or Visual Studio, make sure **Desktop development with C++** is selected.
 You can also specify a generator: `./scripts/erkao.ps1 build -Generator "Ninja"`.
 
+### Windows graphics builds (SDL2)
+
+SDL2 binaries must match the compiler toolchain.
+
+MSYS2 (UCRT64) build:
+
+```sh
+cmake --preset msys2-debug
+cmake --build --preset msys2-debug
+```
+
+MSVC build (with vcpkg):
+
+```sh
+cmake --preset msvc-debug -DCMAKE_TOOLCHAIN_FILE=C:/path/to/vcpkg/scripts/buildsystems/vcpkg.cmake
+cmake --build --preset msvc-debug
+```
+
+You can also use the PowerShell helper:
+
+```powershell
+./scripts/erkao.ps1 build -Preset msys2-debug
+./scripts/erkao.ps1 build -Preset msvc-debug
+```
+
+For MSVC builds, the script will bootstrap vcpkg and install SDL2 if needed.
+Set `VCPKG_ROOT` or pass `-VcpkgRoot` to reuse an existing vcpkg install.
+
+If `gfx` is undefined at runtime, graphics were disabled because SDL2 was not found for that toolchain.
+
 ## CLI
 
 Help and version:
@@ -264,6 +294,23 @@ import "alpha/utils" as utils;
 - `env.get(name)`
 - `env.args()`
 - `plugin.load(path)`
+
+## Graphics (gfx)
+
+The SDL2 graphics module is available when built with SDL2 support.
+
+Input helpers:
+- `gfx.key(name)` and `gfx.keyPressed(name)`
+- `gfx.poll()` returns false on quit
+- `gfx.pollEvent()` returns a map or `null` if no events are pending
+- `gfx.textInput(enable?)` enables/disables text input (text events are `type: "text"`)
+
+Event maps include:
+- `type`: `"keyDown"`, `"keyUp"`, `"text"`, or `"quit"`
+- `key`: optional string name (when known)
+- `scancode`: numeric SDL scancode for key events
+- `repeat`: boolean for keyDown events
+- `text`: text payload for text events
 
 ## Plugins
 
