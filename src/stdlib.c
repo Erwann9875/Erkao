@@ -82,6 +82,8 @@ static char pickSeparator(const char* left, const char* right) {
   return '/';
 }
 
+static char* copyCString(const char* src, size_t length);
+
 static bool pathExists(const char* path) {
 #ifdef _WIN32
   DWORD attrs = GetFileAttributesA(path);
