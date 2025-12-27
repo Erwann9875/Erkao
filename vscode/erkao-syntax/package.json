@@ -7,6 +7,10 @@
   "engines": {
     "vscode": "^1.80.0"
   },
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:erkao"
+  ],
   "categories": [
     "Programming Languages"
   ],
@@ -31,5 +35,10 @@
         "path": "./syntaxes/erkao.tmLanguage.json"
       }
     ]
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1",
+    "vscode-languageserver": "^8.1.0",
+    "vscode-languageserver-textdocument": "^1.0.11"
   }
 }

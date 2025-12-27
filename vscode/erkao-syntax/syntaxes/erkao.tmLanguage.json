@@ -7,11 +7,13 @@
     { "include": "#numbers" },
     { "include": "#function-decl" },
     { "include": "#class-decl" },
+    { "include": "#module-member" },
     { "include": "#storage" },
     { "include": "#keywords" },
     { "include": "#constants" },
     { "include": "#this" },
     { "include": "#operators" },
+    { "include": "#function-call" },
     { "include": "#builtins" },
     { "include": "#modules" }
   ],
@@ -50,7 +52,7 @@
       "patterns": [
         {
           "name": "constant.numeric.erkao",
-          "match": "\\b\\d+(?:\\.\\d+)?\\b"
+          "match": "\\b(?:0x[0-9a-fA-F]+|\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)\\b"
         }
       ]
     },
@@ -119,6 +121,37 @@
         {
           "name": "keyword.operator.logical.erkao",
           "match": "\\b(?:and|or)\\b"
+        },
+        {
+          "name": "keyword.operator.comparison.erkao",
+          "match": "(?:==|!=|<=|>=|<|>)"
+        },
+        {
+          "name": "keyword.operator.assignment.erkao",
+          "match": "="
+        }
+      ]
+    },
+    "module-member": {
+      "patterns": [
+        {
+          "name": "meta.module.access.erkao",
+          "match": "\\b(fs|path|json|math|time|http|proc|env|plugin|gfx)\\s*\\.\\s*([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "support.module.erkao" },
+            "2": { "name": "support.function.erkao" }
+          }
+        }
+      ]
+    },
+    "function-call": {
+      "patterns": [
+        {
+          "name": "meta.function-call.erkao",
+          "match": "\\b(?!if\\b|else\\b|for\\b|while\\b|foreach\\b|switch\\b|case\\b|default\\b|return\\b|fun\\b|class\\b|let\\b|import\\b|from\\b|as\\b|in\\b)([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "entity.name.function.erkao" }
+          }
         }
       ]
     },
