@@ -292,17 +292,20 @@ static Mix_Chunk* getSound(const char* path) {
 }
 
 static void updateInput(void) {
-  // Save previous mouse state
+  SDL_PumpEvents();
+
   gMousePrevState = gMouseState;
   gMouseState = SDL_GetMouseState(&gMouseX, &gMouseY);
 
-  // Get keyboard state from SDL
   int numKeys = 0;
   const Uint8* sdlKeyState = SDL_GetKeyboardState(&numKeys);
   
-  if (numKeys <= 0) return;
+  if (numKeys <= 0) {
+    gKeyState = NULL;
+    gKeyCount = 0;
+    return;
+  }
 
-  // Allocate our own buffers if needed
   if (!gKeyPressed || !gKeyPrevState || numKeys != gKeyCount) {
     if (gKeyPressed) free(gKeyPressed);
     if (gKeyPrevState) free(gKeyPrevState);
@@ -312,14 +315,12 @@ static void updateInput(void) {
     if (!gKeyPressed || !gKeyPrevState) return;
   }
 
-  // Calculate "just pressed" and update previous state
   for (int i = 0; i < gKeyCount; i++) {
     Uint8 current = sdlKeyState[i];
     gKeyPressed[i] = current && !gKeyPrevState[i];
     gKeyPrevState[i] = current;
   }
 
-  // Store pointer for gfx.key() checks
   gKeyState = sdlKeyState;
 }
 
@@ -765,7 +766,11 @@ static Value nativeGfxKey(VM* vm, int argc, Value* args) {
   SDL_Scancode code = getKeyCode(keyName->chars);
   if (code == SDL_SCANCODE_UNKNOWN) return BOOL_VAL(false);
 
-  return BOOL_VAL(gKeyState && gKeyState[code]);
+  int index = (int)code;
+  if (!gKeyState || index < 0 || index >= gKeyCount) {
+    return BOOL_VAL(false);
+  }
+  return BOOL_VAL(gKeyState[index]);
 }
 
 static Value nativeGfxKeyPressed(VM* vm, int argc, Value* args) {
@@ -778,7 +783,11 @@ static Value nativeGfxKeyPressed(VM* vm, int argc, Value* args) {
   SDL_Scancode code = getKeyCode(keyName->chars);
   if (code == SDL_SCANCODE_UNKNOWN) return BOOL_VAL(false);
 
-  return BOOL_VAL(gKeyPressed && gKeyPressed[code]);
+  int index = (int)code;
+  if (!gKeyPressed || index < 0 || index >= gKeyCount) {
+    return BOOL_VAL(false);
+  }
+  return BOOL_VAL(gKeyPressed[index]);
 }
 
 static Value nativeGfxMouse(VM* vm, int argc, Value* args) {
@@ -836,6 +845,8 @@ static Value nativeGfxRun(VM* vm, int argc, Value* args) {
       }
     }
 
+    if (!gRunning || !gRenderer) break;
+
     SDL_RenderPresent(gRenderer);
 
     if (gTargetFrameTime > 0) {
@@ -860,6 +871,7 @@ static Value nativeGfxRun(VM* vm, int argc, Value* args) {
 
 static Value nativeGfxPoll(VM* vm, int argc, Value* args) {
   (void)vm; (void)argc; (void)args;
+  if (!gInitialized) return BOOL_VAL(false);
   updateInput();
   return BOOL_VAL(processEvents());
 }
@@ -1045,6 +1057,8 @@ void graphicsCleanup(void) {
 
   if (gKeyPressed) { free(gKeyPressed); gKeyPressed = NULL; }
   if (gKeyPrevState) { free(gKeyPrevState); gKeyPrevState = NULL; }
+  gKeyState = NULL;
+  gKeyCount = 0;
 
   if (gRenderer) { SDL_DestroyRenderer(gRenderer); gRenderer = NULL; }
   if (gWindow) { SDL_DestroyWindow(gWindow); gWindow = NULL; }
