@@ -1,0 +1,59 @@
+random.seed(123);
+print("rand", random.int(10), random.int(10));
+print("randRange", random.int(5, 9));
+print("choice", random.choice(["a", "b", "c"]));
+
+print("upper", str.upper("Hello"));
+print("lower", str.lower("HeLLo"));
+print("trim", str.trim("  hi  "));
+print("starts", str.startsWith("hello", "he"));
+print("ends", str.endsWith("hello", "lo"));
+print("contains", str.contains("hello", "ell"));
+let parts = str.split("a,b,c", ",");
+print("split", parts);
+print("join", str.join(parts, "|"));
+print("replace", str.replace("a-b-b", "b", "x"));
+print("replaceAll", str.replaceAll("a-b-b", "b", "x"));
+print("repeat", str.repeat("ha", 3));
+
+let nums = [1, 2, 3, 4];
+fun double(x) {
+  return x * 2;
+}
+fun isEven(x) {
+  return x / 2 == math.floor(x / 2);
+}
+fun add(a, b) {
+  return a + b;
+}
+print("slice", array.slice(nums, 1, 3));
+print("map", array.map(nums, double));
+print("filter", array.filter(nums, isEven));
+print("reduce", array.reduce(nums, add, 0));
+print("contains", array.contains(nums, 3));
+print("indexOf", array.indexOf(nums, 3));
+print("concat", array.concat([1], [2, 3]));
+print("reverse", array.reverse(nums));
+
+print("osSep", os.sep() == "/" or os.sep() == "\\");
+print("osEol", len(os.eol()) >= 1);
+print("osCwd", len(os.cwd()) > 0);
+let home = os.home();
+print("osHome", home == null or len(home) > 0);
+let tmp = os.tmp();
+print("osTmp", tmp == null or len(tmp) > 0);
+
+env.set("ERKAO_TEST_ENV", "ok");
+print("envHas", env.has("ERKAO_TEST_ENV"));
+print("envGet", env.get("ERKAO_TEST_ENV"));
+let allEnv = env.all();
+let envKeys = keys(allEnv);
+let found = false;
+foreach (name in envKeys) {
+  if (str.lower(name) == "erkao_test_env") {
+    found = allEnv[name] == "ok";
+  }
+}
+print("envAll", found);
+env.unset("ERKAO_TEST_ENV");
+print("envUnset", env.has("ERKAO_TEST_ENV"));

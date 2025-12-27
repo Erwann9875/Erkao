@@ -8,6 +8,7 @@
 #endif
 
 #include <float.h>
+#include <limits.h>
 #include <math.h>
 #include <stdint.h>
 #include <wchar.h>
@@ -134,6 +135,35 @@ static bool numberIsFinite(double value) {
 #else
   return isfinite(value);
 #endif
+}
+
+static uint64_t gRandomState = 0;
+static bool gRandomSeeded = false;
+
+static void randomSeedIfNeeded(void) {
+  if (gRandomSeeded) return;
+  uint64_t seed = (uint64_t)time(NULL);
+  seed ^= (uint64_t)clock() << 32;
+  if (seed == 0) {
+    seed = 0x9e3779b97f4a7c15ULL;
+  }
+  gRandomState = seed;
+  gRandomSeeded = true;
+}
+
+static uint64_t randomNext(void) {
+  randomSeedIfNeeded();
+  uint64_t x = gRandomState;
+  x ^= x >> 12;
+  x ^= x << 25;
+  x ^= x >> 27;
+  gRandomState = x;
+  return x * 2685821657736338717ULL;
+}
+
+static double randomNextDouble(void) {
+  uint64_t value = randomNext();
+  return (double)(value >> 11) * (1.0 / 9007199254740992.0);
 }
 
 typedef struct {
@@ -2077,6 +2107,638 @@ static Value nativePathExtname(VM* vm, int argc, Value* args) {
   return OBJ_VAL(copyStringWithLength(vm, dot, (int)strlen(dot)));
 }
 
+static Value nativeRandomSeed(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!IS_NUMBER(args[0])) {
+    return runtimeErrorValue(vm, "random.seed expects a number.");
+  }
+  int64_t seed = (int64_t)AS_NUMBER(args[0]);
+  if (seed == 0) {
+    seed = (int64_t)0x9e3779b97f4a7c15ULL;
+  }
+  gRandomState = (uint64_t)seed;
+  gRandomSeeded = true;
+  return NULL_VAL;
+}
+
+static Value nativeRandomInt(VM* vm, int argc, Value* args) {
+  if (argc < 1) {
+    return runtimeErrorValue(vm, "random.int expects (max) or (min, max).");
+  }
+  if (!IS_NUMBER(args[0])) {
+    return runtimeErrorValue(vm, "random.int expects numeric bounds.");
+  }
+
+  if (argc == 1) {
+    int max = (int)AS_NUMBER(args[0]);
+    if (max <= 0) {
+      return runtimeErrorValue(vm, "random.int expects max > 0.");
+    }
+    uint64_t value = randomNext();
+    return NUMBER_VAL((double)(value % (uint64_t)max));
+  }
+
+  if (!IS_NUMBER(args[1])) {
+    return runtimeErrorValue(vm, "random.int expects numeric bounds.");
+  }
+  int min = (int)AS_NUMBER(args[0]);
+  int max = (int)AS_NUMBER(args[1]);
+  if (max <= min) {
+    return runtimeErrorValue(vm, "random.int expects max > min.");
+  }
+  uint64_t span = (uint64_t)(max - min);
+  uint64_t value = randomNext() % span;
+  return NUMBER_VAL((double)(min + (int)value));
+}
+
+static Value nativeRandomFloat(VM* vm, int argc, Value* args) {
+  if (argc == 0) {
+    return NUMBER_VAL(randomNextDouble());
+  }
+  if (!IS_NUMBER(args[0])) {
+    return runtimeErrorValue(vm, "random.float expects numeric bounds.");
+  }
+  double min = 0.0;
+  double max = AS_NUMBER(args[0]);
+  if (argc >= 2) {
+    if (!IS_NUMBER(args[1])) {
+      return runtimeErrorValue(vm, "random.float expects numeric bounds.");
+    }
+    min = AS_NUMBER(args[0]);
+    max = AS_NUMBER(args[1]);
+  }
+  if (max <= min) {
+    return runtimeErrorValue(vm, "random.float expects max > min.");
+  }
+  double unit = randomNextDouble();
+  return NUMBER_VAL(min + unit * (max - min));
+}
+
+static Value nativeRandomChoice(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_ARRAY)) {
+    return runtimeErrorValue(vm, "random.choice expects an array.");
+  }
+  ObjArray* array = (ObjArray*)AS_OBJ(args[0]);
+  if (array->count <= 0) {
+    return runtimeErrorValue(vm, "random.choice expects a non-empty array.");
+  }
+  uint64_t index = randomNext() % (uint64_t)array->count;
+  return array->items[(int)index];
+}
+
+static Value nativeStrUpper(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "str.upper expects a string.");
+  }
+  ObjString* input = (ObjString*)AS_OBJ(args[0]);
+  char* buffer = (char*)malloc((size_t)input->length + 1);
+  if (!buffer) {
+    return runtimeErrorValue(vm, "str.upper out of memory.");
+  }
+  for (int i = 0; i < input->length; i++) {
+    buffer[i] = (char)toupper((unsigned char)input->chars[i]);
+  }
+  buffer[input->length] = '\0';
+  return OBJ_VAL(takeStringWithLength(vm, buffer, input->length));
+}
+
+static Value nativeStrLower(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "str.lower expects a string.");
+  }
+  ObjString* input = (ObjString*)AS_OBJ(args[0]);
+  char* buffer = (char*)malloc((size_t)input->length + 1);
+  if (!buffer) {
+    return runtimeErrorValue(vm, "str.lower out of memory.");
+  }
+  for (int i = 0; i < input->length; i++) {
+    buffer[i] = (char)tolower((unsigned char)input->chars[i]);
+  }
+  buffer[input->length] = '\0';
+  return OBJ_VAL(takeStringWithLength(vm, buffer, input->length));
+}
+
+static Value nativeStrTrim(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "str.trim expects a string.");
+  }
+  ObjString* input = (ObjString*)AS_OBJ(args[0]);
+  int start = 0;
+  int end = input->length;
+  while (start < end && isspace((unsigned char)input->chars[start])) {
+    start++;
+  }
+  while (end > start && isspace((unsigned char)input->chars[end - 1])) {
+    end--;
+  }
+  return OBJ_VAL(copyStringWithLength(vm, input->chars + start, end - start));
+}
+
+static Value nativeStrTrimStart(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "str.trimStart expects a string.");
+  }
+  ObjString* input = (ObjString*)AS_OBJ(args[0]);
+  int start = 0;
+  while (start < input->length && isspace((unsigned char)input->chars[start])) {
+    start++;
+  }
+  return OBJ_VAL(copyStringWithLength(vm, input->chars + start, input->length - start));
+}
+
+static Value nativeStrTrimEnd(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "str.trimEnd expects a string.");
+  }
+  ObjString* input = (ObjString*)AS_OBJ(args[0]);
+  int end = input->length;
+  while (end > 0 && isspace((unsigned char)input->chars[end - 1])) {
+    end--;
+  }
+  return OBJ_VAL(copyStringWithLength(vm, input->chars, end));
+}
+
+static Value nativeStrStartsWith(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_STRING) || !isObjType(args[1], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "str.startsWith expects (text, prefix) strings.");
+  }
+  ObjString* text = (ObjString*)AS_OBJ(args[0]);
+  ObjString* prefix = (ObjString*)AS_OBJ(args[1]);
+  if (prefix->length > text->length) return BOOL_VAL(false);
+  return BOOL_VAL(memcmp(text->chars, prefix->chars, (size_t)prefix->length) == 0);
+}
+
+static Value nativeStrEndsWith(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_STRING) || !isObjType(args[1], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "str.endsWith expects (text, suffix) strings.");
+  }
+  ObjString* text = (ObjString*)AS_OBJ(args[0]);
+  ObjString* suffix = (ObjString*)AS_OBJ(args[1]);
+  if (suffix->length > text->length) return BOOL_VAL(false);
+  const char* start = text->chars + (text->length - suffix->length);
+  return BOOL_VAL(memcmp(start, suffix->chars, (size_t)suffix->length) == 0);
+}
+
+static Value nativeStrContains(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_STRING) || !isObjType(args[1], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "str.contains expects (text, needle) strings.");
+  }
+  ObjString* text = (ObjString*)AS_OBJ(args[0]);
+  ObjString* needle = (ObjString*)AS_OBJ(args[1]);
+  if (needle->length == 0) return BOOL_VAL(true);
+  return BOOL_VAL(strstr(text->chars, needle->chars) != NULL);
+}
+
+static Value nativeStrSplit(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_STRING) || !isObjType(args[1], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "str.split expects (text, sep) strings.");
+  }
+  ObjString* text = (ObjString*)AS_OBJ(args[0]);
+  ObjString* sep = (ObjString*)AS_OBJ(args[1]);
+
+  ObjArray* array = newArray(vm);
+  if (sep->length == 0) {
+    for (int i = 0; i < text->length; i++) {
+      char chunk[2];
+      chunk[0] = text->chars[i];
+      chunk[1] = '\0';
+      arrayWrite(array, OBJ_VAL(copyStringWithLength(vm, chunk, 1)));
+    }
+    return OBJ_VAL(array);
+  }
+
+  const char* current = text->chars;
+  const char* end = text->chars + text->length;
+  while (current <= end) {
+    const char* found = strstr(current, sep->chars);
+    if (!found) {
+      int length = (int)(end - current);
+      arrayWrite(array, OBJ_VAL(copyStringWithLength(vm, current, length)));
+      break;
+    }
+    int length = (int)(found - current);
+    arrayWrite(array, OBJ_VAL(copyStringWithLength(vm, current, length)));
+    current = found + sep->length;
+  }
+
+  return OBJ_VAL(array);
+}
+
+static Value nativeStrJoin(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_ARRAY) || !isObjType(args[1], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "str.join expects (array, sep).");
+  }
+  ObjArray* array = (ObjArray*)AS_OBJ(args[0]);
+  ObjString* sep = (ObjString*)AS_OBJ(args[1]);
+
+  ByteBuffer buffer;
+  bufferInit(&buffer);
+
+  for (int i = 0; i < array->count; i++) {
+    if (!isObjType(array->items[i], OBJ_STRING)) {
+      bufferFree(&buffer);
+      return runtimeErrorValue(vm, "str.join expects an array of strings.");
+    }
+    ObjString* item = (ObjString*)AS_OBJ(array->items[i]);
+    if (i > 0 && sep->length > 0) {
+      bufferAppendN(&buffer, sep->chars, (size_t)sep->length);
+    }
+    if (item->length > 0) {
+      bufferAppendN(&buffer, item->chars, (size_t)item->length);
+    }
+  }
+
+  ObjString* result = copyStringWithLength(vm, buffer.data ? buffer.data : "",
+                                           (int)buffer.length);
+  bufferFree(&buffer);
+  return OBJ_VAL(result);
+}
+
+static Value nativeStrReplace(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_STRING) || !isObjType(args[1], OBJ_STRING) ||
+      !isObjType(args[2], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "str.replace expects (text, needle, replacement).");
+  }
+  ObjString* text = (ObjString*)AS_OBJ(args[0]);
+  ObjString* needle = (ObjString*)AS_OBJ(args[1]);
+  ObjString* repl = (ObjString*)AS_OBJ(args[2]);
+
+  if (needle->length == 0) {
+    return OBJ_VAL(text);
+  }
+
+  const char* found = strstr(text->chars, needle->chars);
+  if (!found) {
+    return OBJ_VAL(text);
+  }
+
+  ByteBuffer buffer;
+  bufferInit(&buffer);
+  bufferAppendN(&buffer, text->chars, (size_t)(found - text->chars));
+  if (repl->length > 0) {
+    bufferAppendN(&buffer, repl->chars, (size_t)repl->length);
+  }
+  const char* tail = found + needle->length;
+  bufferAppendN(&buffer, tail, (size_t)(text->chars + text->length - tail));
+
+  ObjString* result = copyStringWithLength(vm, buffer.data ? buffer.data : "",
+                                           (int)buffer.length);
+  bufferFree(&buffer);
+  return OBJ_VAL(result);
+}
+
+static Value nativeStrReplaceAll(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_STRING) || !isObjType(args[1], OBJ_STRING) ||
+      !isObjType(args[2], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "str.replaceAll expects (text, needle, replacement).");
+  }
+  ObjString* text = (ObjString*)AS_OBJ(args[0]);
+  ObjString* needle = (ObjString*)AS_OBJ(args[1]);
+  ObjString* repl = (ObjString*)AS_OBJ(args[2]);
+
+  if (needle->length == 0) {
+    return OBJ_VAL(text);
+  }
+
+  const char* cursor = text->chars;
+  const char* found = strstr(cursor, needle->chars);
+  if (!found) {
+    return OBJ_VAL(text);
+  }
+
+  ByteBuffer buffer;
+  bufferInit(&buffer);
+  while (found) {
+    bufferAppendN(&buffer, cursor, (size_t)(found - cursor));
+    if (repl->length > 0) {
+      bufferAppendN(&buffer, repl->chars, (size_t)repl->length);
+    }
+    cursor = found + needle->length;
+    found = strstr(cursor, needle->chars);
+  }
+  bufferAppendN(&buffer, cursor, (size_t)(text->chars + text->length - cursor));
+
+  ObjString* result = copyStringWithLength(vm, buffer.data ? buffer.data : "",
+                                           (int)buffer.length);
+  bufferFree(&buffer);
+  return OBJ_VAL(result);
+}
+
+static Value nativeStrRepeat(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_STRING) || !IS_NUMBER(args[1])) {
+    return runtimeErrorValue(vm, "str.repeat expects (text, count).");
+  }
+  ObjString* text = (ObjString*)AS_OBJ(args[0]);
+  int count = (int)AS_NUMBER(args[1]);
+  if (count < 0) {
+    return runtimeErrorValue(vm, "str.repeat expects a non-negative count.");
+  }
+  if (count == 0 || text->length == 0) {
+    return OBJ_VAL(copyString(vm, ""));
+  }
+  if (text->length > 0 && count > INT_MAX / text->length) {
+    return runtimeErrorValue(vm, "str.repeat result too large.");
+  }
+  int total = text->length * count;
+  char* buffer = (char*)malloc((size_t)total + 1);
+  if (!buffer) {
+    return runtimeErrorValue(vm, "str.repeat out of memory.");
+  }
+  char* cursor = buffer;
+  for (int i = 0; i < count; i++) {
+    memcpy(cursor, text->chars, (size_t)text->length);
+    cursor += text->length;
+  }
+  buffer[total] = '\0';
+  return OBJ_VAL(takeStringWithLength(vm, buffer, total));
+}
+
+static Value nativeArraySlice(VM* vm, int argc, Value* args) {
+  if (!isObjType(args[0], OBJ_ARRAY)) {
+    return runtimeErrorValue(vm, "array.slice expects an array.");
+  }
+  ObjArray* array = (ObjArray*)AS_OBJ(args[0]);
+  int count = array->count;
+  int start = 0;
+  int end = count;
+  if (argc >= 2) {
+    if (!IS_NUMBER(args[1])) {
+      return runtimeErrorValue(vm, "array.slice expects numeric indices.");
+    }
+    start = (int)AS_NUMBER(args[1]);
+  }
+  if (argc >= 3) {
+    if (!IS_NUMBER(args[2])) {
+      return runtimeErrorValue(vm, "array.slice expects numeric indices.");
+    }
+    end = (int)AS_NUMBER(args[2]);
+  }
+  if (start < 0) start = count + start;
+  if (end < 0) end = count + end;
+  if (start < 0) start = 0;
+  if (end < 0) end = 0;
+  if (start > count) start = count;
+  if (end > count) end = count;
+  if (end < start) end = start;
+
+  ObjArray* result = newArrayWithCapacity(vm, end - start);
+  for (int i = start; i < end; i++) {
+    arrayWrite(result, array->items[i]);
+  }
+  return OBJ_VAL(result);
+}
+
+static Value nativeArrayMap(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_ARRAY)) {
+    return runtimeErrorValue(vm, "array.map expects (array, fn).");
+  }
+  ObjArray* array = (ObjArray*)AS_OBJ(args[0]);
+  Value fn = args[1];
+  ObjArray* result = newArrayWithCapacity(vm, array->count);
+  for (int i = 0; i < array->count; i++) {
+    Value arg = array->items[i];
+    Value out;
+    if (!vmCallValue(vm, fn, 1, &arg, &out)) {
+      return NULL_VAL;
+    }
+    arrayWrite(result, out);
+  }
+  return OBJ_VAL(result);
+}
+
+static Value nativeArrayFilter(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_ARRAY)) {
+    return runtimeErrorValue(vm, "array.filter expects (array, fn).");
+  }
+  ObjArray* array = (ObjArray*)AS_OBJ(args[0]);
+  Value fn = args[1];
+  ObjArray* result = newArray(vm);
+  for (int i = 0; i < array->count; i++) {
+    Value arg = array->items[i];
+    Value out;
+    if (!vmCallValue(vm, fn, 1, &arg, &out)) {
+      return NULL_VAL;
+    }
+    if (isTruthy(out)) {
+      arrayWrite(result, arg);
+    }
+  }
+  return OBJ_VAL(result);
+}
+
+static Value nativeArrayReduce(VM* vm, int argc, Value* args) {
+  if (argc < 2) {
+    return runtimeErrorValue(vm, "array.reduce expects (array, fn, initial?).");
+  }
+  if (!isObjType(args[0], OBJ_ARRAY)) {
+    return runtimeErrorValue(vm, "array.reduce expects (array, fn, initial?).");
+  }
+  ObjArray* array = (ObjArray*)AS_OBJ(args[0]);
+  Value fn = args[1];
+  int index = 0;
+  Value acc = NULL_VAL;
+  if (argc >= 3) {
+    acc = args[2];
+  } else {
+    if (array->count == 0) {
+      return runtimeErrorValue(vm, "array.reduce expects an initial value for empty arrays.");
+    }
+    acc = array->items[0];
+    index = 1;
+  }
+
+  for (int i = index; i < array->count; i++) {
+    Value callArgs[2] = {acc, array->items[i]};
+    Value out;
+    if (!vmCallValue(vm, fn, 2, callArgs, &out)) {
+      return NULL_VAL;
+    }
+    acc = out;
+  }
+
+  return acc;
+}
+
+static Value nativeArrayContains(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_ARRAY)) {
+    return runtimeErrorValue(vm, "array.contains expects (array, value).");
+  }
+  ObjArray* array = (ObjArray*)AS_OBJ(args[0]);
+  for (int i = 0; i < array->count; i++) {
+    if (valuesEqual(array->items[i], args[1])) {
+      return BOOL_VAL(true);
+    }
+  }
+  return BOOL_VAL(false);
+}
+
+static Value nativeArrayIndexOf(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_ARRAY)) {
+    return runtimeErrorValue(vm, "array.indexOf expects (array, value).");
+  }
+  ObjArray* array = (ObjArray*)AS_OBJ(args[0]);
+  for (int i = 0; i < array->count; i++) {
+    if (valuesEqual(array->items[i], args[1])) {
+      return NUMBER_VAL((double)i);
+    }
+  }
+  return NUMBER_VAL(-1);
+}
+
+static Value nativeArrayConcat(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_ARRAY) || !isObjType(args[1], OBJ_ARRAY)) {
+    return runtimeErrorValue(vm, "array.concat expects (left, right) arrays.");
+  }
+  ObjArray* left = (ObjArray*)AS_OBJ(args[0]);
+  ObjArray* right = (ObjArray*)AS_OBJ(args[1]);
+  ObjArray* result = newArrayWithCapacity(vm, left->count + right->count);
+  for (int i = 0; i < left->count; i++) {
+    arrayWrite(result, left->items[i]);
+  }
+  for (int i = 0; i < right->count; i++) {
+    arrayWrite(result, right->items[i]);
+  }
+  return OBJ_VAL(result);
+}
+
+static Value nativeArrayReverse(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_ARRAY)) {
+    return runtimeErrorValue(vm, "array.reverse expects an array.");
+  }
+  ObjArray* array = (ObjArray*)AS_OBJ(args[0]);
+  ObjArray* result = newArrayWithCapacity(vm, array->count);
+  for (int i = array->count - 1; i >= 0; i--) {
+    arrayWrite(result, array->items[i]);
+  }
+  return OBJ_VAL(result);
+}
+
+static Value nativeOsPlatform(VM* vm, int argc, Value* args) {
+  (void)argc; (void)args;
+#ifdef _WIN32
+  return OBJ_VAL(copyString(vm, "windows"));
+#elif __APPLE__
+  return OBJ_VAL(copyString(vm, "mac"));
+#elif __linux__
+  return OBJ_VAL(copyString(vm, "linux"));
+#else
+  return OBJ_VAL(copyString(vm, "unknown"));
+#endif
+}
+
+static Value nativeOsArch(VM* vm, int argc, Value* args) {
+  (void)argc; (void)args;
+#if defined(_M_X64) || defined(__x86_64__) || defined(__amd64__)
+  return OBJ_VAL(copyString(vm, "x64"));
+#elif defined(_M_IX86) || defined(__i386__)
+  return OBJ_VAL(copyString(vm, "x86"));
+#elif defined(_M_ARM64) || defined(__aarch64__)
+  return OBJ_VAL(copyString(vm, "arm64"));
+#elif defined(_M_ARM) || defined(__arm__)
+  return OBJ_VAL(copyString(vm, "arm"));
+#else
+  return OBJ_VAL(copyString(vm, "unknown"));
+#endif
+}
+
+static Value nativeOsSep(VM* vm, int argc, Value* args) {
+  (void)argc; (void)args;
+#ifdef _WIN32
+  return OBJ_VAL(copyString(vm, "\\"));
+#else
+  return OBJ_VAL(copyString(vm, "/"));
+#endif
+}
+
+static Value nativeOsEol(VM* vm, int argc, Value* args) {
+  (void)argc; (void)args;
+#ifdef _WIN32
+  return OBJ_VAL(copyString(vm, "\r\n"));
+#else
+  return OBJ_VAL(copyString(vm, "\n"));
+#endif
+}
+
+static Value nativeOsCwd(VM* vm, int argc, Value* args) {
+  return nativeFsCwd(vm, argc, args);
+}
+
+static Value nativeOsHome(VM* vm, int argc, Value* args) {
+  (void)argc; (void)args;
+#ifdef _WIN32
+  const char* home = getenv("USERPROFILE");
+  if (home && *home) {
+    return OBJ_VAL(copyString(vm, home));
+  }
+  const char* drive = getenv("HOMEDRIVE");
+  const char* path = getenv("HOMEPATH");
+  if (drive && path) {
+    size_t total = strlen(drive) + strlen(path);
+    char* buffer = (char*)malloc(total + 1);
+    if (!buffer) {
+      return runtimeErrorValue(vm, "os.home out of memory.");
+    }
+    snprintf(buffer, total + 1, "%s%s", drive, path);
+    ObjString* result = copyStringWithLength(vm, buffer, (int)total);
+    free(buffer);
+    return OBJ_VAL(result);
+  }
+  return NULL_VAL;
+#else
+  const char* home = getenv("HOME");
+  if (!home || !*home) return NULL_VAL;
+  return OBJ_VAL(copyString(vm, home));
+#endif
+}
+
+static Value nativeOsTmp(VM* vm, int argc, Value* args) {
+  (void)argc; (void)args;
+#ifdef _WIN32
+  DWORD length = GetTempPathA(0, NULL);
+  if (length == 0) {
+    return runtimeErrorValue(vm, "os.tmp failed to read temp path.");
+  }
+  char* buffer = (char*)malloc((size_t)length + 1);
+  if (!buffer) {
+    return runtimeErrorValue(vm, "os.tmp out of memory.");
+  }
+  DWORD written = GetTempPathA(length + 1, buffer);
+  if (written == 0) {
+    free(buffer);
+    return runtimeErrorValue(vm, "os.tmp failed to read temp path.");
+  }
+  ObjString* result = copyString(vm, buffer);
+  free(buffer);
+  return OBJ_VAL(result);
+#else
+  const char* tmp = getenv("TMPDIR");
+  if (!tmp || !*tmp) tmp = getenv("TMP");
+  if (!tmp || !*tmp) tmp = getenv("TEMP");
+  if (!tmp || !*tmp) tmp = "/tmp";
+  return OBJ_VAL(copyString(vm, tmp));
+#endif
+}
+
 static Value nativeTimeNow(VM* vm, int argc, Value* args) {
   (void)argc;
   (void)args;
@@ -2130,6 +2792,88 @@ static Value nativeEnvGet(VM* vm, int argc, Value* args) {
   const char* value = getenv(name->chars);
   if (!value) return NULL_VAL;
   return OBJ_VAL(copyString(vm, value));
+}
+
+static Value nativeEnvSet(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_STRING) || !isObjType(args[1], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "env.set expects (name, value) strings.");
+  }
+  ObjString* name = (ObjString*)AS_OBJ(args[0]);
+  ObjString* value = (ObjString*)AS_OBJ(args[1]);
+#ifdef _WIN32
+  if (!SetEnvironmentVariableA(name->chars, value->chars)) {
+    return runtimeErrorValue(vm, "env.set failed.");
+  }
+#else
+  if (setenv(name->chars, value->chars, 1) != 0) {
+    return runtimeErrorValue(vm, "env.set failed.");
+  }
+#endif
+  return BOOL_VAL(true);
+}
+
+static Value nativeEnvHas(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "env.has expects a name string.");
+  }
+  ObjString* name = (ObjString*)AS_OBJ(args[0]);
+  return BOOL_VAL(getenv(name->chars) != NULL);
+}
+
+static Value nativeEnvUnset(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "env.unset expects a name string.");
+  }
+  ObjString* name = (ObjString*)AS_OBJ(args[0]);
+#ifdef _WIN32
+  if (!SetEnvironmentVariableA(name->chars, NULL)) {
+    return runtimeErrorValue(vm, "env.unset failed.");
+  }
+#else
+  if (unsetenv(name->chars) != 0) {
+    return runtimeErrorValue(vm, "env.unset failed.");
+  }
+#endif
+  return BOOL_VAL(true);
+}
+
+static Value nativeEnvAll(VM* vm, int argc, Value* args) {
+  (void)argc;
+  (void)args;
+  ObjMap* result = newMap(vm);
+#ifdef _WIN32
+  LPCH block = GetEnvironmentStringsA();
+  if (!block) {
+    return runtimeErrorValue(vm, "env.all failed to read environment.");
+  }
+  for (char* entry = block; *entry; entry += strlen(entry) + 1) {
+    char* eq = strchr(entry, '=');
+    if (!eq || eq == entry || entry[0] == '=') {
+      continue;
+    }
+    int keyLen = (int)(eq - entry);
+    ObjString* key = copyStringWithLength(vm, entry, keyLen);
+    ObjString* val = copyString(vm, eq + 1);
+    mapSet(result, key, OBJ_VAL(val));
+  }
+  FreeEnvironmentStringsA(block);
+#else
+  extern char** environ;
+  if (!environ) return OBJ_VAL(result);
+  for (char** env = environ; *env; env++) {
+    char* entry = *env;
+    char* eq = strchr(entry, '=');
+    if (!eq || eq == entry) continue;
+    int keyLen = (int)(eq - entry);
+    ObjString* key = copyStringWithLength(vm, entry, keyLen);
+    ObjString* val = copyString(vm, eq + 1);
+    mapSet(result, key, OBJ_VAL(val));
+  }
+#endif
+  return OBJ_VAL(result);
 }
 
 static Value nativeEnvArgs(VM* vm, int argc, Value* args) {
@@ -2195,6 +2939,50 @@ void defineStdlib(VM* vm) {
   moduleAddValue(vm, math, "E", NUMBER_VAL(2.718281828459045));
   defineGlobal(vm, "math", OBJ_VAL(math));
 
+  ObjInstance* random = makeModule(vm, "random");
+  moduleAdd(vm, random, "seed", nativeRandomSeed, 1);
+  moduleAdd(vm, random, "int", nativeRandomInt, -1);
+  moduleAdd(vm, random, "float", nativeRandomFloat, -1);
+  moduleAdd(vm, random, "choice", nativeRandomChoice, 1);
+  defineGlobal(vm, "random", OBJ_VAL(random));
+
+  ObjInstance* str = makeModule(vm, "str");
+  moduleAdd(vm, str, "upper", nativeStrUpper, 1);
+  moduleAdd(vm, str, "lower", nativeStrLower, 1);
+  moduleAdd(vm, str, "trim", nativeStrTrim, 1);
+  moduleAdd(vm, str, "trimStart", nativeStrTrimStart, 1);
+  moduleAdd(vm, str, "trimEnd", nativeStrTrimEnd, 1);
+  moduleAdd(vm, str, "startsWith", nativeStrStartsWith, 2);
+  moduleAdd(vm, str, "endsWith", nativeStrEndsWith, 2);
+  moduleAdd(vm, str, "contains", nativeStrContains, 2);
+  moduleAdd(vm, str, "split", nativeStrSplit, 2);
+  moduleAdd(vm, str, "join", nativeStrJoin, 2);
+  moduleAdd(vm, str, "replace", nativeStrReplace, 3);
+  moduleAdd(vm, str, "replaceAll", nativeStrReplaceAll, 3);
+  moduleAdd(vm, str, "repeat", nativeStrRepeat, 2);
+  defineGlobal(vm, "str", OBJ_VAL(str));
+
+  ObjInstance* array = makeModule(vm, "array");
+  moduleAdd(vm, array, "slice", nativeArraySlice, -1);
+  moduleAdd(vm, array, "map", nativeArrayMap, 2);
+  moduleAdd(vm, array, "filter", nativeArrayFilter, 2);
+  moduleAdd(vm, array, "reduce", nativeArrayReduce, -1);
+  moduleAdd(vm, array, "contains", nativeArrayContains, 2);
+  moduleAdd(vm, array, "indexOf", nativeArrayIndexOf, 2);
+  moduleAdd(vm, array, "concat", nativeArrayConcat, 2);
+  moduleAdd(vm, array, "reverse", nativeArrayReverse, 1);
+  defineGlobal(vm, "array", OBJ_VAL(array));
+
+  ObjInstance* os = makeModule(vm, "os");
+  moduleAdd(vm, os, "platform", nativeOsPlatform, 0);
+  moduleAdd(vm, os, "arch", nativeOsArch, 0);
+  moduleAdd(vm, os, "sep", nativeOsSep, 0);
+  moduleAdd(vm, os, "eol", nativeOsEol, 0);
+  moduleAdd(vm, os, "cwd", nativeOsCwd, 0);
+  moduleAdd(vm, os, "home", nativeOsHome, 0);
+  moduleAdd(vm, os, "tmp", nativeOsTmp, 0);
+  defineGlobal(vm, "os", OBJ_VAL(os));
+
   ObjInstance* timeModule = makeModule(vm, "time");
   moduleAdd(vm, timeModule, "now", nativeTimeNow, 0);
   moduleAdd(vm, timeModule, "sleep", nativeTimeSleep, 1);
@@ -2214,6 +3002,10 @@ void defineStdlib(VM* vm) {
   ObjInstance* env = makeModule(vm, "env");
   moduleAdd(vm, env, "args", nativeEnvArgs, 0);
   moduleAdd(vm, env, "get", nativeEnvGet, 1);
+  moduleAdd(vm, env, "set", nativeEnvSet, 2);
+  moduleAdd(vm, env, "has", nativeEnvHas, 1);
+  moduleAdd(vm, env, "unset", nativeEnvUnset, 1);
+  moduleAdd(vm, env, "all", nativeEnvAll, 0);
   defineGlobal(vm, "env", OBJ_VAL(env));
 
   ObjInstance* plugin = makeModule(vm, "plugin");

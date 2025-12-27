@@ -1,0 +1,15 @@
+random.seed(7);
+print("pick", random.choice(["red", "green", "blue"]));
+
+let name = "Erkao";
+print("upper", str.upper(name));
+let words = str.split("one two three", " ");
+print("join", str.join(words, ", "));
+
+let nums = [1, 2, 3, 4];
+fun add(a, b) {
+  return a + b;
+}
+print("sum", array.reduce(nums, add, 0));
+
+print("platform", os.platform(), os.arch());

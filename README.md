@@ -316,6 +316,38 @@ import "alpha/utils" as utils;
 - `math.clamp(value, min, max)`
 - `math.PI`
 - `math.E`
+- `random.seed(value)`
+- `random.int(max)` / `random.int(min, max)`
+- `random.float()` / `random.float(min, max)`
+- `random.choice(array)`
+- `str.upper(text)`
+- `str.lower(text)`
+- `str.trim(text)`
+- `str.trimStart(text)`
+- `str.trimEnd(text)`
+- `str.startsWith(text, prefix)`
+- `str.endsWith(text, suffix)`
+- `str.contains(text, needle)`
+- `str.split(text, sep)`
+- `str.join(array, sep)`
+- `str.replace(text, needle, replacement)`
+- `str.replaceAll(text, needle, replacement)`
+- `str.repeat(text, count)`
+- `array.slice(array, start?, end?)`
+- `array.map(array, fn)`
+- `array.filter(array, fn)`
+- `array.reduce(array, fn, initial?)`
+- `array.contains(array, value)`
+- `array.indexOf(array, value)`
+- `array.concat(left, right)`
+- `array.reverse(array)`
+- `os.platform()`
+- `os.arch()`
+- `os.sep()`
+- `os.eol()`
+- `os.cwd()`
+- `os.home()`
+- `os.tmp()`
 - `http.get(url)`
 - `http.post(url, body)`
 - `http.request(method, url, body)`
@@ -324,12 +356,25 @@ import "alpha/utils" as utils;
 - `time.now()`
 - `time.sleep(seconds)`
 - `env.get(name)`
+- `env.set(name, value)`
+- `env.has(name)`
+- `env.unset(name)`
+- `env.all()`
 - `env.args()`
 - `plugin.load(path)`
 
 ## Graphics (gfx)
 
 The SDL2 graphics module is available when built with SDL2 support.
+
+Camera + sprites:
+- `gfx.camera(x, y)` / `gfx.camera()` returns `{x, y}`
+- `gfx.cameraZoom(z)` / `gfx.cameraZoom()`
+- `gfx.worldToScreen(x, y)` and `gfx.screenToWorld(x, y)`
+- `gfx.mouseWorld()` uses the current camera
+- `gfx.sprite(path, frameW?, frameH?)`
+- `gfx.spriteDraw(sprite, x, y, frame?, scale?, angle?, flip?)` (`flip`: `"x"`, `"y"`, `"xy"`)
+Camera offset/zoom applies to draw calls (`rect`, `circle`, `line`, `image`, `text`, etc).
 
 Input helpers:
 - `gfx.key(name)` and `gfx.keyPressed(name)`

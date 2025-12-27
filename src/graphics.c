@@ -18,6 +18,10 @@ static SDL_Renderer* gRenderer = NULL;
 static bool gInitialized = false;
 static bool gRunning = false;
 
+static double gCameraX = 0.0;
+static double gCameraY = 0.0;
+static double gCameraZoom = 1.0;
+
 static Uint8 gBgR = 0, gBgG = 0, gBgB = 0, gBgA = 255;
 
 static Uint8 gDrawR = 255, gDrawG = 255, gDrawB = 255, gDrawA = 255;
@@ -60,6 +64,7 @@ static int gEventTail = 0;
 
 static TTF_Font* gDefaultFont = NULL;
 static int gDefaultFontSize = 16;
+static int gDefaultFontBaseSize = 16;
 
 #define MAX_CACHED_TEXTURES 256
 #define MAX_CACHED_FONTS 32
@@ -235,6 +240,16 @@ static bool parseColor(VM* vm, Value value, Uint8* r, Uint8* g, Uint8* b, Uint8*
   return false;
 }
 
+static void cameraWorldToScreen(double worldX, double worldY, double* outX, double* outY) {
+  *outX = (worldX - gCameraX) * gCameraZoom;
+  *outY = (worldY - gCameraY) * gCameraZoom;
+}
+
+static void cameraScreenToWorld(double screenX, double screenY, double* outX, double* outY) {
+  *outX = screenX / gCameraZoom + gCameraX;
+  *outY = screenY / gCameraZoom + gCameraY;
+}
+
 static SDL_Scancode getKeyCode(const char* name) {
   for (int i = 0; gKeyMappings[i].name != NULL; i++) {
     if (strcmp(name, gKeyMappings[i].name) == 0) {
@@ -392,6 +407,33 @@ static TTF_Font* getFont(const char* path, int size) {
   return font;
 }
 
+static bool ensureDefaultFont(int size) {
+  if (size < 1) size = 1;
+  if (gDefaultFont && size == gDefaultFontSize) return true;
+
+  const char* fontPaths[] = {
+    "C:/Windows/Fonts/arial.ttf",
+    "C:/Windows/Fonts/segoeui.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    "/Library/Fonts/Arial.ttf",
+    "/System/Library/Fonts/Helvetica.ttc",
+    NULL
+  };
+
+  for (int i = 0; fontPaths[i] != NULL; i++) {
+    TTF_Font* font = TTF_OpenFont(fontPaths[i], size);
+    if (font) {
+      if (gDefaultFont) TTF_CloseFont(gDefaultFont);
+      gDefaultFont = font;
+      gDefaultFontSize = size;
+      return true;
+    }
+  }
+
+  return false;
+}
+
 static Mix_Chunk* getSound(const char* path) {
   for (int i = 0; i < gSoundCount; i++) {
     if (strcmp(gSounds[i].path, path) == 0) {
@@ -408,6 +450,22 @@ static Mix_Chunk* getSound(const char* path) {
   cached->path = strdup(path);
   cached->chunk = chunk;
   return chunk;
+}
+
+static bool mapGetNumberField(VM* vm, ObjMap* map, const char* key, double* out) {
+  Value value;
+  if (!mapGet(map, copyString(vm, key), &value)) return false;
+  if (!IS_NUMBER(value)) return false;
+  *out = AS_NUMBER(value);
+  return true;
+}
+
+static bool mapGetStringField(VM* vm, ObjMap* map, const char* key, ObjString** out) {
+  Value value;
+  if (!mapGet(map, copyString(vm, key), &value)) return false;
+  if (!isObjType(value, OBJ_STRING)) return false;
+  *out = (ObjString*)AS_OBJ(value);
+  return true;
 }
 
 static void updateInput(void) {
@@ -556,6 +614,12 @@ static Value nativeGfxInit(VM* vm, int argc, Value* args) {
   clearEventQueue();
   gTextInputEnabled = false;
 
+  gCameraX = 0.0;
+  gCameraY = 0.0;
+  gCameraZoom = 1.0;
+  gDefaultFontSize = 16;
+  gDefaultFontBaseSize = 16;
+
   gInitialized = true;
   gRunning = true;
   gStartTime = SDL_GetPerformanceCounter();
@@ -621,11 +685,17 @@ static Value nativeGfxRect(VM* vm, int argc, Value* args) {
     return gfxError(vm, "Invalid color");
   }
 
+  double worldX = AS_NUMBER(args[1]);
+  double worldY = AS_NUMBER(args[2]);
+  double worldW = AS_NUMBER(args[3]);
+  double worldH = AS_NUMBER(args[4]);
+  double screenX, screenY;
+  cameraWorldToScreen(worldX, worldY, &screenX, &screenY);
   SDL_Rect rect = {
-    (int)AS_NUMBER(args[1]),
-    (int)AS_NUMBER(args[2]),
-    (int)AS_NUMBER(args[3]),
-    (int)AS_NUMBER(args[4])
+    (int)screenX,
+    (int)screenY,
+    (int)(worldW * gCameraZoom),
+    (int)(worldH * gCameraZoom)
   };
 
   SDL_SetRenderDrawColor(gRenderer, r, g, b, a);
@@ -643,11 +713,17 @@ static Value nativeGfxRectLine(VM* vm, int argc, Value* args) {
     return gfxError(vm, "Invalid color");
   }
 
+  double worldX = AS_NUMBER(args[1]);
+  double worldY = AS_NUMBER(args[2]);
+  double worldW = AS_NUMBER(args[3]);
+  double worldH = AS_NUMBER(args[4]);
+  double screenX, screenY;
+  cameraWorldToScreen(worldX, worldY, &screenX, &screenY);
   SDL_Rect rect = {
-    (int)AS_NUMBER(args[1]),
-    (int)AS_NUMBER(args[2]),
-    (int)AS_NUMBER(args[3]),
-    (int)AS_NUMBER(args[4])
+    (int)screenX,
+    (int)screenY,
+    (int)(worldW * gCameraZoom),
+    (int)(worldH * gCameraZoom)
   };
 
   SDL_SetRenderDrawColor(gRenderer, r, g, b, a);
@@ -683,9 +759,14 @@ static Value nativeGfxCircle(VM* vm, int argc, Value* args) {
     return gfxError(vm, "Invalid color");
   }
 
-  int cx = (int)AS_NUMBER(args[1]);
-  int cy = (int)AS_NUMBER(args[2]);
-  int radius = (int)AS_NUMBER(args[3]);
+  double worldX = AS_NUMBER(args[1]);
+  double worldY = AS_NUMBER(args[2]);
+  double worldR = AS_NUMBER(args[3]);
+  double screenX, screenY;
+  cameraWorldToScreen(worldX, worldY, &screenX, &screenY);
+  int cx = (int)screenX;
+  int cy = (int)screenY;
+  int radius = (int)(worldR * gCameraZoom);
 
   SDL_SetRenderDrawColor(gRenderer, r, g, b, a);
 
@@ -715,9 +796,14 @@ static Value nativeGfxCircleLine(VM* vm, int argc, Value* args) {
     return gfxError(vm, "Invalid color");
   }
 
-  int cx = (int)AS_NUMBER(args[1]);
-  int cy = (int)AS_NUMBER(args[2]);
-  int radius = (int)AS_NUMBER(args[3]);
+  double worldX = AS_NUMBER(args[1]);
+  double worldY = AS_NUMBER(args[2]);
+  double worldR = AS_NUMBER(args[3]);
+  double screenX, screenY;
+  cameraWorldToScreen(worldX, worldY, &screenX, &screenY);
+  int cx = (int)screenX;
+  int cy = (int)screenY;
+  int radius = (int)(worldR * gCameraZoom);
 
   SDL_SetRenderDrawColor(gRenderer, r, g, b, a);
 
@@ -747,10 +833,16 @@ static Value nativeGfxLine(VM* vm, int argc, Value* args) {
     return gfxError(vm, "Invalid color");
   }
 
+  double x1 = AS_NUMBER(args[1]);
+  double y1 = AS_NUMBER(args[2]);
+  double x2 = AS_NUMBER(args[3]);
+  double y2 = AS_NUMBER(args[4]);
+  double sx1, sy1, sx2, sy2;
+  cameraWorldToScreen(x1, y1, &sx1, &sy1);
+  cameraWorldToScreen(x2, y2, &sx2, &sy2);
+
   SDL_SetRenderDrawColor(gRenderer, r, g, b, a);
-  SDL_RenderDrawLine(gRenderer,
-    (int)AS_NUMBER(args[1]), (int)AS_NUMBER(args[2]),
-    (int)AS_NUMBER(args[3]), (int)AS_NUMBER(args[4]));
+  SDL_RenderDrawLine(gRenderer, (int)sx1, (int)sy1, (int)sx2, (int)sy2);
   SDL_SetRenderDrawColor(gRenderer, gDrawR, gDrawG, gDrawB, gDrawA);
   return NULL_VAL;
 }
@@ -764,8 +856,13 @@ static Value nativeGfxPixel(VM* vm, int argc, Value* args) {
     return gfxError(vm, "Invalid color");
   }
 
+  double x = AS_NUMBER(args[1]);
+  double y = AS_NUMBER(args[2]);
+  double sx, sy;
+  cameraWorldToScreen(x, y, &sx, &sy);
+
   SDL_SetRenderDrawColor(gRenderer, r, g, b, a);
-  SDL_RenderDrawPoint(gRenderer, (int)AS_NUMBER(args[1]), (int)AS_NUMBER(args[2]));
+  SDL_RenderDrawPoint(gRenderer, (int)sx, (int)sy);
   SDL_SetRenderDrawColor(gRenderer, gDrawR, gDrawG, gDrawB, gDrawA);
   return NULL_VAL;
 }
@@ -779,11 +876,19 @@ static Value nativeGfxImage(VM* vm, int argc, Value* args) {
   CachedTexture* tex = getTexture(vm, path->chars);
   if (!tex) return gfxError(vm, "Failed to load image");
 
-  int x = (int)AS_NUMBER(args[1]);
-  int y = (int)AS_NUMBER(args[2]);
+  double worldX = AS_NUMBER(args[1]);
+  double worldY = AS_NUMBER(args[2]);
   double scale = (argc >= 4 && IS_NUMBER(args[3])) ? AS_NUMBER(args[3]) : 1.0;
+  double screenX, screenY;
+  cameraWorldToScreen(worldX, worldY, &screenX, &screenY);
+  double finalScale = scale * gCameraZoom;
 
-  SDL_Rect dst = {x, y, (int)(tex->width * scale), (int)(tex->height * scale)};
+  SDL_Rect dst = {
+    (int)screenX,
+    (int)screenY,
+    (int)(tex->width * finalScale),
+    (int)(tex->height * finalScale)
+  };
   SDL_RenderCopy(gRenderer, tex->texture, NULL, &dst);
   return NULL_VAL;
 }
@@ -797,13 +902,22 @@ static Value nativeGfxImageEx(VM* vm, int argc, Value* args) {
   CachedTexture* tex = getTexture(vm, path->chars);
   if (!tex) return gfxError(vm, "Failed to load image");
 
-  int x = (int)AS_NUMBER(args[1]);
-  int y = (int)AS_NUMBER(args[2]);
+  double worldX = AS_NUMBER(args[1]);
+  double worldY = AS_NUMBER(args[2]);
   double angle = AS_NUMBER(args[3]);
   double scaleX = AS_NUMBER(args[4]);
   double scaleY = AS_NUMBER(args[5]);
+  double screenX, screenY;
+  cameraWorldToScreen(worldX, worldY, &screenX, &screenY);
+  double finalScaleX = scaleX * gCameraZoom;
+  double finalScaleY = scaleY * gCameraZoom;
 
-  SDL_Rect dst = {x, y, (int)(tex->width * scaleX), (int)(tex->height * scaleY)};
+  SDL_Rect dst = {
+    (int)screenX,
+    (int)screenY,
+    (int)(tex->width * finalScaleX),
+    (int)(tex->height * finalScaleY)
+  };
   SDL_RenderCopyEx(gRenderer, tex->texture, NULL, &dst, angle, NULL, SDL_FLIP_NONE);
   return NULL_VAL;
 }
@@ -825,49 +939,230 @@ static Value nativeGfxImageSize(VM* vm, int argc, Value* args) {
   return OBJ_VAL(result);
 }
 
+static Value nativeGfxCamera(VM* vm, int argc, Value* args) {
+  if (argc == 0) {
+    ObjMap* result = newMap(vm);
+    mapSet(result, copyString(vm, "x"), NUMBER_VAL(gCameraX));
+    mapSet(result, copyString(vm, "y"), NUMBER_VAL(gCameraY));
+    return OBJ_VAL(result);
+  }
+  if (argc < 2 || !IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) {
+    return gfxError(vm, "gfx.camera expects (x, y) or no args");
+  }
+  gCameraX = AS_NUMBER(args[0]);
+  gCameraY = AS_NUMBER(args[1]);
+  return NULL_VAL;
+}
+
+static Value nativeGfxCameraZoom(VM* vm, int argc, Value* args) {
+  if (argc >= 1) {
+    if (!IS_NUMBER(args[0])) {
+      return gfxError(vm, "gfx.cameraZoom expects a number.");
+    }
+    double zoom = AS_NUMBER(args[0]);
+    if (zoom <= 0.0) {
+      return gfxError(vm, "gfx.cameraZoom expects a positive number.");
+    }
+    gCameraZoom = zoom;
+    return NULL_VAL;
+  }
+  return NUMBER_VAL(gCameraZoom);
+}
+
+static Value nativeGfxWorldToScreen(VM* vm, int argc, Value* args) {
+  if (argc < 2 || !IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) {
+    return gfxError(vm, "gfx.worldToScreen expects (x, y).");
+  }
+  double x = AS_NUMBER(args[0]);
+  double y = AS_NUMBER(args[1]);
+  double sx, sy;
+  cameraWorldToScreen(x, y, &sx, &sy);
+  ObjMap* result = newMap(vm);
+  mapSet(result, copyString(vm, "x"), NUMBER_VAL(sx));
+  mapSet(result, copyString(vm, "y"), NUMBER_VAL(sy));
+  return OBJ_VAL(result);
+}
+
+static Value nativeGfxScreenToWorld(VM* vm, int argc, Value* args) {
+  if (argc < 2 || !IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) {
+    return gfxError(vm, "gfx.screenToWorld expects (x, y).");
+  }
+  if (gCameraZoom == 0.0) {
+    return gfxError(vm, "gfx.screenToWorld invalid camera zoom.");
+  }
+  double x = AS_NUMBER(args[0]);
+  double y = AS_NUMBER(args[1]);
+  double wx, wy;
+  cameraScreenToWorld(x, y, &wx, &wy);
+  ObjMap* result = newMap(vm);
+  mapSet(result, copyString(vm, "x"), NUMBER_VAL(wx));
+  mapSet(result, copyString(vm, "y"), NUMBER_VAL(wy));
+  return OBJ_VAL(result);
+}
+
+static Value nativeGfxMouseWorld(VM* vm, int argc, Value* args) {
+  (void)argc; (void)args;
+  if (gCameraZoom == 0.0) {
+    return gfxError(vm, "gfx.mouseWorld invalid camera zoom.");
+  }
+  double wx, wy;
+  cameraScreenToWorld((double)gMouseX, (double)gMouseY, &wx, &wy);
+  ObjMap* result = newMap(vm);
+  mapSet(result, copyString(vm, "x"), NUMBER_VAL(wx));
+  mapSet(result, copyString(vm, "y"), NUMBER_VAL(wy));
+  return OBJ_VAL(result);
+}
+
+static Value nativeGfxSprite(VM* vm, int argc, Value* args) {
+  if (!gRenderer) return gfxError(vm, "gfx.init not called");
+  if (argc < 1 || !isObjType(args[0], OBJ_STRING)) {
+    return gfxError(vm, "gfx.sprite expects (path, frameW?, frameH?).");
+  }
+  ObjString* path = (ObjString*)AS_OBJ(args[0]);
+  CachedTexture* tex = getTexture(vm, path->chars);
+  if (!tex) return gfxError(vm, "Failed to load image");
+
+  int frameW = tex->width;
+  int frameH = tex->height;
+  if (argc >= 2 && IS_NUMBER(args[1])) {
+    frameW = (int)AS_NUMBER(args[1]);
+  }
+  if (argc >= 3 && IS_NUMBER(args[2])) {
+    frameH = (int)AS_NUMBER(args[2]);
+  }
+  if (frameW <= 0 || frameH <= 0) {
+    return gfxError(vm, "gfx.sprite expects positive frame sizes.");
+  }
+
+  int cols = frameW > 0 ? (tex->width / frameW) : 1;
+  int rows = frameH > 0 ? (tex->height / frameH) : 1;
+  if (cols <= 0) cols = 1;
+  if (rows <= 0) rows = 1;
+  int frames = cols * rows;
+
+  ObjMap* sprite = newMap(vm);
+  mapSet(sprite, copyString(vm, "path"), OBJ_VAL(path));
+  mapSet(sprite, copyString(vm, "w"), NUMBER_VAL(tex->width));
+  mapSet(sprite, copyString(vm, "h"), NUMBER_VAL(tex->height));
+  mapSet(sprite, copyString(vm, "frameW"), NUMBER_VAL(frameW));
+  mapSet(sprite, copyString(vm, "frameH"), NUMBER_VAL(frameH));
+  mapSet(sprite, copyString(vm, "cols"), NUMBER_VAL(cols));
+  mapSet(sprite, copyString(vm, "rows"), NUMBER_VAL(rows));
+  mapSet(sprite, copyString(vm, "frames"), NUMBER_VAL(frames));
+  return OBJ_VAL(sprite);
+}
+
+static SDL_RendererFlip parseSpriteFlip(Value value) {
+  if (!isObjType(value, OBJ_STRING)) return SDL_FLIP_NONE;
+  ObjString* text = (ObjString*)AS_OBJ(value);
+  if (strcmp(text->chars, "x") == 0 || strcmp(text->chars, "h") == 0 ||
+      strcmp(text->chars, "horizontal") == 0) {
+    return SDL_FLIP_HORIZONTAL;
+  }
+  if (strcmp(text->chars, "y") == 0 || strcmp(text->chars, "v") == 0 ||
+      strcmp(text->chars, "vertical") == 0) {
+    return SDL_FLIP_VERTICAL;
+  }
+  if (strcmp(text->chars, "xy") == 0 || strcmp(text->chars, "both") == 0) {
+    return (SDL_RendererFlip)(SDL_FLIP_HORIZONTAL | SDL_FLIP_VERTICAL);
+  }
+  return SDL_FLIP_NONE;
+}
+
+static Value nativeGfxSpriteDraw(VM* vm, int argc, Value* args) {
+  if (!gRenderer) return gfxError(vm, "gfx.init not called");
+  if (argc < 3 || !isObjType(args[0], OBJ_MAP)) {
+    return gfxError(vm, "gfx.spriteDraw expects (sprite, x, y, frame?, scale?, angle?, flip?).");
+  }
+  ObjMap* sprite = (ObjMap*)AS_OBJ(args[0]);
+  ObjString* path = NULL;
+  if (!mapGetStringField(vm, sprite, "path", &path)) {
+    return gfxError(vm, "gfx.spriteDraw expects a sprite from gfx.sprite().");
+  }
+  CachedTexture* tex = getTexture(vm, path->chars);
+  if (!tex) return gfxError(vm, "Failed to load image");
+
+  double frameWValue = (double)tex->width;
+  double frameHValue = (double)tex->height;
+  double colsValue = 0.0;
+  double rowsValue = 0.0;
+  double framesValue = 0.0;
+  mapGetNumberField(vm, sprite, "frameW", &frameWValue);
+  mapGetNumberField(vm, sprite, "frameH", &frameHValue);
+  mapGetNumberField(vm, sprite, "cols", &colsValue);
+  mapGetNumberField(vm, sprite, "rows", &rowsValue);
+  mapGetNumberField(vm, sprite, "frames", &framesValue);
+
+  int frameW = (int)frameWValue;
+  int frameH = (int)frameHValue;
+  if (frameW <= 0 || frameH <= 0) {
+    return gfxError(vm, "gfx.spriteDraw invalid frame size.");
+  }
+
+  int cols = colsValue > 0 ? (int)colsValue : (tex->width / frameW);
+  int rows = rowsValue > 0 ? (int)rowsValue : (tex->height / frameH);
+  if (cols <= 0) cols = 1;
+  if (rows <= 0) rows = 1;
+  int frames = framesValue > 0 ? (int)framesValue : (cols * rows);
+  if (frames <= 0) frames = 1;
+
+  int frame = (argc >= 4 && IS_NUMBER(args[3])) ? (int)AS_NUMBER(args[3]) : 0;
+  if (frames > 0) {
+    frame %= frames;
+    if (frame < 0) frame += frames;
+  }
+  int col = cols > 0 ? (frame % cols) : 0;
+  int row = cols > 0 ? (frame / cols) : 0;
+
+  SDL_Rect src = {col * frameW, row * frameH, frameW, frameH};
+
+  double worldX = AS_NUMBER(args[1]);
+  double worldY = AS_NUMBER(args[2]);
+  double screenX, screenY;
+  cameraWorldToScreen(worldX, worldY, &screenX, &screenY);
+
+  double scale = (argc >= 5 && IS_NUMBER(args[4])) ? AS_NUMBER(args[4]) : 1.0;
+  double angle = (argc >= 6 && IS_NUMBER(args[5])) ? AS_NUMBER(args[5]) : 0.0;
+  SDL_RendererFlip flip = (argc >= 7) ? parseSpriteFlip(args[6]) : SDL_FLIP_NONE;
+  double finalScale = scale * gCameraZoom;
+
+  SDL_Rect dst = {
+    (int)screenX,
+    (int)screenY,
+    (int)(frameW * finalScale),
+    (int)(frameH * finalScale)
+  };
+
+  SDL_RenderCopyEx(gRenderer, tex->texture, &src, &dst, angle, NULL, flip);
+  return NULL_VAL;
+}
+
 static Value nativeGfxText(VM* vm, int argc, Value* args) {
   if (!gRenderer) return gfxError(vm, "gfx.init not called");
   if (argc < 3) return gfxError(vm, "gfx.text expects (str, x, y, color?, size?)");
   if (!isObjType(args[0], OBJ_STRING)) return gfxError(vm, "text must be string");
 
   ObjString* text = (ObjString*)AS_OBJ(args[0]);
-  int x = (int)AS_NUMBER(args[1]);
-  int y = (int)AS_NUMBER(args[2]);
+  double worldX = AS_NUMBER(args[1]);
+  double worldY = AS_NUMBER(args[2]);
+  double screenX, screenY;
+  cameraWorldToScreen(worldX, worldY, &screenX, &screenY);
 
   Uint8 r = 255, g = 255, b = 255, a = 255;
   if (argc >= 4 && !IS_NULL(args[3])) {
     parseColor(vm, args[3], &r, &g, &b, &a);
   }
 
-  int size = gDefaultFontSize;
+  int size = gDefaultFontBaseSize;
   if (argc >= 5 && IS_NUMBER(args[4])) {
     size = (int)AS_NUMBER(args[4]);
+    gDefaultFontBaseSize = size;
   }
+  int scaledSize = (int)((double)size * gCameraZoom + 0.5);
+  if (scaledSize < 1) scaledSize = 1;
 
-  if (!gDefaultFont || size != gDefaultFontSize) {
-    const char* fontPaths[] = {
-      "C:/Windows/Fonts/arial.ttf",
-      "C:/Windows/Fonts/segoeui.ttf",
-      "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-      "/usr/share/fonts/TTF/DejaVuSans.ttf",
-      "/Library/Fonts/Arial.ttf",
-      "/System/Library/Fonts/Helvetica.ttc",
-      NULL
-    };
-
-    for (int i = 0; fontPaths[i] != NULL; i++) {
-      TTF_Font* font = TTF_OpenFont(fontPaths[i], size);
-      if (font) {
-        if (gDefaultFont) TTF_CloseFont(gDefaultFont);
-        gDefaultFont = font;
-        gDefaultFontSize = size;
-        break;
-      }
-    }
-
-    if (!gDefaultFont) {
-      return gfxError(vm, "No system font found. Use gfx.font() to load a custom font.");
-    }
+  if (!ensureDefaultFont(scaledSize)) {
+    return gfxError(vm, "No system font found. Use gfx.font() to load a custom font.");
   }
 
   SDL_Color color = {r, g, b, a};
@@ -875,7 +1170,7 @@ static Value nativeGfxText(VM* vm, int argc, Value* args) {
   if (!surface) return gfxError(vm, "Failed to render text");
 
   SDL_Texture* texture = SDL_CreateTextureFromSurface(gRenderer, surface);
-  SDL_Rect dst = {x, y, surface->w, surface->h};
+  SDL_Rect dst = {(int)screenX, (int)screenY, surface->w, surface->h};
   SDL_FreeSurface(surface);
 
   if (texture) {
@@ -892,10 +1187,15 @@ static Value nativeGfxTextSize(VM* vm, int argc, Value* args) {
   }
 
   ObjString* text = (ObjString*)AS_OBJ(args[0]);
-  (void)argc;
+  int size = gDefaultFontBaseSize;
+  if (argc >= 2 && IS_NUMBER(args[1])) {
+    size = (int)AS_NUMBER(args[1]);
+  }
+  int scaledSize = (int)((double)size * gCameraZoom + 0.5);
+  if (scaledSize < 1) scaledSize = 1;
 
-  if (!gDefaultFont) {
-    return gfxError(vm, "No font loaded");
+  if (!ensureDefaultFont(scaledSize)) {
+    return gfxError(vm, "No system font found. Use gfx.font() to load a custom font.");
   }
 
   int w, h;
@@ -1190,14 +1490,21 @@ void defineGraphicsModule(VM* vm,
   moduleAddFn(vm, gfx, "image", nativeGfxImage, -1);
   moduleAddFn(vm, gfx, "imageEx", nativeGfxImageEx, 6);
   moduleAddFn(vm, gfx, "imageSize", nativeGfxImageSize, 1);
+  moduleAddFn(vm, gfx, "sprite", nativeGfxSprite, -1);
+  moduleAddFn(vm, gfx, "spriteDraw", nativeGfxSpriteDraw, -1);
 
   moduleAddFn(vm, gfx, "text", nativeGfxText, -1);
   moduleAddFn(vm, gfx, "textSize", nativeGfxTextSize, -1);
 
+  moduleAddFn(vm, gfx, "camera", nativeGfxCamera, -1);
+  moduleAddFn(vm, gfx, "cameraZoom", nativeGfxCameraZoom, -1);
+  moduleAddFn(vm, gfx, "worldToScreen", nativeGfxWorldToScreen, 2);
+  moduleAddFn(vm, gfx, "screenToWorld", nativeGfxScreenToWorld, 2);
   moduleAddFn(vm, gfx, "key", nativeGfxKey, 1);
   moduleAddFn(vm, gfx, "keyPressed", nativeGfxKeyPressed, 1);
   moduleAddFn(vm, gfx, "textInput", nativeGfxTextInput, -1);
   moduleAddFn(vm, gfx, "mouse", nativeGfxMouse, 0);
+  moduleAddFn(vm, gfx, "mouseWorld", nativeGfxMouseWorld, 0);
   moduleAddFn(vm, gfx, "mouseDown", nativeGfxMouseDown, -1);
   moduleAddFn(vm, gfx, "mouseClicked", nativeGfxMouseClicked, -1);
 
@@ -1243,6 +1550,8 @@ void graphicsCleanup(void) {
     TTF_CloseFont(gDefaultFont);
     gDefaultFont = NULL;
   }
+  gDefaultFontSize = 16;
+  gDefaultFontBaseSize = 16;
 
   if (gKeyPressed) { free(gKeyPressed); gKeyPressed = NULL; }
   if (gKeyState) { free(gKeyState); gKeyState = NULL; }
@@ -1261,6 +1570,10 @@ void graphicsCleanup(void) {
   TTF_Quit();
   IMG_Quit();
   SDL_Quit();
+
+  gCameraX = 0.0;
+  gCameraY = 0.0;
+  gCameraZoom = 1.0;
 
   gInitialized = false;
   gRunning = false;

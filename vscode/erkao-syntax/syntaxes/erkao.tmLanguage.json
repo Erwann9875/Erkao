@@ -202,7 +202,7 @@
       "patterns": [
         {
           "name": "meta.module.access.erkao",
-          "match": "\\b(fs|path|json|math|time|http|proc|env|plugin|gfx)\\s*\\.\\s*([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(fs|path|json|math|random|str|array|os|time|http|proc|env|plugin|gfx)\\s*\\.\\s*([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": { "name": "support.module.erkao" },
             "2": { "name": "support.function.erkao" }
@@ -233,7 +233,7 @@
       "patterns": [
         {
           "name": "support.module.erkao",
-          "match": "\\b(?:fs|path|json|math|time|http|proc|env|plugin|gfx)\\b"
+          "match": "\\b(?:fs|path|json|math|random|str|array|os|time|http|proc|env|plugin|gfx)\\b"
         }
       ]
     }
