@@ -304,7 +304,7 @@ Input helpers:
 - `gfx.key(name)` and `gfx.keyPressed(name)`
 - `gfx.poll()` returns false on quit
 - `gfx.pollEvent()` returns a map or `null` if no events are pending
-- `gfx.textInput(enable?)` enables/disables text input (text events are `type: "text"`)
+- `gfx.textInput(enable?)` enables/disables text input (text events are `type: "text"`, default is off)
 
 Event maps include:
 - `type`: `"keyDown"`, `"keyUp"`, `"text"`, or `"quit"`

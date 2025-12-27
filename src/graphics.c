@@ -30,9 +30,8 @@ static int gFrameCount = 0;
 static double gFpsTimer = 0.0;
 static int gCurrentFps = 0;
 
-static const Uint8* gKeyState = NULL;
+static Uint8* gKeyState = NULL;
 static Uint8* gKeyPressed = NULL;
-static Uint8* gKeyPrevState = NULL;
 static int gKeyCount = 0;
 static int gMouseX = 0, gMouseY = 0;
 static Uint32 gMouseState = 0;
@@ -417,31 +416,9 @@ static void updateInput(void) {
   gMousePrevState = gMouseState;
   gMouseState = SDL_GetMouseState(&gMouseX, &gMouseY);
 
-  int numKeys = 0;
-  const Uint8* sdlKeyState = SDL_GetKeyboardState(&numKeys);
-  
-  if (numKeys <= 0) {
-    gKeyState = NULL;
-    gKeyCount = 0;
-    return;
+  if (gKeyPressed && gKeyCount > 0) {
+    memset(gKeyPressed, 0, (size_t)gKeyCount);
   }
-
-  if (!gKeyPressed || !gKeyPrevState || numKeys != gKeyCount) {
-    if (gKeyPressed) free(gKeyPressed);
-    if (gKeyPrevState) free(gKeyPrevState);
-    gKeyCount = numKeys;
-    gKeyPressed = (Uint8*)calloc(numKeys, sizeof(Uint8));
-    gKeyPrevState = (Uint8*)calloc(numKeys, sizeof(Uint8));
-    if (!gKeyPressed || !gKeyPrevState) return;
-  }
-
-  for (int i = 0; i < gKeyCount; i++) {
-    Uint8 current = sdlKeyState[i];
-    gKeyPressed[i] = current && !gKeyPrevState[i];
-    gKeyPrevState[i] = current;
-  }
-
-  gKeyState = sdlKeyState;
 }
 
 static bool processEvents(void) {
@@ -461,10 +438,25 @@ static bool processEvents(void) {
           queueQuitEvent();
           break;
         }
+        if (gKeyState && gKeyPressed) {
+          int index = (int)event.key.keysym.scancode;
+          if (index >= 0 && index < gKeyCount) {
+            if (!gKeyState[index]) {
+              gKeyPressed[index] = 1;
+            }
+            gKeyState[index] = 1;
+          }
+        }
         queueKeyEvent(GFX_EVENT_KEY_DOWN, event.key.keysym.scancode,
                       event.key.repeat ? 1 : 0);
         break;
       case SDL_KEYUP:
+        if (gKeyState) {
+          int index = (int)event.key.keysym.scancode;
+          if (index >= 0 && index < gKeyCount) {
+            gKeyState[index] = 0;
+          }
+        }
         queueKeyEvent(GFX_EVENT_KEY_UP, event.key.keysym.scancode, 0);
         break;
       case SDL_TEXTINPUT:
@@ -541,9 +533,28 @@ static Value nativeGfxInit(VM* vm, int argc, Value* args) {
 
   SDL_SetRenderDrawBlendMode(gRenderer, SDL_BLENDMODE_BLEND);
 
+  gKeyCount = SDL_NUM_SCANCODES;
+  gKeyState = (Uint8*)calloc(gKeyCount, sizeof(Uint8));
+  gKeyPressed = (Uint8*)calloc(gKeyCount, sizeof(Uint8));
+  if (!gKeyState || !gKeyPressed) {
+    if (gKeyState) free(gKeyState);
+    if (gKeyPressed) free(gKeyPressed);
+    gKeyState = NULL;
+    gKeyPressed = NULL;
+    gKeyCount = 0;
+    SDL_DestroyRenderer(gRenderer);
+    SDL_DestroyWindow(gWindow);
+    gRenderer = NULL;
+    gWindow = NULL;
+    Mix_CloseAudio();
+    TTF_Quit();
+    IMG_Quit();
+    SDL_Quit();
+    return gfxError(vm, "Failed to initialize input");
+  }
+
   clearEventQueue();
-  SDL_StartTextInput();
-  gTextInputEnabled = true;
+  gTextInputEnabled = false;
 
   gInitialized = true;
   gRunning = true;
@@ -1234,8 +1245,7 @@ void graphicsCleanup(void) {
   }
 
   if (gKeyPressed) { free(gKeyPressed); gKeyPressed = NULL; }
-  if (gKeyPrevState) { free(gKeyPrevState); gKeyPrevState = NULL; }
-  gKeyState = NULL;
+  if (gKeyState) { free(gKeyState); gKeyState = NULL; }
   gKeyCount = 0;
 
   if (gTextInputEnabled) {
