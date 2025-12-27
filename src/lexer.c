@@ -413,7 +413,7 @@ static Token scanToken(Scanner* scanner) {
     return scanner->pendingToken;
   }
 
-  if (scanner->inString) {
+  if (!scanner->inInterpolation && scanner->inString) {
     return scanStringSegment(scanner);
   }
 
