@@ -496,19 +496,41 @@ static void optimizeChunk(VM* vm, Chunk* chunk) {
 }
 
 static bool isAtEnd(Compiler* c) {
+  if (c->current >= c->tokens->count) return true;
   return c->tokens->tokens[c->current].type == TOKEN_EOF;
 }
 
 static Token peek(Compiler* c) {
+  if (c->tokens->count == 0) {
+    Token t;
+    memset(&t, 0, sizeof(Token));
+    t.type = TOKEN_EOF;
+    return t;
+  }
+  if (c->current >= c->tokens->count) {
+    return c->tokens->tokens[c->tokens->count - 1];
+  }
   return c->tokens->tokens[c->current];
 }
 
 static Token previous(Compiler* c) {
+  if (c->tokens->count == 0) {
+    Token t;
+    memset(&t, 0, sizeof(Token));
+    t.type = TOKEN_EOF;
+    return t;
+  }
+  if (c->current == 0) {
+    return c->tokens->tokens[0];
+  }
+  if (c->current > c->tokens->count) {
+    return c->tokens->tokens[c->tokens->count - 1];
+  }
   return c->tokens->tokens[c->current - 1];
 }
 
 static Token advance(Compiler* c) {
-  if (!isAtEnd(c)) c->current++;
+  if (c->current < c->tokens->count) c->current++;
   return previous(c);
 }
 
