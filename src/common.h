@@ -15,7 +15,7 @@
 #define GROW_CAPACITY(capacity) ((capacity) < 8 ? 8 : (capacity) * 2)
 
 #define GROW_ARRAY(type, pointer, oldCount, newCount) \
-  (type*)realloc((pointer), sizeof(type) * (newCount))
+  ((void)(oldCount), (type*)realloc((pointer), sizeof(type) * (newCount)))
 
 #define FREE_ARRAY(type, pointer, oldCount) \
   do { (void)(oldCount); free(pointer); } while (0)

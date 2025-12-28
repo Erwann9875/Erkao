@@ -1089,6 +1089,8 @@ static Type* typeArray(TypeChecker* tc, Type* elem);
 static Type* typeMap(TypeChecker* tc, Type* key, Type* value);
 static Type* typeFunction(TypeChecker* tc, Type** params, int paramCount, Type* returnType);
 static TypeParam* parseTypeParams(Compiler* c, int* outCount);
+static void typeToString(Type* type, char* buffer, size_t size);
+static void typeErrorAt(Compiler* c, Token token, const char* format, ...);
 
 static bool typecheckEnabled(Compiler* c) {
   return c->typecheck && c->typecheck->enabled;
@@ -1563,6 +1565,8 @@ static bool typeEquals(Type* a, Type* b) {
       case TYPE_BOOL:
       case TYPE_NULL:
         return true;
+      case TYPE_NAMED:
+        return false;
       case TYPE_GENERIC:
         return true;
       case TYPE_ARRAY:
