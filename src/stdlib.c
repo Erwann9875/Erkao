@@ -759,7 +759,12 @@ static Value jsonParseArray(VM* vm, JsonParser* parser, bool* ok) {
     return OBJ_VAL(array);
   }
 
-  for (;;) {
+  bool running = true;
+  while (running) {
+    if (vm->instructionBudget > 0 && vm->instructionCount > vm->instructionBudget) {
+      running = false;
+      continue;
+    }
     Value value = jsonParseValue(vm, parser, ok);
     if (!*ok) return NULL_VAL;
     arrayWrite(array, value);
@@ -2949,7 +2954,16 @@ static Value nativeHttpServe(VM* vm, int argc, Value* args) {
   printf("http.serve listening on http://127.0.0.1:%d\n", boundPort);
   fflush(stdout);
 
-  for (;;) {
+  bool running = true;
+  while (running) {
+    if (vm->instructionBudget > 0) {
+      vm->instructionCount++;
+      if (vm->instructionCount > vm->instructionBudget) {
+        runtimeErrorValue(vm, "Instruction budget exceeded.");
+        running = false;
+        continue;
+      }
+    }
     struct sockaddr_in clientAddr;
 #ifdef _WIN32
     int addrLen = (int)sizeof(clientAddr);
@@ -3662,6 +3676,7 @@ static Value nativeRandomSeed(VM* vm, int argc, Value* args) {
   gRandomState = (uint64_t)seed;
   gRandomSeeded = true;
   gRandomHasSpare = false;
+  return NULL_VAL;
 }
 
 static Value nativeRandomInt(VM* vm, int argc, Value* args) {
