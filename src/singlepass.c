@@ -1238,12 +1238,23 @@ static void typeToString(Type* type, char* buffer, size_t size) {
 
 static void typeErrorAt(Compiler* c, Token token, const char* format, ...) {
   if (!typecheckEnabled(c)) return;
+  if (c->panicMode) return;
   char message[256];
   va_list args;
   va_start(args, format);
   vsnprintf(message, sizeof(message), format, args);
   va_end(args);
-  errorAt(c, token, message);
+  c->hadError = true;
+  const char* path = c->path ? c->path : "<repl>";
+  fprintf(stderr, "%s:%d:%d: Error", path, token.line, token.column);
+  if (token.type == TOKEN_EOF) {
+    fprintf(stderr, " at end");
+  } else if (token.type != TOKEN_ERROR) {
+    fprintf(stderr, " at '%.*s'", token.length, token.start);
+  }
+  fprintf(stderr, ": %s\n", message);
+  printErrorContext(c->source, token.line, token.column,
+                    token.length > 0 ? token.length : 1);
   if (c->typecheck) {
     c->typecheck->errorCount++;
   }

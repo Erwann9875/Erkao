@@ -1,0 +1,16 @@
+let count: number = "hi";
+const flag: bool = "yes";
+
+fun add(a: number, b: number): number {
+  return a + b;
+}
+
+add("x", 2);
+
+fun wrongReturn(): string {
+  return 1;
+}
+
+fun defaultBad(a: number = "oops"): number {
+  return a;
+}

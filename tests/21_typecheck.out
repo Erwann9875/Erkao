@@ -1,0 +1,15 @@
+tests/21_typecheck.ek:1:5: Error at 'count': Type mismatch. Expected number but got string.
+  let count: number = "hi";
+      ^~~~~
+tests/21_typecheck.ek:2:7: Error at 'flag': Type mismatch. Expected bool but got string.
+  const flag: bool = "yes";
+        ^~~~
+tests/21_typecheck.ek:8:4: Error at '(': Argument 1 expects number but got string.
+  add("x", 2);
+     ^
+tests/21_typecheck.ek:11:3: Error at 'return': Return type mismatch. Expected string but got number.
+    return 1;
+    ^~~~~~
+tests/21_typecheck.ek:14:16: Error at 'a': Default value expects number but got string.
+  fun defaultBad(a: number = "oops"): number {
+                 ^

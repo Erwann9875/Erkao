@@ -199,13 +199,17 @@ try {
         $relativeTest = $relativeTest.Substring(2)
       }
       $relativeTest = $relativeTest -replace "\\", "/"
+      $command = "run"
+      if ($test.BaseName -like "*_typecheck") {
+        $command = "typecheck"
+      }
 
       $output = & {
         $ErrorActionPreference = "Continue"
         if ($null -ne $PSNativeCommandUseErrorActionPreference) {
           $PSNativeCommandUseErrorActionPreference = $false
         }
-        & $Exe run $relativeTest 2>&1 |
+        & $Exe $command $relativeTest 2>&1 |
           ForEach-Object {
             if ($_ -is [System.Management.Automation.ErrorRecord]) {
               $_.Exception.Message

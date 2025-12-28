@@ -7,14 +7,21 @@ const {
   Location,
   Range,
   MarkupKind,
+  DiagnosticSeverity,
   ResponseError,
   ErrorCodes,
   TextEdit
 } = require("vscode-languageserver/node");
 const { TextDocument } = require("vscode-languageserver-textdocument");
+const path = require("path");
+const fs = require("fs");
+const cp = require("child_process");
+const { fileURLToPath } = require("url");
 
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
+const typecheckTimers = new Map();
+let workspaceRoots = [];
 
 const KEYWORDS = [
   "let",
@@ -136,6 +143,77 @@ function getWordInfo(doc, position) {
     info = getWordAt(text, offset - 1);
   }
   return info;
+}
+
+function resolveErkaoExe() {
+  const override = process.env.ERKAO_LSP_EXE;
+  if (override && fs.existsSync(override)) {
+    return override;
+  }
+  for (const root of workspaceRoots) {
+    const winCandidate = path.join(root, "build", "Debug", "erkao.exe");
+    if (fs.existsSync(winCandidate)) return winCandidate;
+    const winAlt = path.join(root, "build", "erkao.exe");
+    if (fs.existsSync(winAlt)) return winAlt;
+    const unixCandidate = path.join(root, "build", "erkao");
+    if (fs.existsSync(unixCandidate)) return unixCandidate;
+  }
+  return "erkao";
+}
+
+function parseTypecheckDiagnostics(output, filePath) {
+  const diagnostics = [];
+  if (!output) return diagnostics;
+  const normalizedPath = path.normalize(filePath);
+  const lines = output.split(/\r?\n/);
+  const regex = /^(.*?):(\d+):(\d+): Error.*?: (.*)$/;
+
+  for (const line of lines) {
+    const match = regex.exec(line);
+    if (!match) continue;
+    const entryPath = path.normalize(match[1]);
+    if (entryPath !== normalizedPath) continue;
+    const lineNum = Math.max(parseInt(match[2], 10) - 1, 0);
+    const colNum = Math.max(parseInt(match[3], 10) - 1, 0);
+    const message = match[4];
+    const range = Range.create(lineNum, colNum, lineNum, colNum + 1);
+    diagnostics.push({
+      range,
+      severity: DiagnosticSeverity.Error,
+      source: "erkao typecheck",
+      message
+    });
+  }
+
+  return diagnostics;
+}
+
+function scheduleTypecheck(doc) {
+  if (!doc || !doc.uri.startsWith("file://")) return;
+  if (!doc.uri.endsWith(".ek")) return;
+  const existing = typecheckTimers.get(doc.uri);
+  if (existing) clearTimeout(existing);
+  const handle = setTimeout(() => runTypecheck(doc), 300);
+  typecheckTimers.set(doc.uri, handle);
+}
+
+function runTypecheck(doc) {
+  if (!doc || !doc.uri.startsWith("file://")) return;
+  if (!doc.uri.endsWith(".ek")) return;
+  const filePath = fileURLToPath(doc.uri);
+  const exe = resolveErkaoExe();
+  if (!exe) return;
+
+  cp.execFile(
+    exe,
+    ["typecheck", filePath],
+    { cwd: path.dirname(filePath) },
+    (err, stdout, stderr) => {
+      const output = `${stdout || ""}\n${stderr || ""}`;
+      const diagnostics = parseTypecheckDiagnostics(output, filePath);
+      connection.sendDiagnostics({ uri: doc.uri, diagnostics });
+    }
+  );
 }
 
 function skipWhitespace(text, index) {
@@ -513,9 +591,31 @@ function getSymbols(doc) {
 
 documents.onDidClose((event) => {
   symbolCache.delete(event.document.uri);
+  const handle = typecheckTimers.get(event.document.uri);
+  if (handle) clearTimeout(handle);
+  typecheckTimers.delete(event.document.uri);
+  connection.sendDiagnostics({ uri: event.document.uri, diagnostics: [] });
 });
 
-connection.onInitialize(() => {
+documents.onDidChangeContent((event) => {
+  scheduleTypecheck(event.document);
+});
+
+documents.onDidSave((event) => {
+  scheduleTypecheck(event.document);
+});
+
+connection.onInitialize((params) => {
+  workspaceRoots = [];
+  if (params && Array.isArray(params.workspaceFolders)) {
+    for (const folder of params.workspaceFolders) {
+      if (folder && folder.uri && folder.uri.startsWith("file://")) {
+        workspaceRoots.push(fileURLToPath(folder.uri));
+      }
+    }
+  } else if (params && params.rootUri && params.rootUri.startsWith("file://")) {
+    workspaceRoots.push(fileURLToPath(params.rootUri));
+  }
   return {
     capabilities: {
       textDocumentSync: documents.syncKind,

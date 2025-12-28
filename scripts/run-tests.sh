@@ -202,7 +202,12 @@ for test in "${tests[@]}"; do
   fi
   test_rel="${test_rel#./}"
 
-  output="$("$EXE" run "$test_rel" 2>&1 || true)"
+  command="run"
+  if [[ "$(basename "$test_rel")" == *_typecheck.ek ]]; then
+    command="typecheck"
+  fi
+
+  output="$("$EXE" "$command" "$test_rel" 2>&1 || true)"
   output="$(printf "%s" "$output" | tr -d '\r')"
   output="$(printf "%s" "$output" | sed -e 's/[[:space:]]*$//')"
 
