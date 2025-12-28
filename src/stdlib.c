@@ -703,6 +703,7 @@ static Value jsonParseString(VM* vm, JsonParser* parser, bool* ok) {
 }
 
 static Value jsonParseNumber(VM* vm, JsonParser* parser, bool* ok) {
+  (void)vm;
   const char* start = parser->current;
   if (*parser->current == '-') parser->current++;
 
@@ -2988,7 +2989,7 @@ static Value nativeHttpServe(VM* vm, int argc, Value* args) {
 
     httpLogRequest(&clientAddr, path, pathLen);
 
-    Value routeValue;
+    Value routeValue = NULL_VAL;
     bool found = false;
     char* methodKey = NULL;
     if (methodLen > 0 && pathLen > 0) {
@@ -4413,7 +4414,6 @@ static Value nativeTimeSleep(VM* vm, int argc, Value* args) {
     return runtimeErrorValue(vm, "time.sleep failed.");
   }
 #endif
-  return NULL_VAL;
 }
 
 static bool timeGetTm(double seconds, bool utc, struct tm* out) {

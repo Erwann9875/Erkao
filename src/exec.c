@@ -602,12 +602,21 @@ static bool run(VM* vm) {
   return runWithTarget(vm, 0);
 }
 
+static inline uint16_t readShort(CallFrame* frame) {
+  frame->ip += 2;
+  return (uint16_t)((frame->ip[-2] << 8) | frame->ip[-1]);
+}
+
+static inline Value readConstant(CallFrame* frame) {
+  return frame->function->chunk->constants[readShort(frame)];
+}
+
 static bool runWithTarget(VM* vm, int targetFrameCount) {
   CallFrame* frame = &vm->frames[vm->frameCount - 1];
 
 #define READ_BYTE() (*frame->ip++)
-#define READ_SHORT() (frame->ip += 2, (uint16_t)((frame->ip[-2] << 8) | frame->ip[-1]))
-#define READ_CONSTANT() (frame->function->chunk->constants[READ_SHORT()])
+#define READ_SHORT() readShort(frame)
+#define READ_CONSTANT() readConstant(frame)
 
   for (;;) {
     uint8_t instruction = READ_BYTE();

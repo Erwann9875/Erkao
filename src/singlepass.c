@@ -174,13 +174,6 @@ static void codeBuilderInit(CodeBuilder* out) {
   out->capacity = 0;
 }
 
-static void codeBuilderFree(CodeBuilder* out) {
-  FREE_ARRAY(uint8_t, out->code, out->capacity);
-  FREE_ARRAY(Token, out->tokens, out->capacity);
-  FREE_ARRAY(InlineCache, out->caches, out->capacity);
-  codeBuilderInit(out);
-}
-
 static void codeBuilderEnsure(CodeBuilder* out, int needed) {
   if (out->capacity >= needed) return;
   int oldCapacity = out->capacity;
@@ -1308,14 +1301,6 @@ static Type* typeAlloc(TypeChecker* tc, TypeKind kind) {
     }
   }
 
-  static void typeParamsPush(TypeChecker* tc, ObjString* name, ObjString* constraint) {
-    if (!tc || !name) return;
-    typeParamsEnsure(tc, 1);
-    tc->typeParams[tc->typeParamCount].name = name;
-    tc->typeParams[tc->typeParamCount].constraint = constraint;
-    tc->typeParamCount++;
-  }
-
   static void typeParamsPushList(TypeChecker* tc, const TypeParam* params, int count) {
     if (!tc || !params || count <= 0) return;
     typeParamsEnsure(tc, count);
@@ -1368,17 +1353,10 @@ static Type* typePop(Compiler* c) {
   return tc->stack[--tc->stackCount];
 }
 
-static Type* typePeek(Compiler* c) {
-  if (!typecheckEnabled(c)) return typeAny();
-  TypeChecker* tc = c->typecheck;
-  if (tc->stackCount <= 0) return typeAny();
-  return tc->stack[tc->stackCount - 1];
+static bool typeIsAny(Type* type) {
+  if (!type) return true;
+  return type->kind == TYPE_ANY || type->kind == TYPE_UNKNOWN || type->kind == TYPE_GENERIC;
 }
-
-  static bool typeIsAny(Type* type) {
-    if (!type) return true;
-    return type->kind == TYPE_ANY || type->kind == TYPE_UNKNOWN || type->kind == TYPE_GENERIC;
-  }
 
 static bool typeIsNullable(Type* type) {
   if (!type) return false;
