@@ -59,9 +59,14 @@ jobs:
           ERKAO_HTTP_TEST: "1"
         run: ./scripts/run-tests.ps1
 
+      - name: Setup scripts (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bash ./scripts/unix/setup.sh
+
       - name: Run tests (Linux/macOS)
         if: runner.os != 'Windows'
         shell: bash
         env:
           ERKAO_HTTP_TEST: "1"
-        run: ./scripts/unix/run-tests.sh
+        run: bash ./scripts/unix/run-tests.sh
