@@ -74,6 +74,25 @@ static int exportFromInstruction(const Chunk* chunk, int offset) {
   return cursor;
 }
 
+static int matchEnumInstruction(const Chunk* chunk, int offset) {
+  uint16_t enumIdx = (uint16_t)((chunk->code[offset + 1] << 8) | chunk->code[offset + 2]);
+  uint16_t variantIdx = (uint16_t)((chunk->code[offset + 3] << 8) | chunk->code[offset + 4]);
+  printf("%-16s %4u %4u '", "OP_MATCH_ENUM", enumIdx, variantIdx);
+  if (enumIdx < (uint16_t)chunk->constantsCount) {
+    printValue(chunk->constants[enumIdx]);
+  } else {
+    printf("<invalid>");
+  }
+  printf("' '");
+  if (variantIdx < (uint16_t)chunk->constantsCount) {
+    printValue(chunk->constants[variantIdx]);
+  } else {
+    printf("<invalid>");
+  }
+  printf("'\n");
+  return offset + 5;
+}
+
 static int invokeInstruction(const char* name, const Chunk* chunk, int offset) {
   uint16_t constant = (uint16_t)((chunk->code[offset + 1] << 8) | chunk->code[offset + 2]);
   uint8_t argc = chunk->code[offset + 3];
@@ -132,6 +151,8 @@ static int disassembleInstruction(const Chunk* chunk, int offset) {
       return simpleInstruction("OP_GET_INDEX_OPTIONAL", chunk, offset);
     case OP_SET_INDEX:
       return simpleInstruction("OP_SET_INDEX", chunk, offset);
+    case OP_MATCH_ENUM:
+      return matchEnumInstruction(chunk, offset);
     case OP_EQUAL:
       return simpleInstruction("OP_EQUAL", chunk, offset);
     case OP_GREATER:

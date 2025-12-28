@@ -85,6 +85,12 @@ static void blackenObject(VM* vm, Obj* object) {
       markObject(vm, (Obj*)native->name);
       break;
     }
+    case OBJ_ENUM_CTOR: {
+      ObjEnumCtor* ctor = (ObjEnumCtor*)object;
+      markObject(vm, (Obj*)ctor->enumName);
+      markObject(vm, (Obj*)ctor->variantName);
+      break;
+    }
     case OBJ_CLASS: {
       ObjClass* klass = (ObjClass*)object;
       markObject(vm, (Obj*)klass->name);
@@ -163,6 +169,12 @@ void blackenYoungObject(VM* vm, Obj* object) {
     case OBJ_NATIVE: {
       ObjNative* native = (ObjNative*)object;
       markYoungObject(vm, (Obj*)native->name);
+      break;
+    }
+    case OBJ_ENUM_CTOR: {
+      ObjEnumCtor* ctor = (ObjEnumCtor*)object;
+      markYoungObject(vm, (Obj*)ctor->enumName);
+      markYoungObject(vm, (Obj*)ctor->variantName);
       break;
     }
     case OBJ_CLASS: {
@@ -345,6 +357,13 @@ bool gcObjectHasYoungRefs(Obj* object) {
     case OBJ_NATIVE: {
       ObjNative* native = (ObjNative*)object;
       return native->name && native->name->obj.generation == OBJ_GEN_YOUNG;
+    }
+    case OBJ_ENUM_CTOR: {
+      ObjEnumCtor* ctor = (ObjEnumCtor*)object;
+      if (ctor->enumName && ctor->enumName->obj.generation == OBJ_GEN_YOUNG) {
+        return true;
+      }
+      return ctor->variantName && ctor->variantName->obj.generation == OBJ_GEN_YOUNG;
     }
     case OBJ_CLASS: {
       ObjClass* klass = (ObjClass*)object;

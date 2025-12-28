@@ -1,0 +1,8 @@
+enum Option { Some(value), None }
+
+let a = Option.Some(1);
+
+match (a) {
+  case Option.Some(x):
+    print(x);
+}

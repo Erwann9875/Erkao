@@ -216,6 +216,23 @@ static void appendObject(StringBuilder* sb, Obj* obj) {
       }
       break;
     }
+    case OBJ_ENUM_CTOR: {
+      ObjEnumCtor* ctor = (ObjEnumCtor*)obj;
+      sbAppendN(sb, "<enum ", 6);
+      if (ctor->enumName && ctor->enumName->chars) {
+        sbAppendN(sb, ctor->enumName->chars, ctor->enumName->length);
+      } else {
+        sbAppendN(sb, "enum", 4);
+      }
+      sbAppendChar(sb, '.');
+      if (ctor->variantName && ctor->variantName->chars) {
+        sbAppendN(sb, ctor->variantName->chars, ctor->variantName->length);
+      } else {
+        sbAppendN(sb, "variant", 7);
+      }
+      sbAppendChar(sb, '>');
+      break;
+    }
     case OBJ_CLASS: {
       ObjClass* klass = (ObjClass*)obj;
       sbAppendN(sb, "<class ", 7);
@@ -485,6 +502,28 @@ static bool callFunction(VM* vm, ObjFunction* function, Value receiver,
   return true;
 }
 
+static bool enumValueMatches(VM* vm, Value value, ObjString* enumName, ObjString* variantName) {
+  if (!isObjType(value, OBJ_MAP)) return false;
+  ObjMap* map = (ObjMap*)AS_OBJ(value);
+  ObjString* enumKey = copyString(vm, "_enum");
+  ObjString* tagKey = copyString(vm, "_tag");
+  Value enumValue;
+  if (!mapGet(map, enumKey, &enumValue) || !isObjType(enumValue, OBJ_STRING)) {
+    return false;
+  }
+  if (!valuesEqual(enumValue, OBJ_VAL(enumName))) {
+    return false;
+  }
+  Value tagValue;
+  if (!mapGet(map, tagKey, &tagValue) || !isObjType(tagValue, OBJ_STRING)) {
+    return false;
+  }
+  if (!valuesEqual(tagValue, OBJ_VAL(variantName))) {
+    return false;
+  }
+  return true;
+}
+
 static bool callValue(VM* vm, Value callee, int argc) {
   if (isObjType(callee, OBJ_FUNCTION)) {
     return callFunction(vm, (ObjFunction*)AS_OBJ(callee), NULL_VAL, false, argc);
@@ -507,6 +546,21 @@ static bool callValue(VM* vm, Value callee, int argc) {
     if (vm->hadError) return false;
     vm->stackTop -= argc + 1;
     push(vm, result);
+    return true;
+  }
+
+  if (isObjType(callee, OBJ_ENUM_CTOR)) {
+    ObjEnumCtor* ctor = (ObjEnumCtor*)AS_OBJ(callee);
+    if (ctor->arity >= 0 && argc != ctor->arity) {
+      Token token;
+      memset(&token, 0, sizeof(Token));
+      runtimeError(vm, token, "Wrong number of arguments.");
+      return false;
+    }
+    ObjMap* variant = newEnumVariant(vm, ctor->enumName, ctor->variantName, argc,
+                                     vm->stackTop - argc);
+    vm->stackTop -= argc + 1;
+    push(vm, OBJ_VAL(variant));
     return true;
   }
 
@@ -556,6 +610,19 @@ bool vmCallValue(VM* vm, Value callee, int argc, Value* args, Value* out) {
     Value result = native->function(vm, argc, args);
     if (vm->hadError) return false;
     *out = result;
+    return true;
+  }
+
+  if (isObjType(callee, OBJ_ENUM_CTOR)) {
+    ObjEnumCtor* ctor = (ObjEnumCtor*)AS_OBJ(callee);
+    if (ctor->arity >= 0 && argc != ctor->arity) {
+      Token token;
+      memset(&token, 0, sizeof(Token));
+      runtimeError(vm, token, "Wrong number of arguments.");
+      return false;
+    }
+    ObjMap* variant = newEnumVariant(vm, ctor->enumName, ctor->variantName, argc, args);
+    *out = OBJ_VAL(variant);
     return true;
   }
 
@@ -988,6 +1055,13 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
         Value result = evaluateSetIndex(vm, currentToken(frame), object, index, value);
         if (vm->hadError) return false;
         push(vm, result);
+        break;
+      }
+      case OP_MATCH_ENUM: {
+        ObjString* enumName = (ObjString*)AS_OBJ(READ_CONSTANT());
+        ObjString* variantName = (ObjString*)AS_OBJ(READ_CONSTANT());
+        Value value = pop(vm);
+        push(vm, BOOL_VAL(enumValueMatches(vm, value, enumName, variantName)));
         break;
       }
       case OP_EQUAL: {

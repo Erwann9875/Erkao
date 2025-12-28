@@ -8,6 +8,7 @@ typedef struct Obj Obj;
 typedef struct ObjString ObjString;
 typedef struct ObjFunction ObjFunction;
 typedef struct ObjNative ObjNative;
+typedef struct ObjEnumCtor ObjEnumCtor;
 typedef struct ObjClass ObjClass;
 typedef struct ObjInstance ObjInstance;
 typedef struct ObjArray ObjArray;
@@ -55,6 +56,7 @@ typedef enum {
   OBJ_STRING,
   OBJ_FUNCTION,
   OBJ_NATIVE,
+  OBJ_ENUM_CTOR,
   OBJ_CLASS,
   OBJ_INSTANCE,
   OBJ_ARRAY,
@@ -101,6 +103,13 @@ struct ObjNative {
   NativeFn function;
   int arity;
   ObjString* name;
+};
+
+struct ObjEnumCtor {
+  Obj obj;
+  ObjString* enumName;
+  ObjString* variantName;
+  int arity;
 };
 
 typedef struct {
@@ -152,6 +161,8 @@ ObjFunction* newFunction(VM* vm, ObjString* name, int arity, int minArity,
                          Env* closure, Program* program);
 ObjFunction* cloneFunction(VM* vm, ObjFunction* proto, Env* closure);
 ObjNative* newNative(VM* vm, NativeFn function, int arity, ObjString* name);
+ObjEnumCtor* newEnumCtor(VM* vm, ObjString* enumName, ObjString* variantName, int arity);
+ObjMap* newEnumVariant(VM* vm, ObjString* enumName, ObjString* variantName, int argc, Value* args);
 ObjClass* newClass(VM* vm, ObjString* name, ObjMap* methods);
 ObjInstance* newInstance(VM* vm, ObjClass* klass);
 ObjInstance* newInstanceWithFields(VM* vm, ObjClass* klass, ObjMap* fields);

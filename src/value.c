@@ -161,6 +161,32 @@ ObjNative* newNative(VM* vm, NativeFn function, int arity, ObjString* name) {
   return native;
 }
 
+ObjEnumCtor* newEnumCtor(VM* vm, ObjString* enumName, ObjString* variantName, int arity) {
+  ObjEnumCtor* ctor = (ObjEnumCtor*)allocateObject(vm, sizeof(ObjEnumCtor),
+                                                  OBJ_ENUM_CTOR, OBJ_GEN_OLD);
+  ctor->enumName = enumName;
+  ctor->variantName = variantName;
+  ctor->arity = arity;
+  gcRememberObjectIfYoungRefs(vm, (Obj*)ctor);
+  return ctor;
+}
+
+ObjMap* newEnumVariant(VM* vm, ObjString* enumName, ObjString* variantName, int argc, Value* args) {
+  ObjMap* map = newMap(vm);
+  ObjString* enumKey = copyString(vm, "_enum");
+  ObjString* tagKey = copyString(vm, "_tag");
+  ObjString* valuesKey = copyString(vm, "_values");
+  mapSet(map, enumKey, OBJ_VAL(enumName));
+  mapSet(map, tagKey, OBJ_VAL(variantName));
+
+  ObjArray* values = newArray(vm);
+  for (int i = 0; i < argc; i++) {
+    arrayWrite(values, args[i]);
+  }
+  mapSet(map, valuesKey, OBJ_VAL(values));
+  return map;
+}
+
 ObjClass* newClass(VM* vm, ObjString* name, ObjMap* methods) {
   ObjClass* klass = (ObjClass*)allocateObject(vm, sizeof(ObjClass), OBJ_CLASS, OBJ_GEN_OLD);
   klass->name = name;
@@ -445,6 +471,7 @@ static const char* objTypeName(ObjType type) {
     case OBJ_STRING: return "string";
     case OBJ_FUNCTION: return "function";
     case OBJ_NATIVE: return "native";
+    case OBJ_ENUM_CTOR: return "enum_ctor";
     case OBJ_CLASS: return "class";
     case OBJ_INSTANCE: return "instance";
     case OBJ_ARRAY: return "array";
@@ -548,6 +575,13 @@ static void printObject(Value value) {
       } else {
         printf("<native>");
       }
+      break;
+    }
+    case OBJ_ENUM_CTOR: {
+      ObjEnumCtor* ctor = (ObjEnumCtor*)AS_OBJ(value);
+      const char* enumName = ctor->enumName ? ctor->enumName->chars : "enum";
+      const char* variantName = ctor->variantName ? ctor->variantName->chars : "variant";
+      printf("<enum %s.%s>", enumName, variantName);
       break;
     }
     case OBJ_CLASS: {

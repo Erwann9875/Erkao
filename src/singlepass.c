@@ -2625,6 +2625,129 @@ static char* copyTokenLexeme(Token token) {
   return buffer;
 }
 
+typedef struct {
+  char* name;
+  int nameLength;
+  int arity;
+} EnumVariantInfo;
+
+struct EnumInfo {
+  char* name;
+  int nameLength;
+  EnumVariantInfo* variants;
+  int variantCount;
+  int variantCapacity;
+  bool isAdt;
+};
+
+static void enumInfoFree(EnumInfo* info) {
+  if (!info) return;
+  for (int i = 0; i < info->variantCount; i++) {
+    free(info->variants[i].name);
+  }
+  free(info->variants);
+  free(info->name);
+  info->variants = NULL;
+  info->variantCount = 0;
+  info->variantCapacity = 0;
+}
+
+static void compilerEnumsFree(Compiler* c) {
+  if (!c || !c->enums) return;
+  for (int i = 0; i < c->enumCount; i++) {
+    enumInfoFree(&c->enums[i]);
+  }
+  free(c->enums);
+  c->enums = NULL;
+  c->enumCount = 0;
+  c->enumCapacity = 0;
+}
+
+static EnumInfo* compilerAddEnum(Compiler* c, Token name) {
+  if (c->enumCount >= c->enumCapacity) {
+    int oldCap = c->enumCapacity;
+    c->enumCapacity = GROW_CAPACITY(oldCap);
+    c->enums = (EnumInfo*)realloc(c->enums, sizeof(EnumInfo) * (size_t)c->enumCapacity);
+    if (!c->enums) {
+      fprintf(stderr, "Out of memory.\n");
+      exit(1);
+    }
+    memset(c->enums + oldCap, 0, sizeof(EnumInfo) * (size_t)(c->enumCapacity - oldCap));
+  }
+  EnumInfo* info = &c->enums[c->enumCount++];
+  info->name = copyTokenLexeme(name);
+  info->nameLength = name.length;
+  info->variants = NULL;
+  info->variantCount = 0;
+  info->variantCapacity = 0;
+  info->isAdt = false;
+  return info;
+}
+
+static EnumInfo* findEnumInfo(Compiler* c, Token name) {
+  for (Compiler* cur = c; cur; cur = cur->enclosing) {
+    for (int i = 0; i < cur->enumCount; i++) {
+      EnumInfo* info = &cur->enums[i];
+      if (info->nameLength != name.length) continue;
+      if (memcmp(info->name, name.start, (size_t)name.length) == 0) {
+        return info;
+      }
+    }
+  }
+  return NULL;
+}
+
+static EnumVariantInfo* enumInfoAddVariant(EnumInfo* info, Token name, int arity) {
+  for (int i = 0; i < info->variantCount; i++) {
+    EnumVariantInfo* existing = &info->variants[i];
+    if (existing->nameLength == name.length &&
+        memcmp(existing->name, name.start, (size_t)name.length) == 0) {
+      return existing;
+    }
+  }
+  if (info->variantCount >= info->variantCapacity) {
+    int oldCap = info->variantCapacity;
+    info->variantCapacity = GROW_CAPACITY(oldCap);
+    info->variants = (EnumVariantInfo*)realloc(info->variants,
+                                               sizeof(EnumVariantInfo) * (size_t)info->variantCapacity);
+    if (!info->variants) {
+      fprintf(stderr, "Out of memory.\n");
+      exit(1);
+    }
+    memset(info->variants + oldCap, 0,
+           sizeof(EnumVariantInfo) * (size_t)(info->variantCapacity - oldCap));
+  }
+  EnumVariantInfo* variant = &info->variants[info->variantCount++];
+  variant->name = copyTokenLexeme(name);
+  variant->nameLength = name.length;
+  variant->arity = arity;
+  return variant;
+}
+
+static EnumVariantInfo* findEnumVariant(EnumInfo* info, Token name) {
+  if (!info) return NULL;
+  for (int i = 0; i < info->variantCount; i++) {
+    EnumVariantInfo* variant = &info->variants[i];
+    if (variant->nameLength != name.length) continue;
+    if (memcmp(variant->name, name.start, (size_t)name.length) == 0) {
+      return variant;
+    }
+  }
+  return NULL;
+}
+
+static int enumVariantIndex(EnumInfo* info, Token name) {
+  if (!info) return -1;
+  for (int i = 0; i < info->variantCount; i++) {
+    EnumVariantInfo* variant = &info->variants[i];
+    if (variant->nameLength != name.length) continue;
+    if (memcmp(variant->name, name.start, (size_t)name.length) == 0) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 static char* parseStringChars(const char* src, int length) {
   if (length < 0) length = 0;
   char* buffer = (char*)malloc((size_t)length + 1);
@@ -3576,6 +3699,12 @@ static void switchStatement(Compiler* c) {
   JumpList endJumps;
   initJumpList(&endJumps);
   int previousJump = -1;
+  bool isMatch = keyword.type == TOKEN_MATCH;
+  EnumInfo* matchEnum = NULL;
+  bool* variantUsed = NULL;
+  int variantUsedCount = 0;
+  bool sawPattern = false;
+  bool hasDefault = false;
 
   while (!check(c, TOKEN_RIGHT_BRACE) && !isAtEnd(c)) {
     if (match(c, TOKEN_CASE)) {
@@ -3584,19 +3713,132 @@ static void switchStatement(Compiler* c) {
         emitByte(c, OP_POP, noToken());
       }
       emitGetVarConstant(c, switchValue);
-      expression(c);
-      Type* caseType = typePop(c);
-      if (switchType && !typeIsAny(switchType) && !typeAssignable(switchType, caseType)) {
-        char expected[64];
-        char got[64];
-        typeToString(switchType, expected, sizeof(expected));
-        typeToString(caseType, got, sizeof(got));
-        typeErrorAt(c, previous(c), "Case type %s does not match %s.", got, expected);
+      bool isPattern = false;
+      Token enumToken;
+      Token variantToken;
+      int bindCount = 0;
+      Token bindTokens[ERK_MAX_ARGS];
+      memset(&enumToken, 0, sizeof(Token));
+      memset(&variantToken, 0, sizeof(Token));
+      if (isMatch && check(c, TOKEN_IDENTIFIER) && checkNext(c, TOKEN_DOT)) {
+        int lookahead = c->current + 2;
+        if (lookahead < c->tokens->count) {
+          Token variantLook = c->tokens->tokens[lookahead];
+          if (variantLook.type == TOKEN_IDENTIFIER) {
+            int afterIndex = lookahead + 1;
+            if (afterIndex < c->tokens->count) {
+              ErkaoTokenType afterType = c->tokens->tokens[afterIndex].type;
+              if (afterType == TOKEN_LEFT_PAREN || afterType == TOKEN_COLON) {
+                isPattern = true;
+              }
+            }
+          }
+        }
       }
-      consume(c, TOKEN_COLON, "Expect ':' after case value.");
-      emitByte(c, OP_EQUAL, keyword);
-      previousJump = emitJump(c, OP_JUMP_IF_FALSE, keyword);
-      emitByte(c, OP_POP, noToken());
+
+      if (isPattern) {
+        enumToken = advance(c);
+        advance(c);
+        variantToken = consume(c, TOKEN_IDENTIFIER, "Expect enum variant name.");
+        EnumInfo* info = findEnumInfo(c, enumToken);
+        if (!info) {
+          errorAt(c, enumToken, "Unknown enum in match pattern.");
+        } else if (!info->isAdt) {
+          errorAt(c, enumToken, "Enum does not support payload patterns.");
+        }
+        if (!matchEnum && info) {
+          matchEnum = info;
+          variantUsedCount = info->variantCount;
+          if (variantUsedCount > 0) {
+            variantUsed = (bool*)calloc((size_t)variantUsedCount, sizeof(bool));
+            if (!variantUsed) {
+              fprintf(stderr, "Out of memory.\n");
+              exit(1);
+            }
+          }
+        } else if (info && matchEnum && info != matchEnum) {
+          errorAt(c, enumToken, "Match patterns must use a single enum.");
+        }
+
+        Token openParen;
+        memset(&openParen, 0, sizeof(Token));
+        if (match(c, TOKEN_LEFT_PAREN)) {
+          openParen = previous(c);
+          if (!check(c, TOKEN_RIGHT_PAREN)) {
+            do {
+              if (bindCount >= ERK_MAX_ARGS) {
+                errorAtCurrent(c, "Too many pattern bindings.");
+              }
+              bindTokens[bindCount++] =
+                  consume(c, TOKEN_IDENTIFIER, "Expect binding name.");
+            } while (match(c, TOKEN_COMMA));
+          }
+          consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after match pattern.", openParen);
+        }
+
+        EnumVariantInfo* variantInfo = info ? findEnumVariant(info, variantToken) : NULL;
+        if (!variantInfo && info) {
+          errorAt(c, variantToken, "Unknown enum variant.");
+        } else if (variantInfo && variantInfo->arity != bindCount) {
+          char message[96];
+          snprintf(message, sizeof(message),
+                   "Pattern expects %d bindings but got %d.",
+                   variantInfo->arity, bindCount);
+          errorAt(c, variantToken, message);
+        }
+
+        consume(c, TOKEN_COLON, "Expect ':' after case value.");
+        int enumIdx = emitStringConstant(c, enumToken);
+        int variantIdx = emitStringConstant(c, variantToken);
+        emitByte(c, OP_MATCH_ENUM, keyword);
+        emitShort(c, (uint16_t)enumIdx, keyword);
+        emitShort(c, (uint16_t)variantIdx, keyword);
+        previousJump = emitJump(c, OP_JUMP_IF_FALSE, keyword);
+        emitByte(c, OP_POP, noToken());
+
+        if (variantUsed && variantInfo) {
+          int variantIndex = enumVariantIndex(matchEnum, variantToken);
+          if (variantIndex >= 0 && variantIndex < variantUsedCount) {
+            variantUsed[variantIndex] = true;
+          }
+        }
+        sawPattern = true;
+
+        if (bindCount > 0) {
+          ObjString* valuesKey = copyStringWithLength(c->vm, "_values", 7);
+          for (int i = 0; i < bindCount; i++) {
+            Token bind = bindTokens[i];
+            if (bind.length == 1 && bind.start[0] == '_') {
+              continue;
+            }
+            emitGetVarConstant(c, switchValue);
+            emitConstant(c, OBJ_VAL(valuesKey), bind);
+            emitByte(c, OP_GET_INDEX, bind);
+            emitConstant(c, NUMBER_VAL((double)i), bind);
+            emitByte(c, OP_GET_INDEX, bind);
+            int nameIdx = emitStringConstant(c, bind);
+            emitByte(c, OP_DEFINE_VAR, bind);
+            emitShort(c, (uint16_t)nameIdx, bind);
+            if (typecheckEnabled(c)) {
+              typeDefine(c, bind, typeAny(), true);
+            }
+          }
+        }
+      } else {
+        expression(c);
+        Type* caseType = typePop(c);
+        if (switchType && !typeIsAny(switchType) && !typeAssignable(switchType, caseType)) {
+          char expected[64];
+          char got[64];
+          typeToString(switchType, expected, sizeof(expected));
+          typeToString(caseType, got, sizeof(got));
+          typeErrorAt(c, previous(c), "Case type %s does not match %s.", got, expected);
+        }
+        consume(c, TOKEN_COLON, "Expect ':' after case value.");
+        emitByte(c, OP_EQUAL, keyword);
+        previousJump = emitJump(c, OP_JUMP_IF_FALSE, keyword);
+        emitByte(c, OP_POP, noToken());
+      }
 
       while (!check(c, TOKEN_CASE) && !check(c, TOKEN_DEFAULT) &&
              !check(c, TOKEN_RIGHT_BRACE) && !isAtEnd(c)) {
@@ -3605,6 +3847,7 @@ static void switchStatement(Compiler* c) {
       int endJump = emitJump(c, OP_JUMP, keyword);
       writeJumpList(&endJumps, endJump);
     } else if (match(c, TOKEN_DEFAULT)) {
+      hasDefault = true;
       if (previousJump != -1) {
         patchJump(c, previousJump, keyword);
         emitByte(c, OP_POP, noToken());
@@ -3622,6 +3865,19 @@ static void switchStatement(Compiler* c) {
     }
   }
 
+  if (isMatch && sawPattern && matchEnum && !hasDefault) {
+    bool missing = false;
+    for (int i = 0; i < variantUsedCount; i++) {
+      if (!variantUsed[i]) {
+        missing = true;
+        break;
+      }
+    }
+    if (missing) {
+      errorAt(c, keyword, "Non-exhaustive match. Add missing enum cases or 'default'.");
+    }
+  }
+
   if (previousJump != -1) {
     patchJump(c, previousJump, keyword);
     emitByte(c, OP_POP, noToken());
@@ -3635,6 +3891,7 @@ static void switchStatement(Compiler* c) {
   freeJumpList(&endJumps);
   freeJumpList(&ctx.breaks);
   freeJumpList(&ctx.continues);
+  free(variantUsed);
 
   emitByte(c, OP_END_SCOPE, noToken());
   c->scopeDepth--;
@@ -4099,21 +4356,46 @@ static void enumDeclaration(Compiler* c, bool isExport) {
   Token name = consume(c, TOKEN_IDENTIFIER, "Expect enum name.");
   Token openBrace = consume(c, TOKEN_LEFT_BRACE, "Expect '{' before enum body.");
 
-  emitByte(c, OP_MAP, noToken());
-  emitShort(c, 0, noToken());
-  int sizeOffset = c->chunk->count - 2;
-  int count = 0;
-  double nextValue = 0.0;
+  EnumInfo* enumInfo = compilerAddEnum(c, name);
+
+  typedef struct {
+    Token name;
+    int arity;
+    bool hasPayload;
+    bool hasValue;
+    double value;
+  } EnumVariantTemp;
+
+  EnumVariantTemp* variants = NULL;
+  int variantCount = 0;
+  int variantCapacity = 0;
+  bool anyPayload = false;
+  bool anyValue = false;
 
   if (!check(c, TOKEN_RIGHT_BRACE)) {
     do {
       Token member = consume(c, TOKEN_IDENTIFIER, "Expect enum member name.");
-      char* memberName = copyTokenLexeme(member);
-      ObjString* keyStr = takeStringWithLength(c->vm, memberName, member.length);
-      emitConstant(c, OBJ_VAL(keyStr), member);
+      int arity = 0;
+      bool hasPayload = false;
+      if (match(c, TOKEN_LEFT_PAREN)) {
+        Token openParen = previous(c);
+        hasPayload = true;
+        if (!check(c, TOKEN_RIGHT_PAREN)) {
+          do {
+            consume(c, TOKEN_IDENTIFIER, "Expect payload name.");
+            arity++;
+          } while (match(c, TOKEN_COMMA));
+        }
+        consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after enum payload.", openParen);
+      }
 
-      double value = nextValue;
+      bool hasValue = false;
+      double value = 0.0;
       if (match(c, TOKEN_EQUAL)) {
+        if (hasPayload) {
+          errorAt(c, member, "Enum variants with payloads cannot have explicit values.");
+        }
+        hasValue = true;
         bool negative = false;
         if (match(c, TOKEN_MINUS)) {
           negative = true;
@@ -4121,21 +4403,81 @@ static void enumDeclaration(Compiler* c, bool isExport) {
         Token numToken = consume(c, TOKEN_NUMBER, "Expect number after '='.");
         value = parseNumberToken(numToken);
         if (negative) value = -value;
-        nextValue = value + 1.0;
-      } else {
-        nextValue = value + 1.0;
       }
 
-      emitConstant(c, NUMBER_VAL(value), member);
-      emitByte(c, OP_MAP_SET, member);
-      count++;
+      if (variantCount >= variantCapacity) {
+        int oldCap = variantCapacity;
+        variantCapacity = GROW_CAPACITY(oldCap);
+        variants = (EnumVariantTemp*)realloc(variants,
+                                             sizeof(EnumVariantTemp) * (size_t)variantCapacity);
+        if (!variants) {
+          fprintf(stderr, "Out of memory.\n");
+          exit(1);
+        }
+        memset(variants + oldCap, 0,
+               sizeof(EnumVariantTemp) * (size_t)(variantCapacity - oldCap));
+      }
+      variants[variantCount++] = (EnumVariantTemp){
+        member,
+        arity,
+        hasPayload,
+        hasValue,
+        value
+      };
+      if (hasPayload) anyPayload = true;
+      if (hasValue) anyValue = true;
     } while (match(c, TOKEN_COMMA));
   }
 
   consumeClosing(c, TOKEN_RIGHT_BRACE, "Expect '}' after enum body.", openBrace);
 
-  c->chunk->code[sizeOffset] = (uint8_t)((count >> 8) & 0xff);
-  c->chunk->code[sizeOffset + 1] = (uint8_t)(count & 0xff);
+  if (anyPayload && anyValue) {
+    errorAt(c, name, "Enums with payloads cannot use explicit numeric values.");
+  }
+
+  emitByte(c, OP_MAP, noToken());
+  emitShort(c, (uint16_t)variantCount, noToken());
+  int sizeOffset = c->chunk->count - 2;
+
+  if (!anyPayload) {
+    double nextValue = 0.0;
+    for (int i = 0; i < variantCount; i++) {
+      Token member = variants[i].name;
+      enumInfoAddVariant(enumInfo, member, 0);
+      char* memberName = copyTokenLexeme(member);
+      ObjString* keyStr = takeStringWithLength(c->vm, memberName, member.length);
+      emitConstant(c, OBJ_VAL(keyStr), member);
+
+      double value = variants[i].hasValue ? variants[i].value : nextValue;
+      nextValue = value + 1.0;
+
+      emitConstant(c, NUMBER_VAL(value), member);
+      emitByte(c, OP_MAP_SET, member);
+    }
+  } else {
+    enumInfo->isAdt = true;
+    char* enumNameChars = copyTokenLexeme(name);
+    ObjString* enumNameStr = takeStringWithLength(c->vm, enumNameChars, name.length);
+    for (int i = 0; i < variantCount; i++) {
+      Token member = variants[i].name;
+      int arity = variants[i].arity;
+      enumInfoAddVariant(enumInfo, member, arity);
+      char* memberName = copyTokenLexeme(member);
+      ObjString* keyStr = takeStringWithLength(c->vm, memberName, member.length);
+      emitConstant(c, OBJ_VAL(keyStr), member);
+      if (arity == 0) {
+        ObjMap* value = newEnumVariant(c->vm, enumNameStr, keyStr, 0, NULL);
+        emitConstant(c, OBJ_VAL(value), member);
+      } else {
+        ObjEnumCtor* ctor = newEnumCtor(c->vm, enumNameStr, keyStr, arity);
+        emitConstant(c, OBJ_VAL(ctor), member);
+      }
+      emitByte(c, OP_MAP_SET, member);
+    }
+  }
+
+  c->chunk->code[sizeOffset] = (uint8_t)((variantCount >> 8) & 0xff);
+  c->chunk->code[sizeOffset + 1] = (uint8_t)(variantCount & 0xff);
 
   int nameIdx = emitStringConstant(c, name);
   emitByte(c, OP_DEFINE_VAR, name);
@@ -4145,6 +4487,7 @@ static void enumDeclaration(Compiler* c, bool isExport) {
     emitShort(c, (uint16_t)nameIdx, name);
   }
   emitGc(c);
+  free(variants);
 }
 
 typedef struct {
@@ -4530,6 +4873,9 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
   fnCompiler.pendingOptionalCall = false;
   fnCompiler.breakContext = NULL;
   fnCompiler.enclosing = c;
+  fnCompiler.enums = NULL;
+  fnCompiler.enumCount = 0;
+  fnCompiler.enumCapacity = 0;
 
   TypeChecker fnTypeChecker;
   typeCheckerInit(&fnTypeChecker, c->typecheck,
@@ -4604,6 +4950,7 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
   free(typeParams);
 
   typeCheckerFree(&fnTypeChecker);
+  compilerEnumsFree(&fnCompiler);
 
   if (fnCompiler.hadError) {
     c->hadError = true;
@@ -4643,6 +4990,9 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
     c.breakContext = NULL;
     c.enclosing = NULL;
     c.typecheck = &typecheck;
+    c.enums = NULL;
+    c.enumCount = 0;
+    c.enumCapacity = 0;
     vm->compiler = &c;
     gTypeRegistry = &registry;
     typeDefineStdlib(&c);
@@ -4659,11 +5009,13 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
 
     *hadError = c.hadError;
     if (c.hadError) {
+      compilerEnumsFree(&c);
       typeCheckerFree(&typecheck);
       typeRegistryFree(&registry);
       return NULL;
     }
     optimizeChunk(vm, chunk);
+    compilerEnumsFree(&c);
     typeCheckerFree(&typecheck);
     typeRegistryFree(&registry);
     return function;

@@ -25,6 +25,7 @@ typedef struct BreakContext {
 } BreakContext;
 
 typedef struct TypeChecker TypeChecker;
+typedef struct EnumInfo EnumInfo;
 
 typedef struct Compiler {
   VM* vm;
@@ -41,6 +42,9 @@ typedef struct Compiler {
   BreakContext* breakContext;
   struct Compiler* enclosing;
   TypeChecker* typecheck;
+  EnumInfo* enums;
+  int enumCount;
+  int enumCapacity;
 } Compiler;
 
 ObjFunction* compile(VM* vm, const TokenArray* tokens, const char* source,

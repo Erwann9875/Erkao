@@ -1,0 +1,13 @@
+enum Result { Ok(value), Err(message) }
+
+fun describe(result) {
+  match (result) {
+    case Result.Ok(value):
+      print("ok", value);
+    case Result.Err(message):
+      print("err", message);
+  }
+}
+
+describe(Result.Ok(42));
+describe(Result.Err("oops"));

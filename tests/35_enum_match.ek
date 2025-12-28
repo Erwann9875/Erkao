@@ -1,0 +1,25 @@
+enum Option { Some(value), None }
+enum Shape { Point(x, y) }
+
+let a = Option.Some(1);
+let b = Option.None;
+let p = Shape.Point(3, 4);
+
+match (a) {
+  case Option.Some(x):
+    print("some", x);
+  case Option.None:
+    print("none");
+}
+
+match (b) {
+  case Option.Some(x):
+    print("some", x);
+  case Option.None:
+    print("none");
+}
+
+match (p) {
+  case Shape.Point(x, y):
+    print("point", x, y);
+}

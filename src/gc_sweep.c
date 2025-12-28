@@ -24,6 +24,9 @@ void freeObject(VM* vm, Obj* object) {
     case OBJ_NATIVE:
       free(object);
       return;
+    case OBJ_ENUM_CTOR:
+      free(object);
+      return;
     case OBJ_CLASS:
       free(object);
       return;
