@@ -513,6 +513,10 @@ TokenArray scanTokens(const char* source, const char* path, bool* hadError) {
   TokenArray array;
   initTokenArray(&array);
 
+#ifdef ERKAO_FUZZING
+  (void)path;
+#endif
+
   *hadError = false;
 
   for (;;) {
