@@ -18,5 +18,6 @@ void gcRememberObjectIfYoungRefs(VM* vm, Obj* object);
 void gcMaybe(VM* vm);
 void gcCollect(VM* vm);
 void freeObject(VM* vm, Obj* object);
+size_t gcTotalHeapBytes(const VM* vm);
 
 #endif

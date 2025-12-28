@@ -74,6 +74,11 @@ struct VM {
   size_t gcLogBeforeOld;
   size_t gcLogBeforeEnv;
   bool gcLogFullActive;
+  size_t maxHeapBytes;
+  uint64_t instructionBudget;
+  uint64_t instructionCount;
+  int maxFrames;
+  int maxStackSlots;
   bool hadError;
   bool debugBytecode;
   bool typecheck;

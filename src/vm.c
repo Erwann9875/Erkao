@@ -5,6 +5,7 @@
 #include "program.h"
 
 #include <ctype.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,6 +27,59 @@ static bool envFlagEnabled(const char* name) {
     return false;
   }
 
+  return true;
+}
+
+static bool parseUint64Value(const char* value, uint64_t* out) {
+  if (!value || !out) return false;
+  char* end = NULL;
+  unsigned long long parsed = strtoull(value, &end, 10);
+  if (end == value) return false;
+  while (*end && isspace((unsigned char)*end)) end++;
+  if (*end != '\0') return false;
+  *out = (uint64_t)parsed;
+  return true;
+}
+
+static bool parseIntValue(const char* value, int* out) {
+  if (!value || !out) return false;
+  char* end = NULL;
+  long parsed = strtol(value, &end, 10);
+  if (end == value) return false;
+  while (*end && isspace((unsigned char)*end)) end++;
+  if (*end != '\0') return false;
+  if (parsed <= 0) return false;
+  if (parsed > INT_MAX) parsed = INT_MAX;
+  *out = (int)parsed;
+  return true;
+}
+
+static bool parseSizeValue(const char* value, size_t* out) {
+  if (!value || !out) return false;
+  char* end = NULL;
+  unsigned long long parsed = strtoull(value, &end, 10);
+  if (end == value) return false;
+  while (*end && isspace((unsigned char)*end)) end++;
+  unsigned long long multiplier = 1;
+  if (*end != '\0') {
+    char suffix = (char)tolower((unsigned char)*end);
+    if (suffix == 'k') {
+      multiplier = 1024ULL;
+    } else if (suffix == 'm') {
+      multiplier = 1024ULL * 1024ULL;
+    } else if (suffix == 'g') {
+      multiplier = 1024ULL * 1024ULL * 1024ULL;
+    } else {
+      return false;
+    }
+    if (end[1] != '\0') return false;
+  }
+  unsigned long long maxValue = (unsigned long long)SIZE_MAX;
+  if (parsed > maxValue / multiplier) {
+    *out = SIZE_MAX;
+    return true;
+  }
+  *out = (size_t)(parsed * multiplier);
   return true;
 }
 
@@ -241,6 +295,11 @@ void vmInit(VM* vm) {
   vm->gcLogBeforeOld = 0;
   vm->gcLogBeforeEnv = 0;
   vm->gcLogFullActive = false;
+  vm->maxHeapBytes = 0;
+  vm->instructionBudget = 0;
+  vm->instructionCount = 0;
+  vm->maxFrames = FRAMES_MAX;
+  vm->maxStackSlots = STACK_MAX;
   vm->hadError = false;
   vm->debugBytecode = false;
   vm->typecheck = false;
@@ -256,6 +315,37 @@ void vmInit(VM* vm) {
   vm->args = newArray(vm);
   vm->modules = newMap(vm);
   vm->strings = newMap(vm);
+
+  {
+    const char* value = getenv("ERKAO_INSTR_BUDGET");
+    uint64_t budget = 0;
+    if (parseUint64Value(value, &budget) && budget > 0) {
+      vm->instructionBudget = budget;
+    }
+  }
+  {
+    const char* value = getenv("ERKAO_MAX_HEAP");
+    size_t bytes = 0;
+    if (parseSizeValue(value, &bytes) && bytes > 0) {
+      vm->maxHeapBytes = bytes;
+    }
+  }
+  {
+    const char* value = getenv("ERKAO_MAX_FRAMES");
+    int limit = 0;
+    if (parseIntValue(value, &limit)) {
+      if (limit > FRAMES_MAX) limit = FRAMES_MAX;
+      vm->maxFrames = limit;
+    }
+  }
+  {
+    const char* value = getenv("ERKAO_MAX_STACK");
+    int limit = 0;
+    if (parseIntValue(value, &limit)) {
+      if (limit > STACK_MAX) limit = STACK_MAX;
+      vm->maxStackSlots = limit;
+    }
+  }
 
   loadEnvModulePaths(vm);
   defineStdlib(vm);

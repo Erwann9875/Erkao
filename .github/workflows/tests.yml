@@ -70,3 +70,52 @@ jobs:
         env:
           ERKAO_HTTP_TEST: "1"
         run: bash ./scripts/unix/run-tests.sh
+
+  sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install curl (Linux)
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
+
+      - name: Configure (ASAN/UBSAN)
+        run: cmake -S . -B build-sanitize -DERKAO_GRAPHICS=OFF -DERKAO_SANITIZERS=ON -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=clang
+
+      - name: Build (ASAN/UBSAN)
+        run: cmake --build build-sanitize
+
+      - name: Setup scripts (Linux)
+        run: bash ./scripts/unix/setup.sh
+
+      - name: Run tests (ASAN/UBSAN)
+        env:
+          ERKAO_HTTP_TEST: "1"
+        run: bash ./scripts/unix/run-tests.sh --exe build-sanitize/erkao
+
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install curl (Linux)
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
+
+      - name: Configure (fuzz)
+        run: cmake -S . -B build-fuzz -DERKAO_GRAPHICS=OFF -DERKAO_FUZZ=ON -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=clang
+
+      - name: Build (fuzz)
+        run: cmake --build build-fuzz
+
+      - name: Run fuzzers
+        run: |
+          ./build-fuzz/erkao_fuzz_lexer -max_total_time=20 -timeout=2
+          ./build-fuzz/erkao_fuzz_parser -max_total_time=20 -timeout=2
+          ./build-fuzz/erkao_fuzz_runtime -max_total_time=20 -timeout=2

@@ -651,3 +651,7 @@ See `examples/plugins/hello_plugin.c` and `examples/plugins/hello_plugin.ek`.
 - HTTP tests run by default and use the built-in HTTP server; set `ERKAO_HTTP_TEST=0` to skip.
 - `ERKAO_PATH` adds module search paths (separated by `;` on Windows, `:` elsewhere).
 - `ERKAO_PACKAGES` overrides the global packages directory.
+- `ERKAO_INSTR_BUDGET` sets a per-run instruction cap (e.g. `100000`).
+- `ERKAO_MAX_HEAP` sets a heap limit in bytes (supports `K`, `M`, `G` suffixes).
+- `ERKAO_MAX_FRAMES` caps call stack depth (max `64`).
+- `ERKAO_MAX_STACK` caps value stack slots (max `16384`).

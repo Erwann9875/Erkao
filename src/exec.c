@@ -337,7 +337,7 @@ static bool beginModuleImport(VM* vm, CallFrame** frame, ObjString* pathString,
   mapSet(vm->modules, key, OBJ_VAL(moduleInstance));
 
   push(vm, OBJ_VAL(moduleFunction));
-  if (vm->frameCount == FRAMES_MAX) {
+  if (vm->frameCount == vm->maxFrames) {
     Token token;
     memset(&token, 0, sizeof(Token));
     runtimeError(vm, token, "Stack overflow.");
@@ -447,7 +447,7 @@ static bool callFunction(VM* vm, ObjFunction* function, Value receiver,
     return false;
   }
 
-  if (vm->frameCount == FRAMES_MAX) {
+  if (vm->frameCount == vm->maxFrames) {
     Token token;
     memset(&token, 0, sizeof(Token));
     runtimeError(vm, token, "Stack overflow.");
@@ -611,6 +611,11 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
 
   for (;;) {
     uint8_t instruction = READ_BYTE();
+    vm->instructionCount++;
+    if (vm->instructionBudget > 0 && vm->instructionCount > vm->instructionBudget) {
+      runtimeError(vm, currentToken(frame), "Instruction budget exceeded.");
+      return false;
+    }
     size_t instructionOffset = (size_t)(frame->ip - frame->function->chunk->code - 1);
     InlineCache* cache = NULL;
     if (frame->function->chunk->caches &&
@@ -1371,6 +1376,26 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
         gcMaybe(vm);
         break;
     }
+
+    if (vm->hadError) return false;
+    if (vm->maxStackSlots > 0) {
+      size_t stackUsed = (size_t)(vm->stackTop - vm->stack);
+      if (stackUsed > (size_t)vm->maxStackSlots) {
+        runtimeError(vm, currentToken(frame), "Stack limit exceeded.");
+        return false;
+      }
+    }
+    if (vm->maxHeapBytes > 0) {
+      size_t heapUsed = gcTotalHeapBytes(vm);
+      if (heapUsed > vm->maxHeapBytes) {
+        gcCollect(vm);
+        heapUsed = gcTotalHeapBytes(vm);
+        if (heapUsed > vm->maxHeapBytes) {
+          runtimeError(vm, currentToken(frame), "Heap limit exceeded.");
+          return false;
+        }
+      }
+    }
   }
 
 #undef READ_BYTE
@@ -1379,7 +1404,7 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
 }
 
 static bool callScript(VM* vm, ObjFunction* function) {
-  if (vm->frameCount == FRAMES_MAX) {
+  if (vm->frameCount == vm->maxFrames) {
     Token token;
     memset(&token, 0, sizeof(Token));
     runtimeError(vm, token, "Stack overflow.");
@@ -1408,6 +1433,7 @@ static bool callScript(VM* vm, ObjFunction* function) {
 
 bool interpret(VM* vm, Program* program) {
   vm->hadError = false;
+  vm->instructionCount = 0;
   Program* previousProgram = vm->currentProgram;
   vm->currentProgram = program;
   programRunBegin(program);

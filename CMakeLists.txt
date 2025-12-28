@@ -5,9 +5,10 @@ set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 option(ERKAO_GRAPHICS "Enable graphics module (requires SDL2)" ON)
+option(ERKAO_SANITIZERS "Enable ASAN/UBSAN" OFF)
+option(ERKAO_FUZZ "Build libFuzzer targets" OFF)
 
-add_executable(erkao
-  src/main.c
+set(ERKAO_CORE_SOURCES
   src/lexer.c
   src/singlepass.c
   src/value.c
@@ -28,10 +29,17 @@ add_executable(erkao
   src/tooling.c
 )
 
-target_include_directories(erkao PRIVATE
+add_executable(erkao
+  src/main.c
+  ${ERKAO_CORE_SOURCES}
+)
+
+set(ERKAO_INCLUDE_DIRS
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+
+target_include_directories(erkao PRIVATE ${ERKAO_INCLUDE_DIRS})
 
 if(ERKAO_GRAPHICS)
   if(WIN32)
@@ -83,14 +91,56 @@ if(NOT ERKAO_GRAPHICS)
   target_compile_definitions(erkao PRIVATE ERKAO_HAS_GRAPHICS=0)
 endif()
 
-if(WIN32)
-  target_link_libraries(erkao winhttp ws2_32)
-else()
-  find_package(CURL REQUIRED)
-  if(TARGET CURL::libcurl)
-    target_link_libraries(erkao dl m CURL::libcurl)
+function(erkao_link_libs target)
+  if(WIN32)
+    target_link_libraries(${target} winhttp ws2_32)
   else()
-    target_include_directories(erkao PRIVATE ${CURL_INCLUDE_DIRS})
-    target_link_libraries(erkao dl m ${CURL_LIBRARIES})
+    find_package(CURL REQUIRED)
+    if(TARGET CURL::libcurl)
+      target_link_libraries(${target} dl m CURL::libcurl)
+    else()
+      target_include_directories(${target} PRIVATE ${CURL_INCLUDE_DIRS})
+      target_link_libraries(${target} dl m ${CURL_LIBRARIES})
+    endif()
   endif()
+endfunction()
+
+erkao_link_libs(erkao)
+
+if(ERKAO_SANITIZERS)
+  if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(erkao PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+    target_link_options(erkao PRIVATE -fsanitize=address,undefined)
+  else()
+    message(WARNING "ERKAO_SANITIZERS is only supported with Clang/GCC.")
+  endif()
+endif()
+
+if(ERKAO_FUZZ)
+  if(NOT CMAKE_C_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "ERKAO_FUZZ requires clang and libFuzzer.")
+  endif()
+
+  set(ERKAO_FUZZ_FLAGS -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer)
+
+  add_executable(erkao_fuzz_lexer fuzz/fuzz_lexer.c ${ERKAO_CORE_SOURCES})
+  target_include_directories(erkao_fuzz_lexer PRIVATE ${ERKAO_INCLUDE_DIRS})
+  target_compile_definitions(erkao_fuzz_lexer PRIVATE ERKAO_HAS_GRAPHICS=0)
+  target_compile_options(erkao_fuzz_lexer PRIVATE ${ERKAO_FUZZ_FLAGS})
+  target_link_options(erkao_fuzz_lexer PRIVATE ${ERKAO_FUZZ_FLAGS})
+  erkao_link_libs(erkao_fuzz_lexer)
+
+  add_executable(erkao_fuzz_parser fuzz/fuzz_parser.c ${ERKAO_CORE_SOURCES})
+  target_include_directories(erkao_fuzz_parser PRIVATE ${ERKAO_INCLUDE_DIRS})
+  target_compile_definitions(erkao_fuzz_parser PRIVATE ERKAO_HAS_GRAPHICS=0)
+  target_compile_options(erkao_fuzz_parser PRIVATE ${ERKAO_FUZZ_FLAGS})
+  target_link_options(erkao_fuzz_parser PRIVATE ${ERKAO_FUZZ_FLAGS})
+  erkao_link_libs(erkao_fuzz_parser)
+
+  add_executable(erkao_fuzz_runtime fuzz/fuzz_runtime.c ${ERKAO_CORE_SOURCES})
+  target_include_directories(erkao_fuzz_runtime PRIVATE ${ERKAO_INCLUDE_DIRS})
+  target_compile_definitions(erkao_fuzz_runtime PRIVATE ERKAO_HAS_GRAPHICS=0)
+  target_compile_options(erkao_fuzz_runtime PRIVATE ${ERKAO_FUZZ_FLAGS})
+  target_link_options(erkao_fuzz_runtime PRIVATE ${ERKAO_FUZZ_FLAGS})
+  erkao_link_libs(erkao_fuzz_runtime)
 endif()
