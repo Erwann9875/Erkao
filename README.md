@@ -315,6 +315,9 @@ print(greet(name));
 - Imports: `import "path/to/file.ek" as name;`, `import name from "path";`, `import * as name from "path";`
 - Functions: `fun name(a, b) { return a + b; }`
 - Type hints: `let total: number = 3;`, `fun greet(name: string): string { ... }`
+- Generic functions: `fun id<T>(value: T): T { return value; }`
+- Interfaces: `interface Greeter { fun greet(name: string): string; }`
+- Implements: `class ConsoleGreeter implements Greeter { fun greet(name: string): string { ... } }`
 - Classes: `class Name { fun init(...) { ... } fun method(...) { ... } }`
 - Arrays: `[1, 2, 3]`, indexing with `arr[0]`
 - Maps: `{ key: value, "other": value }`, indexing with `map["key"]`
@@ -337,7 +340,7 @@ fun greet(name: string): string {
 ```
 
 Supported types: `number`, `string`, `bool`, `null`/`void`, `any`,
-`array<T>`, `map<K, V>`, and class names.
+`array<T>`, `map<K, V>`, class names, and interface names.
 
 ## Imports
 

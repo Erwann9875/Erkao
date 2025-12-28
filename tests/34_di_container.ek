@@ -1,0 +1,15 @@
+interface Greeter {
+  fun greet(name: string): string;
+}
+
+class ConsoleGreeter implements Greeter {
+  fun greet(name: string): string { return "Hello " + name; }
+}
+
+let c = di.container();
+di.bind(c, "greeter", fun() { return ConsoleGreeter(); });
+let g = di.resolve(c, "greeter");
+print(g.greet("Erkao"));
+
+di.value(c, "answer", 42);
+print(di.resolve(c, "answer"));

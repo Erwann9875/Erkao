@@ -227,15 +227,23 @@ static ErkaoTokenType identifierType(Scanner* scanner) {
         }
       }
       break;
-    case 'i':
-      if ((int)(scanner->current - scanner->start) > 1) {
-        switch (scanner->start[1]) {
-          case 'f': return checkKeyword(scanner, 1, 1, "f", TOKEN_IF);
-          case 'm': return checkKeyword(scanner, 2, 4, "port", TOKEN_IMPORT);
-          case 'n': return checkKeyword(scanner, 1, 1, "n", TOKEN_IN);
+      case 'i':
+        if ((int)(scanner->current - scanner->start) > 1) {
+          switch (scanner->start[1]) {
+            case 'f': return checkKeyword(scanner, 1, 1, "f", TOKEN_IF);
+            case 'm': {
+              ErkaoTokenType type = checkKeyword(scanner, 2, 4, "port", TOKEN_IMPORT);
+              if (type != TOKEN_IDENTIFIER) return type;
+              return checkKeyword(scanner, 1, 9, "mplements", TOKEN_IMPLEMENTS);
+            }
+            case 'n': {
+              ErkaoTokenType type = checkKeyword(scanner, 1, 1, "n", TOKEN_IN);
+              if (type != TOKEN_IDENTIFIER) return type;
+              return checkKeyword(scanner, 1, 8, "nterface", TOKEN_INTERFACE);
+            }
+          }
         }
-      }
-      return TOKEN_IDENTIFIER;
+        return TOKEN_IDENTIFIER;
     case 'l':
       return checkKeyword(scanner, 1, 2, "et", TOKEN_LET);
     case 'm':
@@ -568,6 +576,8 @@ const char* tokenTypeName(ErkaoTokenType type) {
     case TOKEN_FUN: return "FUN";
     case TOKEN_IF: return "IF";
     case TOKEN_IMPORT: return "IMPORT";
+    case TOKEN_IMPLEMENTS: return "IMPLEMENTS";
+    case TOKEN_INTERFACE: return "INTERFACE";
     case TOKEN_MATCH: return "MATCH";
     case TOKEN_NULL: return "NULL";
     case TOKEN_OR: return "OR";

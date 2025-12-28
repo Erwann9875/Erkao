@@ -1,0 +1,16 @@
+interface Greeter {
+  fun greet(name: string): string;
+}
+
+class BadGreeter implements Greeter {
+  fun greet(name: number): string { return "bad"; }
+}
+
+fun id<T>(value: T): T {
+  return value;
+}
+
+let bad: number = id("oops");
+
+fun use<T: Greeter>(g: T) { }
+use(123);

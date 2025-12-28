@@ -565,7 +565,9 @@ static const KeywordEntry keywordEntries[] = {
   {TOKEN_FUN, "fun"},
   {TOKEN_IF, "if"},
   {TOKEN_IMPORT, "import"},
+  {TOKEN_IMPLEMENTS, "implements"},
   {TOKEN_IN, "in"},
+  {TOKEN_INTERFACE, "interface"},
   {TOKEN_LET, "let"},
   {TOKEN_MATCH, "match"},
   {TOKEN_NULL, "null"},
@@ -635,7 +637,9 @@ static const char* tokenDescription(ErkaoTokenType type) {
     case TOKEN_FUN: return "'fun'";
     case TOKEN_IF: return "'if'";
     case TOKEN_IMPORT: return "'import'";
+    case TOKEN_IMPLEMENTS: return "'implements'";
     case TOKEN_IN: return "'in'";
+    case TOKEN_INTERFACE: return "'interface'";
     case TOKEN_LET: return "'let'";
     case TOKEN_MATCH: return "'match'";
     case TOKEN_NULL: return "'null'";
@@ -960,61 +964,131 @@ static void freeJumpList(JumpList* list) {
   initJumpList(list);
 }
 
-typedef enum {
-  TYPE_ANY,
-  TYPE_UNKNOWN,
-  TYPE_NUMBER,
-  TYPE_STRING,
-  TYPE_BOOL,
-  TYPE_NULL,
-  TYPE_ARRAY,
-  TYPE_MAP,
-  TYPE_NAMED,
-  TYPE_FUNCTION
-} TypeKind;
+  typedef enum {
+    TYPE_ANY,
+    TYPE_UNKNOWN,
+    TYPE_NUMBER,
+    TYPE_STRING,
+    TYPE_BOOL,
+    TYPE_NULL,
+    TYPE_ARRAY,
+    TYPE_MAP,
+    TYPE_NAMED,
+    TYPE_GENERIC,
+    TYPE_FUNCTION
+  } TypeKind;
 
-typedef struct Type {
-  TypeKind kind;
-  ObjString* name;
-  struct Type* elem;
-  struct Type* key;
-  struct Type* value;
-  struct Type** params;
-  int paramCount;
-  struct Type* returnType;
-  bool nullable;
-} Type;
+  typedef struct {
+    ObjString* name;
+    ObjString* constraint;
+  } TypeParam;
 
-typedef struct {
-  ObjString* name;
-  Type* type;
-  bool explicitType;
-  int depth;
-} TypeEntry;
+  typedef struct Type {
+    TypeKind kind;
+    ObjString* name;
+    struct Type* elem;
+    struct Type* key;
+    struct Type* value;
+    struct Type** params;
+    int paramCount;
+    struct Type* returnType;
+    TypeParam* typeParams;
+    int typeParamCount;
+    struct Type** typeArgs;
+    int typeArgCount;
+    bool nullable;
+  } Type;
 
-struct TypeChecker {
-  bool enabled;
-  int errorCount;
-  int scopeDepth;
-  struct TypeChecker* enclosing;
-  TypeEntry* entries;
-  int count;
-  int capacity;
-  Type** stack;
-  int stackCount;
-  int stackCapacity;
-  Type** allocated;
-  int allocatedCount;
-  int allocatedCapacity;
-  Type* currentReturn;
-};
+  typedef struct {
+    ObjString* name;
+    Type* type;
+    bool explicitType;
+    int depth;
+  } TypeEntry;
 
-static Type TYPE_ANY_VALUE = { TYPE_ANY, NULL, NULL, NULL, NULL, NULL, 0, NULL, false };
-static Type TYPE_UNKNOWN_VALUE = { TYPE_UNKNOWN, NULL, NULL, NULL, NULL, NULL, 0, NULL, false };
-static Type TYPE_NUMBER_VALUE = { TYPE_NUMBER, NULL, NULL, NULL, NULL, NULL, 0, NULL, false };
-static Type TYPE_STRING_VALUE = { TYPE_STRING, NULL, NULL, NULL, NULL, NULL, 0, NULL, false };
-static Type TYPE_BOOL_VALUE = { TYPE_BOOL, NULL, NULL, NULL, NULL, NULL, 0, NULL, false };
-static Type TYPE_NULL_VALUE = { TYPE_NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, false };
+  typedef struct {
+    ObjString* name;
+    Type* type;
+  } InterfaceMethod;
+
+  typedef struct {
+    ObjString* name;
+    TypeParam* typeParams;
+    int typeParamCount;
+    InterfaceMethod* methods;
+    int methodCount;
+    int methodCapacity;
+  } InterfaceDef;
+
+  typedef struct {
+    ObjString* name;
+    ObjString** interfaces;
+    int interfaceCount;
+    int interfaceCapacity;
+  } ClassDef;
+
+  typedef struct {
+    InterfaceDef* interfaces;
+    int interfaceCount;
+    int interfaceCapacity;
+    ClassDef* classes;
+    int classCount;
+    int classCapacity;
+  } TypeRegistry;
+
+  typedef struct {
+    ObjString* name;
+    ObjString* constraint;
+    Type* bound;
+  } TypeBinding;
+
+  typedef struct {
+    ObjString* name;
+    Type* type;
+  } ClassMethod;
+
+  static bool typeNamesEqual(ObjString* a, ObjString* b);
+
+  struct TypeChecker {
+    bool enabled;
+    int errorCount;
+    int scopeDepth;
+    struct TypeChecker* enclosing;
+    TypeEntry* entries;
+    int count;
+    int capacity;
+    Type** stack;
+    int stackCount;
+    int stackCapacity;
+    Type** allocated;
+    int allocatedCount;
+    int allocatedCapacity;
+    Type* currentReturn;
+    TypeParam* typeParams;
+    int typeParamCount;
+    int typeParamCapacity;
+  };
+
+  static Type TYPE_ANY_VALUE = { TYPE_ANY, NULL, NULL, NULL, NULL, NULL, 0, NULL,
+                                 NULL, 0, NULL, 0, false };
+  static Type TYPE_UNKNOWN_VALUE = { TYPE_UNKNOWN, NULL, NULL, NULL, NULL, NULL, 0, NULL,
+                                     NULL, 0, NULL, 0, false };
+  static Type TYPE_NUMBER_VALUE = { TYPE_NUMBER, NULL, NULL, NULL, NULL, NULL, 0, NULL,
+                                    NULL, 0, NULL, 0, false };
+  static Type TYPE_STRING_VALUE = { TYPE_STRING, NULL, NULL, NULL, NULL, NULL, 0, NULL,
+                                    NULL, 0, NULL, 0, false };
+  static Type TYPE_BOOL_VALUE = { TYPE_BOOL, NULL, NULL, NULL, NULL, NULL, 0, NULL,
+                                  NULL, 0, NULL, 0, false };
+  static Type TYPE_NULL_VALUE = { TYPE_NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL,
+                                  NULL, 0, NULL, 0, false };
+  static TypeRegistry* gTypeRegistry = NULL;
+
+static Type* typeNamed(TypeChecker* tc, ObjString* name);
+static Type* typeGeneric(TypeChecker* tc, ObjString* name);
+static Type* typeArray(TypeChecker* tc, Type* elem);
+static Type* typeMap(TypeChecker* tc, Type* key, Type* value);
+static Type* typeFunction(TypeChecker* tc, Type** params, int paramCount, Type* returnType);
+static TypeParam* parseTypeParams(Compiler* c, int* outCount);
 
 static bool typecheckEnabled(Compiler* c) {
   return c->typecheck && c->typecheck->enabled;
@@ -1049,44 +1123,226 @@ static Type* typeAlloc(TypeChecker* tc, TypeKind kind) {
   return type;
 }
 
-static void typeCheckerInit(TypeChecker* tc, TypeChecker* enclosing, bool enabled) {
-  tc->enabled = enabled;
-  tc->errorCount = 0;
-  tc->scopeDepth = 0;
-  tc->enclosing = enclosing;
-  tc->entries = NULL;
-  tc->count = 0;
-  tc->capacity = 0;
-  tc->stack = NULL;
-  tc->stackCount = 0;
-  tc->stackCapacity = 0;
-  tc->allocated = NULL;
-  tc->allocatedCount = 0;
-  tc->allocatedCapacity = 0;
-  tc->currentReturn = NULL;
-}
-
-static void typeCheckerFree(TypeChecker* tc) {
-  if (!tc) return;
-  for (int i = 0; i < tc->allocatedCount; i++) {
-    if (tc->allocated[i] && tc->allocated[i]->params) {
-      free(tc->allocated[i]->params);
-    }
-    free(tc->allocated[i]);
+  static void typeCheckerInit(TypeChecker* tc, TypeChecker* enclosing, bool enabled) {
+    tc->enabled = enabled;
+    tc->errorCount = 0;
+    tc->scopeDepth = 0;
+    tc->enclosing = enclosing;
+    tc->entries = NULL;
+    tc->count = 0;
+    tc->capacity = 0;
+    tc->stack = NULL;
+    tc->stackCount = 0;
+    tc->stackCapacity = 0;
+    tc->allocated = NULL;
+    tc->allocatedCount = 0;
+    tc->allocatedCapacity = 0;
+    tc->currentReturn = NULL;
+    tc->typeParams = NULL;
+    tc->typeParamCount = 0;
+    tc->typeParamCapacity = 0;
   }
-  FREE_ARRAY(Type*, tc->allocated, tc->allocatedCapacity);
-  FREE_ARRAY(TypeEntry, tc->entries, tc->capacity);
-  FREE_ARRAY(Type*, tc->stack, tc->stackCapacity);
-  tc->allocated = NULL;
-  tc->allocatedCount = 0;
-  tc->allocatedCapacity = 0;
-  tc->entries = NULL;
-  tc->count = 0;
-  tc->capacity = 0;
-  tc->stack = NULL;
-  tc->stackCount = 0;
-  tc->stackCapacity = 0;
-}
+
+  static void typeCheckerFree(TypeChecker* tc) {
+    if (!tc) return;
+    for (int i = 0; i < tc->allocatedCount; i++) {
+      if (tc->allocated[i]) {
+        if (tc->allocated[i]->params) {
+          free(tc->allocated[i]->params);
+        }
+        if (tc->allocated[i]->typeArgs) {
+          free(tc->allocated[i]->typeArgs);
+        }
+        if (tc->allocated[i]->typeParams) {
+          free(tc->allocated[i]->typeParams);
+        }
+        free(tc->allocated[i]);
+      }
+    }
+    FREE_ARRAY(Type*, tc->allocated, tc->allocatedCapacity);
+    FREE_ARRAY(TypeEntry, tc->entries, tc->capacity);
+    FREE_ARRAY(Type*, tc->stack, tc->stackCapacity);
+    FREE_ARRAY(TypeParam, tc->typeParams, tc->typeParamCapacity);
+    tc->allocated = NULL;
+    tc->allocatedCount = 0;
+    tc->allocatedCapacity = 0;
+    tc->entries = NULL;
+    tc->count = 0;
+    tc->capacity = 0;
+    tc->stack = NULL;
+    tc->stackCount = 0;
+    tc->stackCapacity = 0;
+    tc->typeParams = NULL;
+    tc->typeParamCount = 0;
+    tc->typeParamCapacity = 0;
+  }
+
+  static void typeRegistryInit(TypeRegistry* registry) {
+    registry->interfaces = NULL;
+    registry->interfaceCount = 0;
+    registry->interfaceCapacity = 0;
+    registry->classes = NULL;
+    registry->classCount = 0;
+    registry->classCapacity = 0;
+  }
+
+  static void typeRegistryFree(TypeRegistry* registry) {
+    if (!registry) return;
+    for (int i = 0; i < registry->interfaceCount; i++) {
+      InterfaceDef* def = &registry->interfaces[i];
+      if (def->methods) {
+        free(def->methods);
+        def->methods = NULL;
+      }
+      if (def->typeParams) {
+        free(def->typeParams);
+        def->typeParams = NULL;
+      }
+    }
+    for (int i = 0; i < registry->classCount; i++) {
+      ClassDef* def = &registry->classes[i];
+      if (def->interfaces) {
+        free(def->interfaces);
+        def->interfaces = NULL;
+      }
+    }
+    free(registry->interfaces);
+    free(registry->classes);
+    registry->interfaces = NULL;
+    registry->classes = NULL;
+    registry->interfaceCount = 0;
+    registry->interfaceCapacity = 0;
+    registry->classCount = 0;
+    registry->classCapacity = 0;
+  }
+
+  static InterfaceDef* typeRegistryFindInterface(TypeRegistry* registry, ObjString* name) {
+    if (!registry || !name) return NULL;
+    for (int i = 0; i < registry->interfaceCount; i++) {
+      if (typeNamesEqual(registry->interfaces[i].name, name)) {
+        return &registry->interfaces[i];
+      }
+    }
+    return NULL;
+  }
+
+  static ClassDef* typeRegistryFindClass(TypeRegistry* registry, ObjString* name) {
+    if (!registry || !name) return NULL;
+    for (int i = 0; i < registry->classCount; i++) {
+      if (typeNamesEqual(registry->classes[i].name, name)) {
+        return &registry->classes[i];
+      }
+    }
+    return NULL;
+  }
+
+  static void typeRegistryAddInterface(TypeRegistry* registry, const InterfaceDef* def) {
+    if (!registry || !def) return;
+    if (registry->interfaceCount >= registry->interfaceCapacity) {
+      int oldCap = registry->interfaceCapacity;
+      registry->interfaceCapacity = GROW_CAPACITY(oldCap);
+      registry->interfaces = GROW_ARRAY(InterfaceDef, registry->interfaces,
+                                        oldCap, registry->interfaceCapacity);
+      if (!registry->interfaces) {
+        fprintf(stderr, "Out of memory.\n");
+        exit(1);
+      }
+    }
+    registry->interfaces[registry->interfaceCount++] = *def;
+  }
+
+  static void typeRegistryAddClass(TypeRegistry* registry, ObjString* name,
+                                   ObjString** interfaces, int interfaceCount) {
+    if (!registry || !name) return;
+    ClassDef* existing = typeRegistryFindClass(registry, name);
+    if (existing) {
+      if (existing->interfaces) free(existing->interfaces);
+      existing->interfaces = interfaces;
+      existing->interfaceCount = interfaceCount;
+      existing->interfaceCapacity = interfaceCount;
+      return;
+    }
+    if (registry->classCount >= registry->classCapacity) {
+      int oldCap = registry->classCapacity;
+      registry->classCapacity = GROW_CAPACITY(oldCap);
+      registry->classes = GROW_ARRAY(ClassDef, registry->classes,
+                                     oldCap, registry->classCapacity);
+      if (!registry->classes) {
+        fprintf(stderr, "Out of memory.\n");
+        exit(1);
+      }
+    }
+    ClassDef* def = &registry->classes[registry->classCount++];
+    def->name = name;
+    def->interfaces = interfaces;
+    def->interfaceCount = interfaceCount;
+    def->interfaceCapacity = interfaceCount;
+  }
+
+  static bool typeRegistryClassImplements(TypeRegistry* registry, ObjString* className,
+                                          ObjString* interfaceName) {
+    if (!registry || !className || !interfaceName) return false;
+    ClassDef* def = typeRegistryFindClass(registry, className);
+    if (!def) return false;
+    for (int i = 0; i < def->interfaceCount; i++) {
+      if (typeNamesEqual(def->interfaces[i], interfaceName)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static void typeParamsEnsure(TypeChecker* tc, int needed) {
+    if (!tc) return;
+    if (tc->typeParamCount + needed <= tc->typeParamCapacity) return;
+    int oldCap = tc->typeParamCapacity;
+    while (tc->typeParamCount + needed > tc->typeParamCapacity) {
+      tc->typeParamCapacity = GROW_CAPACITY(tc->typeParamCapacity);
+    }
+    tc->typeParams = GROW_ARRAY(TypeParam, tc->typeParams, oldCap, tc->typeParamCapacity);
+    if (!tc->typeParams) {
+      fprintf(stderr, "Out of memory.\n");
+      exit(1);
+    }
+  }
+
+  static void typeParamsPush(TypeChecker* tc, ObjString* name, ObjString* constraint) {
+    if (!tc || !name) return;
+    typeParamsEnsure(tc, 1);
+    tc->typeParams[tc->typeParamCount].name = name;
+    tc->typeParams[tc->typeParamCount].constraint = constraint;
+    tc->typeParamCount++;
+  }
+
+  static void typeParamsPushList(TypeChecker* tc, const TypeParam* params, int count) {
+    if (!tc || !params || count <= 0) return;
+    typeParamsEnsure(tc, count);
+    for (int i = 0; i < count; i++) {
+      tc->typeParams[tc->typeParamCount++] = params[i];
+    }
+  }
+
+  static void typeParamsTruncate(TypeChecker* tc, int count) {
+    if (!tc) return;
+    if (count < 0) count = 0;
+    if (count > tc->typeParamCount) count = tc->typeParamCount;
+    tc->typeParamCount = count;
+  }
+
+  static TypeParam* typeParamFindToken(TypeChecker* tc, Token token) {
+    if (!tc) return NULL;
+    for (TypeChecker* cur = tc; cur != NULL; cur = cur->enclosing) {
+      for (int i = cur->typeParamCount - 1; i >= 0; i--) {
+        TypeParam* param = &cur->typeParams[i];
+        if (!param->name) continue;
+        if (param->name->length == token.length &&
+            memcmp(param->name->chars, token.start, (size_t)token.length) == 0) {
+          return param;
+        }
+      }
+    }
+    return NULL;
+  }
 
 static void typePush(Compiler* c, Type* type) {
   if (!typecheckEnabled(c)) return;
@@ -1117,10 +1373,10 @@ static Type* typePeek(Compiler* c) {
   return tc->stack[tc->stackCount - 1];
 }
 
-static bool typeIsAny(Type* type) {
-  if (!type) return true;
-  return type->kind == TYPE_ANY || type->kind == TYPE_UNKNOWN;
-}
+  static bool typeIsAny(Type* type) {
+    if (!type) return true;
+    return type->kind == TYPE_ANY || type->kind == TYPE_UNKNOWN || type->kind == TYPE_GENERIC;
+  }
 
 static bool typeIsNullable(Type* type) {
   if (!type) return false;
@@ -1154,17 +1410,34 @@ static Type* typeClone(TypeChecker* tc, Type* src) {
     }
     case TYPE_NULL:
       return typeNull();
-    case TYPE_NAMED: {
-      Type* type = typeAlloc(tc, TYPE_NAMED);
-      type->name = src->name;
-      type->nullable = src->nullable;
-      return type;
-    }
-    case TYPE_ARRAY: {
-      Type* type = typeAlloc(tc, TYPE_ARRAY);
-      type->elem = typeClone(tc, src->elem);
-      type->nullable = src->nullable;
-      return type;
+      case TYPE_NAMED: {
+        Type* type = typeAlloc(tc, TYPE_NAMED);
+        type->name = src->name;
+        type->nullable = src->nullable;
+        if (src->typeArgCount > 0 && src->typeArgs) {
+          type->typeArgCount = src->typeArgCount;
+          type->typeArgs = (Type**)malloc(sizeof(Type*) * (size_t)src->typeArgCount);
+          if (!type->typeArgs) {
+            fprintf(stderr, "Out of memory.\n");
+            exit(1);
+          }
+          for (int i = 0; i < src->typeArgCount; i++) {
+            type->typeArgs[i] = typeClone(tc, src->typeArgs[i]);
+          }
+        }
+        return type;
+      }
+      case TYPE_GENERIC: {
+        Type* type = typeAlloc(tc, TYPE_GENERIC);
+        type->name = src->name;
+        type->nullable = src->nullable;
+        return type;
+      }
+      case TYPE_ARRAY: {
+        Type* type = typeAlloc(tc, TYPE_ARRAY);
+        type->elem = typeClone(tc, src->elem);
+        type->nullable = src->nullable;
+        return type;
     }
     case TYPE_MAP: {
       Type* type = typeAlloc(tc, TYPE_MAP);
@@ -1173,15 +1446,26 @@ static Type* typeClone(TypeChecker* tc, Type* src) {
       type->nullable = src->nullable;
       return type;
     }
-    case TYPE_FUNCTION: {
-      Type* type = typeAlloc(tc, TYPE_FUNCTION);
-      type->paramCount = src->paramCount;
-      type->returnType = typeClone(tc, src->returnType);
-      type->nullable = src->nullable;
-      if (src->paramCount > 0 && src->params) {
-        type->params = (Type**)malloc(sizeof(Type*) * (size_t)src->paramCount);
-        if (!type->params) {
-          fprintf(stderr, "Out of memory.\n");
+      case TYPE_FUNCTION: {
+        Type* type = typeAlloc(tc, TYPE_FUNCTION);
+        type->paramCount = src->paramCount;
+        type->returnType = typeClone(tc, src->returnType);
+        type->nullable = src->nullable;
+        if (src->typeParamCount > 0 && src->typeParams) {
+          type->typeParamCount = src->typeParamCount;
+          type->typeParams = (TypeParam*)malloc(sizeof(TypeParam) * (size_t)src->typeParamCount);
+          if (!type->typeParams) {
+            fprintf(stderr, "Out of memory.\n");
+            exit(1);
+          }
+          for (int i = 0; i < src->typeParamCount; i++) {
+            type->typeParams[i] = src->typeParams[i];
+          }
+        }
+        if (src->paramCount > 0 && src->params) {
+          type->params = (Type**)malloc(sizeof(Type*) * (size_t)src->paramCount);
+          if (!type->params) {
+            fprintf(stderr, "Out of memory.\n");
           exit(1);
         }
         for (int i = 0; i < src->paramCount; i++) {
@@ -1225,8 +1509,16 @@ static bool typeEquals(Type* a, Type* b) {
     case TYPE_BOOL:
     case TYPE_NULL:
       return true;
-    case TYPE_NAMED:
-      return typeNamesEqual(a->name, b->name);
+      case TYPE_NAMED:
+        if (!typeNamesEqual(a->name, b->name)) return false;
+        if (a->typeArgCount == 0 && b->typeArgCount == 0) return true;
+        if (a->typeArgCount != b->typeArgCount) return false;
+        for (int i = 0; i < a->typeArgCount; i++) {
+          if (!typeEquals(a->typeArgs[i], b->typeArgs[i])) return false;
+        }
+        return true;
+      case TYPE_GENERIC:
+        return typeNamesEqual(a->name, b->name);
     case TYPE_ARRAY:
       return typeEquals(a->elem, b->elem);
     case TYPE_MAP:
@@ -1241,36 +1533,189 @@ static bool typeEquals(Type* a, Type* b) {
   return false;
 }
 
-static bool typeAssignable(Type* dst, Type* src) {
-  if (typeIsAny(dst) || typeIsAny(src)) return true;
-  if (!dst || !src) return true;
-  if (dst->kind == TYPE_NULL) return src->kind == TYPE_NULL;
-  if (src->kind == TYPE_NULL) return dst->nullable;
-  if (typeIsNullable(src) && !typeIsNullable(dst)) return false;
-  if (dst->kind != src->kind) return false;
-  switch (dst->kind) {
-    case TYPE_ANY:
-    case TYPE_UNKNOWN:
-    case TYPE_NUMBER:
-    case TYPE_STRING:
-    case TYPE_BOOL:
-    case TYPE_NULL:
-      return true;
-    case TYPE_NAMED:
-      return typeNamesEqual(dst->name, src->name);
-    case TYPE_ARRAY:
-      return typeAssignable(dst->elem, src->elem);
-    case TYPE_MAP:
-      return typeAssignable(dst->key, src->key) && typeAssignable(dst->value, src->value);
-    case TYPE_FUNCTION:
+  static bool typeAssignable(Type* dst, Type* src) {
+    if (typeIsAny(dst) || typeIsAny(src)) return true;
+    if (!dst || !src) return true;
+    if (dst->kind == TYPE_NULL) return src->kind == TYPE_NULL;
+    if (src->kind == TYPE_NULL) return dst->nullable;
+    if (typeIsNullable(src) && !typeIsNullable(dst)) return false;
+    if (dst->kind == TYPE_NAMED && src->kind == TYPE_NAMED) {
+      if (typeNamesEqual(dst->name, src->name)) {
+        if (dst->typeArgCount == 0 || src->typeArgCount == 0) return true;
+        if (dst->typeArgCount != src->typeArgCount) return false;
+        for (int i = 0; i < dst->typeArgCount; i++) {
+          if (!typeAssignable(dst->typeArgs[i], src->typeArgs[i])) return false;
+        }
+        return true;
+      }
+      if (gTypeRegistry &&
+          typeRegistryClassImplements(gTypeRegistry, src->name, dst->name)) {
+        return true;
+      }
+      return false;
+    }
+    if (dst->kind != src->kind) return false;
+    switch (dst->kind) {
+      case TYPE_ANY:
+      case TYPE_UNKNOWN:
+      case TYPE_NUMBER:
+      case TYPE_STRING:
+      case TYPE_BOOL:
+      case TYPE_NULL:
+        return true;
+      case TYPE_GENERIC:
+        return true;
+      case TYPE_ARRAY:
+        return typeAssignable(dst->elem, src->elem);
+      case TYPE_MAP:
+        return typeAssignable(dst->key, src->key) && typeAssignable(dst->value, src->value);
+      case TYPE_FUNCTION:
       if (dst->paramCount != src->paramCount) return false;
       for (int i = 0; i < dst->paramCount; i++) {
         if (!typeAssignable(dst->params[i], src->params[i])) return false;
       }
       return typeAssignable(dst->returnType, src->returnType);
   }
-  return true;
-}
+    return true;
+  }
+
+  static TypeBinding* typeBindingFind(TypeBinding* bindings, int count, ObjString* name) {
+    if (!bindings || !name) return NULL;
+    for (int i = 0; i < count; i++) {
+      if (typeNamesEqual(bindings[i].name, name)) {
+        return &bindings[i];
+      }
+    }
+    return NULL;
+  }
+
+  static bool typeSatisfiesConstraint(Type* actual, ObjString* constraint) {
+    if (!constraint) return true;
+    if (!actual || typeIsAny(actual)) return true;
+    if (actual->kind == TYPE_NAMED) {
+      if (typeNamesEqual(actual->name, constraint)) return true;
+      return gTypeRegistry && typeRegistryClassImplements(gTypeRegistry, actual->name, constraint);
+    }
+    return false;
+  }
+
+  static bool typeUnify(Compiler* c, Type* pattern, Type* actual,
+                        TypeBinding* bindings, int bindingCount, Token token) {
+    if (!pattern || !actual) return true;
+    if (pattern->kind == TYPE_GENERIC) {
+      TypeBinding* binding = typeBindingFind(bindings, bindingCount, pattern->name);
+      if (!binding) return true;
+      if (!binding->bound) {
+        if (!typeSatisfiesConstraint(actual, binding->constraint)) {
+          char expected[64];
+          typeToString(typeNamed(c->typecheck, binding->constraint), expected, sizeof(expected));
+          typeErrorAt(c, token, "Type argument for '%s' must implement %s.",
+                      binding->name ? binding->name->chars : "T", expected);
+          return false;
+        }
+        binding->bound = actual;
+        return true;
+      }
+      return typeAssignable(binding->bound, actual);
+    }
+    if (pattern->kind == TYPE_ARRAY) {
+      if (actual->kind != TYPE_ARRAY && !typeIsAny(actual)) return false;
+      if (actual->kind == TYPE_ARRAY) {
+        return typeUnify(c, pattern->elem, actual->elem, bindings, bindingCount, token);
+      }
+      return true;
+    }
+    if (pattern->kind == TYPE_MAP) {
+      if (actual->kind != TYPE_MAP && !typeIsAny(actual)) return false;
+      if (actual->kind == TYPE_MAP) {
+        if (!typeUnify(c, pattern->key, actual->key, bindings, bindingCount, token)) return false;
+        return typeUnify(c, pattern->value, actual->value, bindings, bindingCount, token);
+      }
+      return true;
+    }
+    if (pattern->kind == TYPE_FUNCTION && actual->kind == TYPE_FUNCTION) {
+      if (pattern->paramCount >= 0 && actual->paramCount >= 0 &&
+          pattern->paramCount != actual->paramCount) {
+        return false;
+      }
+      int count = pattern->paramCount >= 0 ? pattern->paramCount : actual->paramCount;
+      for (int i = 0; i < count; i++) {
+        if (!typeUnify(c, pattern->params[i], actual->params[i], bindings, bindingCount, token)) {
+          return false;
+        }
+      }
+      return typeUnify(c, pattern->returnType, actual->returnType, bindings, bindingCount, token);
+    }
+    if (pattern->kind == TYPE_NAMED && actual->kind == TYPE_NAMED) {
+      if (!typeNamesEqual(pattern->name, actual->name)) return false;
+      if (pattern->typeArgCount == 0 || actual->typeArgCount == 0) return true;
+      if (pattern->typeArgCount != actual->typeArgCount) return false;
+      for (int i = 0; i < pattern->typeArgCount; i++) {
+        if (!typeUnify(c, pattern->typeArgs[i], actual->typeArgs[i], bindings, bindingCount, token)) {
+          return false;
+        }
+      }
+      return true;
+    }
+    return typeAssignable(pattern, actual);
+  }
+
+  static Type* typeSubstitute(TypeChecker* tc, Type* type,
+                              TypeBinding* bindings, int bindingCount) {
+    if (!type) return typeAny();
+    if (type->kind == TYPE_GENERIC) {
+      TypeBinding* binding = typeBindingFind(bindings, bindingCount, type->name);
+      if (binding && binding->bound) return binding->bound;
+      return typeAny();
+    }
+    if (type->kind == TYPE_ARRAY) {
+      Type* elem = typeSubstitute(tc, type->elem, bindings, bindingCount);
+      Type* result = typeArray(tc, elem);
+      result->nullable = type->nullable;
+      return result;
+    }
+    if (type->kind == TYPE_MAP) {
+      Type* key = typeSubstitute(tc, type->key, bindings, bindingCount);
+      Type* value = typeSubstitute(tc, type->value, bindings, bindingCount);
+      Type* result = typeMap(tc, key, value);
+      result->nullable = type->nullable;
+      return result;
+    }
+    if (type->kind == TYPE_NAMED) {
+      Type* result = typeNamed(tc, type->name);
+      result->nullable = type->nullable;
+      if (type->typeArgCount > 0 && type->typeArgs) {
+        result->typeArgCount = type->typeArgCount;
+        result->typeArgs = (Type**)malloc(sizeof(Type*) * (size_t)type->typeArgCount);
+        if (!result->typeArgs) {
+          fprintf(stderr, "Out of memory.\n");
+          exit(1);
+        }
+        for (int i = 0; i < type->typeArgCount; i++) {
+          result->typeArgs[i] = typeSubstitute(tc, type->typeArgs[i], bindings, bindingCount);
+        }
+      }
+      return result;
+    }
+    if (type->kind == TYPE_FUNCTION) {
+      Type* result = typeAlloc(tc, TYPE_FUNCTION);
+      result->paramCount = type->paramCount;
+      result->returnType = typeSubstitute(tc, type->returnType, bindings, bindingCount);
+      result->nullable = type->nullable;
+      if (type->paramCount > 0 && type->params) {
+        result->params = (Type**)malloc(sizeof(Type*) * (size_t)type->paramCount);
+        if (!result->params) {
+          fprintf(stderr, "Out of memory.\n");
+          exit(1);
+        }
+        for (int i = 0; i < type->paramCount; i++) {
+          result->params[i] = typeSubstitute(tc, type->params[i], bindings, bindingCount);
+        }
+      }
+      return result;
+    }
+    return typeClone(tc, type);
+  }
 
 static void typeToString(Type* type, char* buffer, size_t size) {
   if (!buffer || size == 0) return;
@@ -1297,17 +1742,39 @@ static void typeToString(Type* type, char* buffer, size_t size) {
     case TYPE_NULL:
       snprintf(buffer, size, "null");
       return;
-    case TYPE_NAMED:
-      if (type->name) {
-        if (type->nullable) {
-          snprintf(buffer, size, "%s?", type->name->chars);
+      case TYPE_NAMED:
+        if (type->name) {
+          size_t used = (size_t)snprintf(buffer, size, "%s", type->name->chars);
+          if (type->typeArgCount > 0 && type->typeArgs && used < size) {
+            used += (size_t)snprintf(buffer + used, size - used, "<");
+            for (int i = 0; i < type->typeArgCount && used < size; i++) {
+              char arg[32];
+              typeToString(type->typeArgs[i], arg, sizeof(arg));
+              used += (size_t)snprintf(buffer + used, size - used, "%s%s",
+                                       i > 0 ? ", " : "", arg);
+            }
+            if (used < size) {
+              used += (size_t)snprintf(buffer + used, size - used, ">");
+            }
+          }
+          if (type->nullable && used < size) {
+            (void)snprintf(buffer + used, size - used, "?");
+          }
         } else {
-          snprintf(buffer, size, "%s", type->name->chars);
+          snprintf(buffer, size, "named");
         }
-      } else {
-        snprintf(buffer, size, "named");
-      }
-      return;
+        return;
+      case TYPE_GENERIC:
+        if (type->name) {
+          if (type->nullable) {
+            snprintf(buffer, size, "%s?", type->name->chars);
+          } else {
+            snprintf(buffer, size, "%s", type->name->chars);
+          }
+        } else {
+          snprintf(buffer, size, "T");
+        }
+        return;
     case TYPE_ARRAY: {
       char inner[64];
       typeToString(type->elem, inner, sizeof(inner));
@@ -1632,6 +2099,15 @@ static Type* typeLookupStdlibMember(Compiler* c, Type* objectType, Token name) {
     if (tokenMatches(name, "parts")) return typeFunctionN(tc, -1, mapAny);
   }
 
+  if (typeNamedIs(objectType, "di")) {
+    Type* mapAny = typeMap(tc, string, any);
+    if (tokenMatches(name, "container")) return typeFunctionN(tc, 0, mapAny);
+    if (tokenMatches(name, "bind")) return typeFunctionN(tc, 3, typeNull(), mapAny, string, any);
+    if (tokenMatches(name, "singleton")) return typeFunctionN(tc, 3, typeNull(), mapAny, string, any);
+    if (tokenMatches(name, "value")) return typeFunctionN(tc, 3, typeNull(), mapAny, string, any);
+    if (tokenMatches(name, "resolve")) return typeFunctionN(tc, 2, any, mapAny, string);
+  }
+
   if (typeNamedIs(objectType, "vec2")) {
     Type* arrayNumber = typeArray(tc, number);
     if (tokenMatches(name, "make")) return typeFunctionN(tc, 2, arrayNumber, number, number);
@@ -1729,21 +2205,28 @@ static void typeDefineStdlib(Compiler* c) {
   typeDefineSynthetic(c, "str", typeNamed(tc, copyString(c->vm, "str")));
   typeDefineSynthetic(c, "array", typeNamed(tc, copyString(c->vm, "array")));
   typeDefineSynthetic(c, "os", typeNamed(tc, copyString(c->vm, "os")));
-  typeDefineSynthetic(c, "time", typeNamed(tc, copyString(c->vm, "time")));
-  typeDefineSynthetic(c, "vec2", typeNamed(tc, copyString(c->vm, "vec2")));
-  typeDefineSynthetic(c, "vec3", typeNamed(tc, copyString(c->vm, "vec3")));
-  typeDefineSynthetic(c, "vec4", typeNamed(tc, copyString(c->vm, "vec4")));
-  typeDefineSynthetic(c, "http", typeNamed(tc, copyString(c->vm, "http")));
-  typeDefineSynthetic(c, "proc", typeNamed(tc, copyString(c->vm, "proc")));
-  typeDefineSynthetic(c, "env", typeNamed(tc, copyString(c->vm, "env")));
-  typeDefineSynthetic(c, "plugin", typeNamed(tc, copyString(c->vm, "plugin")));
-}
+    typeDefineSynthetic(c, "time", typeNamed(tc, copyString(c->vm, "time")));
+    typeDefineSynthetic(c, "vec2", typeNamed(tc, copyString(c->vm, "vec2")));
+    typeDefineSynthetic(c, "vec3", typeNamed(tc, copyString(c->vm, "vec3")));
+    typeDefineSynthetic(c, "vec4", typeNamed(tc, copyString(c->vm, "vec4")));
+    typeDefineSynthetic(c, "http", typeNamed(tc, copyString(c->vm, "http")));
+    typeDefineSynthetic(c, "proc", typeNamed(tc, copyString(c->vm, "proc")));
+    typeDefineSynthetic(c, "env", typeNamed(tc, copyString(c->vm, "env")));
+    typeDefineSynthetic(c, "plugin", typeNamed(tc, copyString(c->vm, "plugin")));
+    typeDefineSynthetic(c, "di", typeNamed(tc, copyString(c->vm, "di")));
+  }
 
-static Type* typeNamed(TypeChecker* tc, ObjString* name) {
-  Type* type = typeAlloc(tc, TYPE_NAMED);
-  type->name = name;
-  return type;
-}
+  static Type* typeNamed(TypeChecker* tc, ObjString* name) {
+    Type* type = typeAlloc(tc, TYPE_NAMED);
+    type->name = name;
+    return type;
+  }
+
+  static Type* typeGeneric(TypeChecker* tc, ObjString* name) {
+    Type* type = typeAlloc(tc, TYPE_GENERIC);
+    type->name = name;
+    return type;
+  }
 
 static Type* typeArray(TypeChecker* tc, Type* elem) {
   Type* type = typeAlloc(tc, TYPE_ARRAY);
@@ -1779,6 +2262,38 @@ static Type* parseType(Compiler* c);
 static Type* typeLookupStdlibMember(Compiler* c, Type* objectType, Token name);
 static void typeDefineStdlib(Compiler* c);
 
+static TypeParam* parseTypeParams(Compiler* c, int* outCount) {
+  if (outCount) *outCount = 0;
+  if (!match(c, TOKEN_LESS)) return NULL;
+  int count = 0;
+  int capacity = 0;
+  TypeParam* params = NULL;
+  do {
+    Token name = consume(c, TOKEN_IDENTIFIER, "Expect type parameter name.");
+    ObjString* nameStr = stringFromToken(c->vm, name);
+    ObjString* constraint = NULL;
+    if (match(c, TOKEN_COLON)) {
+      Token constraintName = consume(c, TOKEN_IDENTIFIER, "Expect interface name after ':'.");
+      constraint = stringFromToken(c->vm, constraintName);
+    }
+    if (count >= capacity) {
+      int oldCap = capacity;
+      capacity = GROW_CAPACITY(oldCap);
+      params = GROW_ARRAY(TypeParam, params, oldCap, capacity);
+      if (!params) {
+        fprintf(stderr, "Out of memory.\n");
+        exit(1);
+      }
+    }
+    params[count].name = nameStr;
+    params[count].constraint = constraint;
+    count++;
+  } while (match(c, TOKEN_COMMA));
+  consume(c, TOKEN_GREATER, "Expect '>' after type parameters.");
+  if (outCount) *outCount = count;
+  return params;
+}
+
 static Type* typeFromToken(Compiler* c, Token token) {
   if (tokenMatches(token, "number")) return typeNumber();
   if (tokenMatches(token, "string")) return typeString();
@@ -1791,54 +2306,80 @@ static Type* typeFromToken(Compiler* c, Token token) {
   return typeNamed(c->typecheck, name);
 }
 
-static Type* parseTypeArguments(Compiler* c, Type* base, Token typeToken) {
-  if (!match(c, TOKEN_LESS)) {
+  static Type* parseTypeArguments(Compiler* c, Type* base, Token typeToken) {
+    if (!match(c, TOKEN_LESS)) {
+      return base;
+    }
+
+    if (base->kind == TYPE_ARRAY) {
+      Type* elem = parseType(c);
+      consume(c, TOKEN_GREATER, "Expect '>' after array type.");
+      return typeArray(c->typecheck, elem);
+    }
+
+    if (base->kind == TYPE_MAP) {
+      Type* key = parseType(c);
+      Type* value = NULL;
+      if (match(c, TOKEN_COMMA)) {
+        value = parseType(c);
+      } else {
+        value = key;
+        key = typeString();
+      }
+      if (!typeIsAny(key) && key->kind != TYPE_STRING) {
+        typeErrorAt(c, typeToken, "Map keys must be string.");
+        key = typeString();
+      }
+      consume(c, TOKEN_GREATER, "Expect '>' after map type.");
+      return typeMap(c->typecheck, key, value);
+    }
+
+    if (base->kind == TYPE_NAMED) {
+      int count = 0;
+      int capacity = 0;
+      Type** args = NULL;
+      if (!check(c, TOKEN_GREATER)) {
+        do {
+          Type* arg = parseType(c);
+          if (count >= capacity) {
+            int oldCap = capacity;
+            capacity = GROW_CAPACITY(oldCap);
+            args = GROW_ARRAY(Type*, args, oldCap, capacity);
+            if (!args) {
+              fprintf(stderr, "Out of memory.\n");
+              exit(1);
+            }
+          }
+          args[count++] = arg;
+        } while (match(c, TOKEN_COMMA));
+      }
+      consume(c, TOKEN_GREATER, "Expect '>' after type arguments.");
+      base->typeArgs = args;
+      base->typeArgCount = count;
+      return base;
+    }
+
+    typeErrorAt(c, typeToken, "Only array/map/named types accept type arguments.");
+    int depth = 1;
+    while (!isAtEnd(c) && depth > 0) {
+      if (match(c, TOKEN_LESS)) depth++;
+      else if (match(c, TOKEN_GREATER)) depth--;
+      else advance(c);
+    }
     return base;
   }
 
-  if (base->kind == TYPE_ARRAY) {
-    Type* elem = parseType(c);
-    consume(c, TOKEN_GREATER, "Expect '>' after array type.");
-    return typeArray(c->typecheck, elem);
-  }
-
-  if (base->kind == TYPE_MAP) {
-    Type* key = parseType(c);
-    Type* value = NULL;
-    if (match(c, TOKEN_COMMA)) {
-      value = parseType(c);
-    } else {
-      value = key;
-      key = typeString();
+  static Type* parseType(Compiler* c) {
+    if (!check(c, TOKEN_IDENTIFIER) && !check(c, TOKEN_NULL)) {
+      errorAtCurrent(c, "Expect type name.");
+      return typeAny();
     }
-    if (!typeIsAny(key) && key->kind != TYPE_STRING) {
-      typeErrorAt(c, typeToken, "Map keys must be string.");
-      key = typeString();
+    Token name = advance(c);
+    TypeParam* param = typeParamFindToken(c->typecheck, name);
+    Type* base = param ? typeGeneric(c->typecheck, param->name) : typeFromToken(c, name);
+    if (check(c, TOKEN_LESS)) {
+      base = parseTypeArguments(c, base, name);
     }
-    consume(c, TOKEN_GREATER, "Expect '>' after map type.");
-    return typeMap(c->typecheck, key, value);
-  }
-
-  typeErrorAt(c, typeToken, "Only array/map types accept type arguments.");
-  int depth = 1;
-  while (!isAtEnd(c) && depth > 0) {
-    if (match(c, TOKEN_LESS)) depth++;
-    else if (match(c, TOKEN_GREATER)) depth--;
-    else advance(c);
-  }
-  return base;
-}
-
-static Type* parseType(Compiler* c) {
-  if (!check(c, TOKEN_IDENTIFIER) && !check(c, TOKEN_NULL)) {
-    errorAtCurrent(c, "Expect type name.");
-    return typeAny();
-  }
-  Token name = advance(c);
-  Type* base = typeFromToken(c, name);
-  if (check(c, TOKEN_LESS)) {
-    base = parseTypeArguments(c, base, name);
-  }
   if (match(c, TOKEN_QUESTION)) {
     base = typeMakeNullable(c->typecheck, base);
   }
@@ -1864,11 +2405,16 @@ static Type* typeMerge(TypeChecker* tc, Type* current, Type* next) {
       case TYPE_STRING:
       case TYPE_BOOL:
         return typeMakeNullable(tc, current);
-      case TYPE_NAMED:
-        if (typeNamesEqual(current->name, next->name)) {
-          return typeMakeNullable(tc, current);
-        }
-        break;
+        case TYPE_NAMED:
+          if (typeNamesEqual(current->name, next->name)) {
+            return typeMakeNullable(tc, current);
+          }
+          break;
+        case TYPE_GENERIC:
+          if (typeNamesEqual(current->name, next->name)) {
+            return typeMakeNullable(tc, current);
+          }
+          break;
       case TYPE_ARRAY:
         if (typeEquals(current->elem, next->elem)) {
           return typeMakeNullable(tc, current);
@@ -2319,35 +2865,62 @@ static void call(Compiler* c, bool canAssign) {
     } while (match(c, TOKEN_COMMA));
   }
   consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after arguments.", paren);
-  if (typecheckEnabled(c)) {
-    Type* argTypes[ERK_MAX_ARGS];
-    for (int i = argc - 1; i >= 0; i--) {
-      argTypes[i] = typePop(c);
-    }
-    Type* callee = typePop(c);
-    Type* result = typeAny();
-    if (callee && callee->kind == TYPE_FUNCTION) {
-      if (callee->paramCount >= 0 && callee->paramCount != argc) {
-        typeErrorAt(c, paren, "Function expects %d arguments but got %d.",
-                    callee->paramCount, argc);
-      } else if (callee->params) {
-        int checkCount = callee->paramCount >= 0 ? callee->paramCount : argc;
-        for (int i = 0; i < checkCount && i < argc; i++) {
-          if (!typeAssignable(callee->params[i], argTypes[i])) {
-            char expected[64];
-            char got[64];
-            typeToString(callee->params[i], expected, sizeof(expected));
-            typeToString(argTypes[i], got, sizeof(got));
-            typeErrorAt(c, paren, "Argument %d expects %s but got %s.",
-                        i + 1, expected, got);
+    if (typecheckEnabled(c)) {
+      Type* argTypes[ERK_MAX_ARGS];
+      for (int i = argc - 1; i >= 0; i--) {
+        argTypes[i] = typePop(c);
+      }
+      Type* callee = typePop(c);
+      Type* result = typeAny();
+      if (callee && callee->kind == TYPE_FUNCTION) {
+        int bindingCount = callee->typeParamCount;
+        TypeBinding* bindings = NULL;
+        if (bindingCount > 0 && callee->typeParams) {
+          bindings = (TypeBinding*)malloc(sizeof(TypeBinding) * (size_t)bindingCount);
+          if (!bindings) {
+            fprintf(stderr, "Out of memory.\n");
+            exit(1);
+          }
+          for (int i = 0; i < bindingCount; i++) {
+            bindings[i].name = callee->typeParams[i].name;
+            bindings[i].constraint = callee->typeParams[i].constraint;
+            bindings[i].bound = NULL;
           }
         }
+        if (callee->paramCount >= 0 && callee->paramCount != argc) {
+          typeErrorAt(c, paren, "Function expects %d arguments but got %d.",
+                      callee->paramCount, argc);
+        } else if (callee->params) {
+          int checkCount = callee->paramCount >= 0 ? callee->paramCount : argc;
+          for (int i = 0; i < checkCount && i < argc; i++) {
+            bool ok = true;
+            if (bindings) {
+              ok = typeUnify(c, callee->params[i], argTypes[i], bindings, bindingCount, paren);
+            } else {
+              ok = typeAssignable(callee->params[i], argTypes[i]);
+            }
+            if (!ok) {
+              if (bindings && callee->params[i]->kind == TYPE_GENERIC) {
+                continue;
+              }
+              char expected[64];
+              char got[64];
+              typeToString(callee->params[i], expected, sizeof(expected));
+              typeToString(argTypes[i], got, sizeof(got));
+              typeErrorAt(c, paren, "Argument %d expects %s but got %s.",
+                          i + 1, expected, got);
+            }
+          }
+        }
+        result = callee->returnType ? callee->returnType : typeAny();
+        if (bindings) {
+          result = typeSubstitute(c->typecheck, result, bindings, bindingCount);
+          free(bindings);
+        }
       }
-      result = callee->returnType ? callee->returnType : typeAny();
-    }
-    if (!optionalCall) {
-      typeEnsureNonNull(c, paren, callee, "Cannot call nullable value. Use '?.'.");
-    } else if (typeIsNullable(callee)) {
+      if (!optionalCall) {
+        typeEnsureNonNull(c, paren, callee, "Cannot call nullable value. Use '?.'.");
+      } else if (typeIsNullable(callee)) {
       result = typeMakeNullable(c->typecheck, result);
     }
     typePush(c, result);
@@ -2628,7 +3201,7 @@ static void expressionStatement(Compiler* c) {
   emitGc(c);
 }
 
-static void varDeclaration(Compiler* c, bool isConst, bool isExport) {
+  static void varDeclaration(Compiler* c, bool isConst, bool isExport) {
   Token name = consume(c, TOKEN_IDENTIFIER, "Expect variable name.");
   Type* declaredType = NULL;
   bool hasType = false;
@@ -3167,13 +3740,14 @@ static void fromImportStatement(Compiler* c) {
   emitGc(c);
 }
 
-static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer, Type** outType);
+static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
+                                    Type** outType, bool defineType);
 
-static void functionDeclaration(Compiler* c, bool isExport) {
-  Token name = consume(c, TOKEN_IDENTIFIER, "Expect function name.");
-  Type* functionType = NULL;
-  ObjFunction* function = compileFunction(c, name, false, &functionType);
-  (void)functionType;
+  static void functionDeclaration(Compiler* c, bool isExport) {
+    Token name = consume(c, TOKEN_IDENTIFIER, "Expect function name.");
+    Type* functionType = NULL;
+    ObjFunction* function = compileFunction(c, name, false, &functionType, true);
+    (void)functionType;
   if (!function) return;
   int constant = makeConstant(c, OBJ_VAL(function), name);
   emitByte(c, OP_CLOSURE, name);
@@ -3185,45 +3759,318 @@ static void functionDeclaration(Compiler* c, bool isExport) {
     emitByte(c, OP_EXPORT, name);
     emitShort(c, (uint16_t)nameIdx, name);
   }
-  emitGc(c);
-}
+    emitGc(c);
+  }
 
-static void classDeclaration(Compiler* c, bool isExport) {
-  Token name = consume(c, TOKEN_IDENTIFIER, "Expect class name.");
-  Token openBrace = consume(c, TOKEN_LEFT_BRACE, "Expect '{' before class body.");
+  static void interfaceDeclaration(Compiler* c) {
+    Token nameToken = consume(c, TOKEN_IDENTIFIER, "Expect interface name.");
+    ObjString* nameStr = stringFromToken(c->vm, nameToken);
 
-  int nameConst = emitStringConstant(c, name);
-  emitByte(c, OP_NULL, noToken());
-  emitByte(c, OP_DEFINE_VAR, name);
-  emitShort(c, (uint16_t)nameConst, name);
+    int typeParamCount = 0;
+    TypeParam* typeParams = parseTypeParams(c, &typeParamCount);
 
-  int methodCount = 0;
-  while (!check(c, TOKEN_RIGHT_BRACE) && !isAtEnd(c)) {
-    if (!match(c, TOKEN_FUN)) {
-      errorAtCurrent(c, "Expect 'fun' before method declaration.");
-      synchronize(c);
-      break;
+    Token openBrace = consume(c, TOKEN_LEFT_BRACE, "Expect '{' before interface body.");
+
+    int savedParamCount = 0;
+    if (typecheckEnabled(c)) {
+      savedParamCount = c->typecheck->typeParamCount;
+      typeParamsPushList(c->typecheck, typeParams, typeParamCount);
     }
-    Token methodName = consume(c, TOKEN_IDENTIFIER, "Expect method name.");
-    bool isInit = methodName.length == 4 && memcmp(methodName.start, "init", 4) == 0;
-    ObjFunction* method = compileFunction(c, methodName, isInit, NULL);
-    if (!method) return;
-    int constant = makeConstant(c, OBJ_VAL(method), methodName);
-    emitByte(c, OP_CLOSURE, methodName);
-    emitShort(c, (uint16_t)constant, methodName);
-    methodCount++;
-  }
-  consumeClosing(c, TOKEN_RIGHT_BRACE, "Expect '}' after class body.", openBrace);
 
-  emitByte(c, OP_CLASS, name);
-  emitShort(c, (uint16_t)nameConst, name);
-  emitShort(c, (uint16_t)methodCount, name);
-  if (isExport) {
-    emitByte(c, OP_EXPORT, name);
-    emitShort(c, (uint16_t)nameConst, name);
+    InterfaceDef def;
+    memset(&def, 0, sizeof(def));
+    def.name = nameStr;
+    def.typeParams = typeParams;
+    def.typeParamCount = typeParamCount;
+
+    while (!check(c, TOKEN_RIGHT_BRACE) && !isAtEnd(c)) {
+      if (!match(c, TOKEN_FUN)) {
+        errorAtCurrent(c, "Expect 'fun' in interface body.");
+        synchronize(c);
+        break;
+      }
+      Token methodName = consume(c, TOKEN_IDENTIFIER, "Expect method name.");
+      Token openParen = consume(c, TOKEN_LEFT_PAREN, "Expect '(' after method name.");
+
+      Type** paramTypes = NULL;
+      int paramCount = 0;
+      int paramCap = 0;
+      if (!check(c, TOKEN_RIGHT_PAREN)) {
+        do {
+          Token paramName = consume(c, TOKEN_IDENTIFIER, "Expect parameter name.");
+          Type* paramType = typeAny();
+          if (match(c, TOKEN_COLON)) {
+            paramType = parseType(c);
+          }
+          if (paramCount >= paramCap) {
+            int oldCap = paramCap;
+            paramCap = GROW_CAPACITY(oldCap);
+            paramTypes = GROW_ARRAY(Type*, paramTypes, oldCap, paramCap);
+            if (!paramTypes) {
+              fprintf(stderr, "Out of memory.\n");
+              exit(1);
+            }
+          }
+          paramTypes[paramCount++] = paramType;
+          (void)paramName;
+        } while (match(c, TOKEN_COMMA));
+      }
+      consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after parameters.", openParen);
+
+      Type* returnType = typeAny();
+      if (match(c, TOKEN_COLON)) {
+        returnType = parseType(c);
+      }
+      consume(c, TOKEN_SEMICOLON, "Expect ';' after interface method.");
+
+      if (typecheckEnabled(c)) {
+        if (def.methodCount >= def.methodCapacity) {
+          int oldCap = def.methodCapacity;
+          def.methodCapacity = GROW_CAPACITY(oldCap);
+          def.methods = GROW_ARRAY(InterfaceMethod, def.methods, oldCap, def.methodCapacity);
+          if (!def.methods) {
+            fprintf(stderr, "Out of memory.\n");
+            exit(1);
+          }
+        }
+        Type* methodType = typeFunction(c->typecheck, paramTypes, paramCount, returnType);
+        def.methods[def.methodCount].name = stringFromToken(c->vm, methodName);
+        def.methods[def.methodCount].type = methodType;
+        def.methodCount++;
+      }
+      free(paramTypes);
+    }
+    consumeClosing(c, TOKEN_RIGHT_BRACE, "Expect '}' after interface body.", openBrace);
+
+    if (typecheckEnabled(c)) {
+      InterfaceDef* existing = typeRegistryFindInterface(gTypeRegistry, nameStr);
+      if (existing) {
+        typeErrorAt(c, nameToken, "Interface '%s' already defined.", nameStr->chars);
+        if (def.methods) free(def.methods);
+        if (def.typeParams) free(def.typeParams);
+      } else {
+        typeRegistryAddInterface(gTypeRegistry, &def);
+      }
+      typeParamsTruncate(c->typecheck, savedParamCount);
+    } else {
+      if (def.methods) free(def.methods);
+      if (def.typeParams) free(def.typeParams);
+    }
   }
-  emitGc(c);
-}
+
+  static ClassMethod* findClassMethod(ClassMethod* methods, int count, ObjString* name) {
+    if (!methods || !name) return NULL;
+    for (int i = 0; i < count; i++) {
+      if (typeNamesEqual(methods[i].name, name)) return &methods[i];
+    }
+    return NULL;
+  }
+
+  static void checkClassImplements(Compiler* c, Token classNameToken, ObjString* className,
+                                   ClassMethod* methods, int methodCount,
+                                   Type** interfaces, Token* interfaceTokens, int interfaceCount) {
+    if (!typecheckEnabled(c) || !gTypeRegistry) return;
+    for (int i = 0; i < interfaceCount; i++) {
+      Type* ifaceType = interfaces[i];
+      Token ifaceToken = interfaceTokens[i];
+      if (!ifaceType || ifaceType->kind != TYPE_NAMED || !ifaceType->name) continue;
+      InterfaceDef* iface = typeRegistryFindInterface(gTypeRegistry, ifaceType->name);
+      if (!iface) {
+        typeErrorAt(c, ifaceToken, "Unknown interface '%s'.", ifaceType->name->chars);
+        continue;
+      }
+
+      if (iface->typeParamCount > 0 &&
+          ifaceType->typeArgCount > 0 &&
+          ifaceType->typeArgCount != iface->typeParamCount) {
+        typeErrorAt(c, ifaceToken, "Interface '%s' expects %d type arguments but got %d.",
+                    ifaceType->name->chars, iface->typeParamCount, ifaceType->typeArgCount);
+      }
+
+      int bindingCount = iface->typeParamCount;
+      TypeBinding* bindings = NULL;
+      if (bindingCount > 0) {
+        bindings = (TypeBinding*)malloc(sizeof(TypeBinding) * (size_t)bindingCount);
+        if (!bindings) {
+          fprintf(stderr, "Out of memory.\n");
+          exit(1);
+        }
+        for (int b = 0; b < bindingCount; b++) {
+          bindings[b].name = iface->typeParams[b].name;
+          bindings[b].constraint = iface->typeParams[b].constraint;
+          bindings[b].bound = (ifaceType->typeArgCount > b) ? ifaceType->typeArgs[b] : NULL;
+          if (bindings[b].bound &&
+              !typeSatisfiesConstraint(bindings[b].bound, bindings[b].constraint)) {
+            typeErrorAt(c, ifaceToken, "Type argument for '%s' must implement %s.",
+                        bindings[b].name ? bindings[b].name->chars : "T",
+                        bindings[b].constraint ? bindings[b].constraint->chars : "interface");
+          }
+        }
+      }
+
+      for (int m = 0; m < iface->methodCount; m++) {
+        InterfaceMethod* method = &iface->methods[m];
+        ClassMethod* impl = findClassMethod(methods, methodCount, method->name);
+        if (!impl) {
+          typeErrorAt(c, classNameToken,
+                      "Class '%s' is missing method '%s' from interface '%s'.",
+                      className ? className->chars : "class",
+                      method->name ? method->name->chars : "method",
+                      iface->name ? iface->name->chars : "interface");
+          continue;
+        }
+
+        Type* expected = method->type;
+        if (bindingCount > 0) {
+          expected = typeSubstitute(c->typecheck, expected, bindings, bindingCount);
+        }
+        if (!typeAssignable(expected, impl->type)) {
+          typeErrorAt(c, classNameToken,
+                      "Method '%s' does not match interface '%s'.",
+                      method->name ? method->name->chars : "method",
+                      iface->name ? iface->name->chars : "interface");
+        }
+      }
+
+      if (bindings) free(bindings);
+    }
+  }
+
+  static void classDeclarationWithName(Compiler* c, Token name,
+                                       bool isExport, bool exportDefault) {
+    ObjString* className = stringFromToken(c->vm, name);
+    int classTypeParamCount = 0;
+    TypeParam* classTypeParams = parseTypeParams(c, &classTypeParamCount);
+    int savedTypeParamCount = 0;
+    if (typecheckEnabled(c)) {
+      savedTypeParamCount = c->typecheck->typeParamCount;
+      typeParamsPushList(c->typecheck, classTypeParams, classTypeParamCount);
+    }
+
+    Type** interfaces = NULL;
+    Token* interfaceTokens = NULL;
+    int interfaceCount = 0;
+    int interfaceCapacity = 0;
+    if (match(c, TOKEN_IMPLEMENTS)) {
+      do {
+        Token ifaceName = consume(c, TOKEN_IDENTIFIER, "Expect interface name.");
+        Type* ifaceType = typeNamed(c->typecheck, stringFromToken(c->vm, ifaceName));
+        if (check(c, TOKEN_LESS)) {
+          ifaceType = parseTypeArguments(c, ifaceType, ifaceName);
+        }
+        if (interfaceCount >= interfaceCapacity) {
+          int oldCap = interfaceCapacity;
+          interfaceCapacity = GROW_CAPACITY(oldCap);
+          interfaces = GROW_ARRAY(Type*, interfaces, oldCap, interfaceCapacity);
+          interfaceTokens = GROW_ARRAY(Token, interfaceTokens, oldCap, interfaceCapacity);
+          if (!interfaces || !interfaceTokens) {
+            fprintf(stderr, "Out of memory.\n");
+            exit(1);
+          }
+        }
+        interfaces[interfaceCount] = ifaceType;
+        interfaceTokens[interfaceCount] = ifaceName;
+        interfaceCount++;
+      } while (match(c, TOKEN_COMMA));
+    }
+
+    Token openBrace = consume(c, TOKEN_LEFT_BRACE, "Expect '{' before class body.");
+
+    int nameConst = emitStringConstant(c, name);
+    emitByte(c, OP_NULL, noToken());
+    emitByte(c, OP_DEFINE_VAR, name);
+    emitShort(c, (uint16_t)nameConst, name);
+
+    int methodCount = 0;
+    ClassMethod* methods = NULL;
+    int methodCap = 0;
+    bool classOk = true;
+    while (!check(c, TOKEN_RIGHT_BRACE) && !isAtEnd(c)) {
+      if (!match(c, TOKEN_FUN)) {
+        errorAtCurrent(c, "Expect 'fun' before method declaration.");
+        synchronize(c);
+        break;
+      }
+      Token methodName = consume(c, TOKEN_IDENTIFIER, "Expect method name.");
+      bool isInit = methodName.length == 4 && memcmp(methodName.start, "init", 4) == 0;
+      Type* methodType = NULL;
+      ObjFunction* method = compileFunction(c, methodName, isInit,
+                                            typecheckEnabled(c) ? &methodType : NULL, false);
+      if (!method) {
+        classOk = false;
+        break;
+      }
+      int constant = makeConstant(c, OBJ_VAL(method), methodName);
+      emitByte(c, OP_CLOSURE, methodName);
+      emitShort(c, (uint16_t)constant, methodName);
+      methodCount++;
+      if (typecheckEnabled(c) && methodType) {
+        if (methodCount > methodCap) {
+          int oldCap = methodCap;
+          methodCap = GROW_CAPACITY(oldCap);
+          methods = GROW_ARRAY(ClassMethod, methods, oldCap, methodCap);
+          if (!methods) {
+            fprintf(stderr, "Out of memory.\n");
+            exit(1);
+          }
+        }
+        methods[methodCount - 1].name = stringFromToken(c->vm, methodName);
+        methods[methodCount - 1].type = methodType;
+      }
+    }
+    if (!classOk) {
+      goto class_cleanup;
+    }
+    consumeClosing(c, TOKEN_RIGHT_BRACE, "Expect '}' after class body.", openBrace);
+
+    emitByte(c, OP_CLASS, name);
+    emitShort(c, (uint16_t)nameConst, name);
+    emitShort(c, (uint16_t)methodCount, name);
+    if (isExport) {
+      emitByte(c, OP_EXPORT, name);
+      emitShort(c, (uint16_t)nameConst, name);
+    }
+    if (exportDefault) {
+      emitGetVarConstant(c, nameConst);
+      int defaultIdx = emitStringConstantFromChars(c, "default", 7);
+      emitExportValue(c, (uint16_t)defaultIdx, name);
+    }
+    emitGc(c);
+
+    if (typecheckEnabled(c)) {
+      checkClassImplements(c, name, className, methods, methodCount,
+                           interfaces, interfaceTokens, interfaceCount);
+      if (gTypeRegistry) {
+        ObjString** implemented = NULL;
+        if (interfaceCount > 0) {
+          implemented = (ObjString**)malloc(sizeof(ObjString*) * (size_t)interfaceCount);
+          if (!implemented) {
+            fprintf(stderr, "Out of memory.\n");
+            exit(1);
+          }
+          for (int i = 0; i < interfaceCount; i++) {
+            implemented[i] = interfaces[i]->name;
+          }
+        }
+        typeRegistryAddClass(gTypeRegistry, className, implemented, interfaceCount);
+      }
+    }
+
+class_cleanup:
+    if (typecheckEnabled(c)) {
+      typeParamsTruncate(c->typecheck, savedTypeParamCount);
+    }
+    free(methods);
+    free(interfaces);
+    free(interfaceTokens);
+    free(classTypeParams);
+    if (!classOk) return;
+  }
+
+  static void classDeclaration(Compiler* c, bool isExport) {
+    Token name = consume(c, TOKEN_IDENTIFIER, "Expect class name.");
+    classDeclarationWithName(c, name, isExport, false);
+  }
 
 static void enumDeclaration(Compiler* c, bool isExport) {
   Token name = consume(c, TOKEN_IDENTIFIER, "Expect enum name.");
@@ -3335,7 +4182,7 @@ static void exportDeclaration(Compiler* c) {
       if (match(c, TOKEN_FUN)) {
         Token name = consume(c, TOKEN_IDENTIFIER, "Expect function name.");
         Type* functionType = NULL;
-        ObjFunction* function = compileFunction(c, name, false, &functionType);
+        ObjFunction* function = compileFunction(c, name, false, &functionType, true);
         (void)functionType;
         if (!function) return;
       int constant = makeConstant(c, OBJ_VAL(function), name);
@@ -3354,40 +4201,7 @@ static void exportDeclaration(Compiler* c) {
     }
     if (match(c, TOKEN_CLASS)) {
       Token name = consume(c, TOKEN_IDENTIFIER, "Expect class name.");
-      Token openBrace = consume(c, TOKEN_LEFT_BRACE, "Expect '{' before class body.");
-
-      int nameConst = emitStringConstant(c, name);
-      emitByte(c, OP_NULL, noToken());
-      emitByte(c, OP_DEFINE_VAR, name);
-      emitShort(c, (uint16_t)nameConst, name);
-
-      int methodCount = 0;
-      while (!check(c, TOKEN_RIGHT_BRACE) && !isAtEnd(c)) {
-        if (!match(c, TOKEN_FUN)) {
-          errorAtCurrent(c, "Expect 'fun' before method declaration.");
-          synchronize(c);
-          break;
-        }
-        Token methodName = consume(c, TOKEN_IDENTIFIER, "Expect method name.");
-        bool isInit = methodName.length == 4 && memcmp(methodName.start, "init", 4) == 0;
-        ObjFunction* method = compileFunction(c, methodName, isInit, NULL);
-        if (!method) return;
-        int constant = makeConstant(c, OBJ_VAL(method), methodName);
-        emitByte(c, OP_CLOSURE, methodName);
-        emitShort(c, (uint16_t)constant, methodName);
-        methodCount++;
-      }
-      consumeClosing(c, TOKEN_RIGHT_BRACE, "Expect '}' after class body.", openBrace);
-
-      emitByte(c, OP_CLASS, name);
-      emitShort(c, (uint16_t)nameConst, name);
-      emitShort(c, (uint16_t)methodCount, name);
-      if (allowExport) {
-        emitGetVarConstant(c, nameConst);
-        int defaultIdx = emitStringConstantFromChars(c, "default", 7);
-        emitExportValue(c, (uint16_t)defaultIdx, name);
-      }
-      emitGc(c);
+      classDeclarationWithName(c, name, false, allowExport);
       return;
     }
     expression(c);
@@ -3469,10 +4283,14 @@ static void exportDeclaration(Compiler* c) {
     classDeclaration(c, allowExport);
     return;
   }
-  if (match(c, TOKEN_ENUM)) {
-    enumDeclaration(c, allowExport);
-    return;
-  }
+    if (match(c, TOKEN_ENUM)) {
+      enumDeclaration(c, allowExport);
+      return;
+    }
+    if (match(c, TOKEN_INTERFACE)) {
+      interfaceDeclaration(c);
+      return;
+    }
 
   Token name = consume(c, TOKEN_IDENTIFIER, "Expect declaration or identifier after 'export'.");
   consume(c, TOKEN_SEMICOLON, "Expect ';' after export.");
@@ -3482,14 +4300,16 @@ static void exportDeclaration(Compiler* c) {
 }
 
 static void declaration(Compiler* c) {
-  if (match(c, TOKEN_EXPORT)) {
-    exportDeclaration(c);
-  } else if (match(c, TOKEN_CLASS)) {
-    classDeclaration(c, false);
-  } else if (match(c, TOKEN_FUN)) {
-    functionDeclaration(c, false);
-  } else if (match(c, TOKEN_CONST)) {
-    varDeclaration(c, true, false);
+    if (match(c, TOKEN_EXPORT)) {
+      exportDeclaration(c);
+    } else if (match(c, TOKEN_CLASS)) {
+      classDeclaration(c, false);
+    } else if (match(c, TOKEN_FUN)) {
+      functionDeclaration(c, false);
+    } else if (match(c, TOKEN_INTERFACE)) {
+      interfaceDeclaration(c);
+    } else if (match(c, TOKEN_CONST)) {
+      varDeclaration(c, true, false);
   } else if (match(c, TOKEN_LET)) {
     varDeclaration(c, false, false);
   } else if (match(c, TOKEN_ENUM)) {
@@ -3528,7 +4348,16 @@ static void statement(Compiler* c) {
   }
 }
 
-static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer, Type** outType) {
+static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
+                                    Type** outType, bool defineType) {
+  int typeParamCount = 0;
+  TypeParam* typeParams = parseTypeParams(c, &typeParamCount);
+  int savedTypeParamCount = 0;
+  if (typecheckEnabled(c)) {
+    savedTypeParamCount = c->typecheck->typeParamCount;
+    typeParamsPushList(c->typecheck, typeParams, typeParamCount);
+  }
+
   Token openParen = consume(c, TOKEN_LEFT_PAREN, "Expect '(' after function name.");
 
   int arity = 0;
@@ -3631,14 +4460,28 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
   if (match(c, TOKEN_COLON)) {
     returnType = parseType(c);
   }
+  if (typecheckEnabled(c)) {
+    typeParamsTruncate(c->typecheck, savedTypeParamCount);
+  }
   Token openBrace = consume(c, TOKEN_LEFT_BRACE, "Expect '{' before function body.");
   int bodyStart = c->current;
 
   Type* functionType = NULL;
   if (outType) {
     functionType = typeFunction(c->typecheck, paramTypes, arity, returnType);
+    if (functionType && typeParamCount > 0 && typeParams) {
+      functionType->typeParamCount = typeParamCount;
+      functionType->typeParams = (TypeParam*)malloc(sizeof(TypeParam) * (size_t)typeParamCount);
+      if (!functionType->typeParams) {
+        fprintf(stderr, "Out of memory.\n");
+        exit(1);
+      }
+      for (int i = 0; i < typeParamCount; i++) {
+        functionType->typeParams[i] = typeParams[i];
+      }
+    }
     *outType = functionType;
-    if (typecheckEnabled(c)) {
+    if (defineType && typecheckEnabled(c)) {
       typeDefine(c, name, functionType, true);
     }
   }
@@ -3669,6 +4512,9 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
   typeCheckerInit(&fnTypeChecker, c->typecheck,
                   c->typecheck ? c->typecheck->enabled : false);
   fnTypeChecker.currentReturn = returnType;
+    if (c->typecheck && c->typecheck->enabled) {
+      typeParamsPushList(&fnTypeChecker, typeParams, typeParamCount);
+    }
   fnCompiler.typecheck = &fnTypeChecker;
 
   if (typecheckEnabled(&fnCompiler)) {
@@ -3732,6 +4578,7 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
   free(paramHasType);
   free(defaultStarts);
   free(defaultEnds);
+  free(typeParams);
 
   typeCheckerFree(&fnTypeChecker);
 
@@ -3744,35 +4591,38 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
   return function;
 }
 
-ObjFunction* compile(VM* vm, const TokenArray* tokens, const char* source,
-                     const char* path, bool* hadError) {
-  initRules();
+  ObjFunction* compile(VM* vm, const TokenArray* tokens, const char* source,
+                       const char* path, bool* hadError) {
+    initRules();
 
-  Chunk* chunk = (Chunk*)malloc(sizeof(Chunk));
+    Chunk* chunk = (Chunk*)malloc(sizeof(Chunk));
   if (!chunk) { fprintf(stderr, "Out of memory.\n"); exit(1); }
   initChunk(chunk);
 
   ObjFunction* function = newFunction(vm, NULL, 0, 0, false, NULL, chunk, NULL, NULL);
 
-  Compiler c;
-  TypeChecker typecheck;
-  typeCheckerInit(&typecheck, NULL, vm->typecheck);
-  c.vm = vm;
-  c.tokens = tokens;
-  c.source = source;
-  c.path = path;
+    Compiler c;
+    TypeChecker typecheck;
+    TypeRegistry registry;
+    typeRegistryInit(&registry);
+    typeCheckerInit(&typecheck, NULL, vm->typecheck);
+    c.vm = vm;
+    c.tokens = tokens;
+    c.source = source;
+    c.path = path;
   c.current = 0;
   c.panicMode = false;
   c.hadError = false;
   c.chunk = chunk;
   c.scopeDepth = 0;
   c.tempIndex = 0;
-  c.pendingOptionalCall = false;
-  c.breakContext = NULL;
-  c.enclosing = NULL;
-  c.typecheck = &typecheck;
-  vm->compiler = &c;
-  typeDefineStdlib(&c);
+    c.pendingOptionalCall = false;
+    c.breakContext = NULL;
+    c.enclosing = NULL;
+    c.typecheck = &typecheck;
+    vm->compiler = &c;
+    gTypeRegistry = &registry;
+    typeDefineStdlib(&c);
 
   while (!isAtEnd(&c)) {
     declaration(&c);
@@ -3781,14 +4631,17 @@ ObjFunction* compile(VM* vm, const TokenArray* tokens, const char* source,
   emitByte(&c, OP_NULL, noToken());
   emitByte(&c, OP_RETURN, noToken());
 
-  vm->compiler = NULL;
+    vm->compiler = NULL;
+    gTypeRegistry = NULL;
 
-  *hadError = c.hadError;
-  if (c.hadError) {
+    *hadError = c.hadError;
+    if (c.hadError) {
+      typeCheckerFree(&typecheck);
+      typeRegistryFree(&registry);
+      return NULL;
+    }
+    optimizeChunk(vm, chunk);
     typeCheckerFree(&typecheck);
-    return NULL;
+    typeRegistryFree(&registry);
+    return function;
   }
-  optimizeChunk(vm, chunk);
-  typeCheckerFree(&typecheck);
-  return function;
-}

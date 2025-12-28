@@ -1,0 +1,9 @@
+tests/33_typecheck_generics_interface.ek:5:7: Error at 'BadGreeter': Method 'greet' does not match interface 'Greeter'.
+  class BadGreeter implements Greeter {
+        ^~~~~~~~~~
+tests/33_typecheck_generics_interface.ek:13:5: Error at 'bad': Type mismatch. Expected number but got string.
+  let bad: number = id("oops");
+      ^~~
+tests/33_typecheck_generics_interface.ek:16:4: Error at '(': Type argument for 'T' must implement Greeter.
+  use(123);
+     ^
