@@ -3,8 +3,6 @@
 
 #include "value.h"
 
-typedef struct Program Program;
-
 #define FRAMES_MAX 64
 #define STACK_MAX (FRAMES_MAX * 256)
 
@@ -25,15 +23,15 @@ typedef struct {
   bool modulePushResult;
 } CallFrame;
 
-typedef struct Env {
+struct Env {
   struct Env* enclosing;
   ObjMap* values;
   ObjMap* consts;
   struct Env* next;
   bool marked;
-} Env;
+};
 
-typedef struct VM {
+struct VM {
   Env* globals;
   Env* env;
   Env* envs;
@@ -85,7 +83,7 @@ typedef struct VM {
   char* projectRoot;
   char* globalPackagesDir;
   void* compiler;
-} VM;
+};
 
 void vmInit(VM* vm);
 void vmFree(VM* vm);

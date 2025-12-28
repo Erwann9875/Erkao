@@ -71,7 +71,7 @@ typedef enum {
   OP_GC
 } OpCode;
 
-typedef struct Chunk {
+struct Chunk {
   int count;
   int capacity;
   uint8_t* code;
@@ -80,7 +80,7 @@ typedef struct Chunk {
   int constantsCount;
   int constantsCapacity;
   Value* constants;
-} Chunk;
+};
 
 void initChunk(Chunk* chunk);
 void freeChunk(Chunk* chunk);

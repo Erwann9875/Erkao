@@ -3,16 +3,14 @@
 
 #include "value.h"
 
-typedef struct VM VM;
-
-typedef struct Program {
+struct Program {
   char* source;
   char* path;
   ObjFunction* function;
   int refCount;
   int running;
   struct Program* next;
-} Program;
+};
 
 Program* programCreate(VM* vm, char* source, const char* path, ObjFunction* function);
 void programRetain(Program* program);
