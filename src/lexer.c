@@ -294,10 +294,20 @@ static Token scanStringSegment(Scanner* scanner) {
   int segmentColumn = scanner->column;
 
   for (;;) {
-    if (isAtEnd(scanner)) return errorToken(scanner, "Unterminated string.");
+    if (isAtEnd(scanner)) {
+      scanner->inString = false;
+      scanner->stringIsMultiline = false;
+      scanner->inInterpolation = false;
+      scanner->interpolationDepth = 0;
+      return errorToken(scanner, "Unterminated string.");
+    }
 
     char c = peek(scanner);
     if (!scanner->stringIsMultiline && c == '\n') {
+      scanner->inString = false;
+      scanner->stringIsMultiline = false;
+      scanner->inInterpolation = false;
+      scanner->interpolationDepth = 0;
       return errorToken(scanner, "Unterminated string.");
     }
 
@@ -362,10 +372,20 @@ static Token scanStringLiteral(Scanner* scanner, bool multiline, bool allowInter
   int segmentColumn = scanner->column;
 
   for (;;) {
-    if (isAtEnd(scanner)) return errorToken(scanner, "Unterminated string.");
+    if (isAtEnd(scanner)) {
+      scanner->inString = false;
+      scanner->stringIsMultiline = false;
+      scanner->inInterpolation = false;
+      scanner->interpolationDepth = 0;
+      return errorToken(scanner, "Unterminated string.");
+    }
 
     char c = peek(scanner);
     if (!multiline && c == '\n') {
+      scanner->inString = false;
+      scanner->stringIsMultiline = false;
+      scanner->inInterpolation = false;
+      scanner->interpolationDepth = 0;
       return errorToken(scanner, "Unterminated string.");
     }
 
