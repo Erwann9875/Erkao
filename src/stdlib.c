@@ -4803,6 +4803,26 @@ void defineStdlib(VM* vm) {
   defineNative(vm, "keys", nativeKeys, 1);
   defineNative(vm, "values", nativeValues, 1);
 
+  ObjMap* option = newMap(vm);
+  ObjString* optionName = copyString(vm, "Option");
+  ObjString* someKey = copyString(vm, "Some");
+  ObjString* noneKey = copyString(vm, "None");
+  ObjEnumCtor* someCtor = newEnumCtor(vm, optionName, someKey, 1);
+  ObjMap* noneValue = newEnumVariant(vm, optionName, noneKey, 0, NULL);
+  mapSet(option, someKey, OBJ_VAL(someCtor));
+  mapSet(option, noneKey, OBJ_VAL(noneValue));
+  defineGlobal(vm, "Option", OBJ_VAL(option));
+
+  ObjMap* result = newMap(vm);
+  ObjString* resultName = copyString(vm, "Result");
+  ObjString* okKey = copyString(vm, "Ok");
+  ObjString* errKey = copyString(vm, "Err");
+  ObjEnumCtor* okCtor = newEnumCtor(vm, resultName, okKey, 1);
+  ObjEnumCtor* errCtor = newEnumCtor(vm, resultName, errKey, 1);
+  mapSet(result, okKey, OBJ_VAL(okCtor));
+  mapSet(result, errKey, OBJ_VAL(errCtor));
+  defineGlobal(vm, "Result", OBJ_VAL(result));
+
   ObjInstance* fs = makeModule(vm, "fs");
   moduleAdd(vm, fs, "readText", nativeFsReadText, 1);
   moduleAdd(vm, fs, "writeText", nativeFsWriteText, 2);

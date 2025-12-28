@@ -5,6 +5,7 @@
 
 #define FRAMES_MAX 64
 #define STACK_MAX (FRAMES_MAX * 256)
+#define TRY_MAX 256
 
 typedef struct {
   ObjFunction* function;
@@ -22,6 +23,13 @@ typedef struct {
   bool moduleHasAlias;
   bool modulePushResult;
 } CallFrame;
+
+typedef struct {
+  int frameIndex;
+  uint8_t* handler;
+  Value* stackTop;
+  Env* env;
+} TryFrame;
 
 struct Env {
   struct Env* enclosing;
@@ -46,6 +54,8 @@ struct VM {
   int frameCount;
   Value stack[STACK_MAX];
   Value* stackTop;
+  TryFrame tryFrames[TRY_MAX];
+  int tryCount;
   void** pluginHandles;
   int pluginCount;
   int pluginCapacity;

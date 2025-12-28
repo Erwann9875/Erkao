@@ -183,6 +183,12 @@ static int disassembleInstruction(const Chunk* chunk, int offset) {
       return jumpInstruction("OP_JUMP_IF_FALSE", 1, chunk, offset);
     case OP_LOOP:
       return jumpInstruction("OP_LOOP", -1, chunk, offset);
+    case OP_TRY:
+      return jumpInstruction("OP_TRY", 1, chunk, offset);
+    case OP_END_TRY:
+      return simpleInstruction("OP_END_TRY", chunk, offset);
+    case OP_THROW:
+      return simpleInstruction("OP_THROW", chunk, offset);
     case OP_CALL:
       return byteInstruction("OP_CALL", chunk, offset);
     case OP_CALL_OPTIONAL:
@@ -195,6 +201,8 @@ static int disassembleInstruction(const Chunk* chunk, int offset) {
       return constantInstruction("OP_CLOSURE", chunk, offset);
     case OP_RETURN:
       return simpleInstruction("OP_RETURN", chunk, offset);
+    case OP_TRY_UNWRAP:
+      return simpleInstruction("OP_TRY_UNWRAP", chunk, offset);
     case OP_BEGIN_SCOPE:
       return simpleInstruction("OP_BEGIN_SCOPE", chunk, offset);
     case OP_END_SCOPE:

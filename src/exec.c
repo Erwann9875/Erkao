@@ -14,6 +14,7 @@
 static void resetStack(VM* vm) {
   vm->stackTop = vm->stack;
   vm->frameCount = 0;
+  vm->tryCount = 0;
 }
 
 static void push(VM* vm, Value value) {
@@ -26,8 +27,83 @@ static Value pop(VM* vm) {
   return *vm->stackTop;
 }
 
+static ObjString* stringifyValue(VM* vm, Value value);
+
 static Value peek(VM* vm, int distance) {
   return vm->stackTop[-1 - distance];
+}
+
+static void popTryFramesForFrame(VM* vm, int frameIndex) {
+  while (vm->tryCount > 0 &&
+         vm->tryFrames[vm->tryCount - 1].frameIndex >= frameIndex) {
+    vm->tryCount--;
+  }
+}
+
+static bool isErrorValue(VM* vm, Value value) {
+  if (!isObjType(value, OBJ_MAP)) return false;
+  ObjMap* map = (ObjMap*)AS_OBJ(value);
+  ObjString* key = copyString(vm, "_error");
+  Value flag;
+  if (!mapGet(map, key, &flag)) return false;
+  return IS_BOOL(flag) && AS_BOOL(flag);
+}
+
+static ObjString* errorMessageForValue(VM* vm, Value value) {
+  if (isObjType(value, OBJ_MAP)) {
+    ObjMap* map = (ObjMap*)AS_OBJ(value);
+    ObjString* key = copyString(vm, "message");
+    Value message;
+    if (mapGet(map, key, &message) && isString(message)) {
+      return asString(message);
+    }
+  }
+  if (isString(value)) {
+    return asString(value);
+  }
+  return stringifyValue(vm, value);
+}
+
+static Value wrapErrorValue(VM* vm, Value value) {
+  if (isErrorValue(vm, value)) {
+    return value;
+  }
+  ObjMap* map = newMap(vm);
+  ObjString* errorKey = copyString(vm, "_error");
+  ObjString* messageKey = copyString(vm, "message");
+  ObjString* valueKey = copyString(vm, "value");
+  ObjString* traceKey = copyString(vm, "trace");
+  mapSet(map, errorKey, BOOL_VAL(true));
+  mapSet(map, valueKey, value);
+  ObjString* message = errorMessageForValue(vm, value);
+  mapSet(map, messageKey, OBJ_VAL(message));
+  const char* displayPath = "<repl>";
+  if (vm->currentProgram && vm->currentProgram->path) {
+    displayPath = vm->currentProgram->path;
+  }
+  ObjArray* trace = captureStackTrace(vm, displayPath);
+  mapSet(map, traceKey, OBJ_VAL(trace));
+  return OBJ_VAL(map);
+}
+
+static bool unwindToHandler(VM* vm, CallFrame** frame, Value error) {
+  while (vm->tryCount > 0) {
+    TryFrame handler = vm->tryFrames[vm->tryCount - 1];
+    if (handler.frameIndex < 0 || handler.frameIndex >= vm->frameCount) {
+      vm->tryCount--;
+      continue;
+    }
+    vm->tryCount--;
+    vm->frameCount = handler.frameIndex + 1;
+    vm->env = handler.env;
+    vm->stackTop = handler.stackTop;
+    *frame = &vm->frames[handler.frameIndex];
+    vm->currentProgram = (*frame)->function->program;
+    push(vm, error);
+    (*frame)->ip = handler.handler;
+    return true;
+  }
+  return false;
 }
 
 static Token currentToken(CallFrame* frame) {
@@ -502,6 +578,44 @@ static bool callFunction(VM* vm, ObjFunction* function, Value receiver,
   return true;
 }
 
+static bool returnFromFrame(VM* vm, CallFrame** frame, Value result, int targetFrameCount) {
+  CallFrame* finished = *frame;
+  Env* finishedEnv = vm->env;
+  int finishedIndex = vm->frameCount - 1;
+  popTryFramesForFrame(vm, finishedIndex);
+  vm->frameCount--;
+  vm->env = finished->previousEnv;
+  vm->currentProgram = finished->previousProgram;
+  if (finished->isModule && finished->moduleInstance && finished->moduleKey) {
+    if (finishedEnv && mapCount(finished->moduleInstance->fields) == 0) {
+      finished->moduleInstance->fields = finishedEnv->values;
+      gcWriteBarrier(vm, (Obj*)finished->moduleInstance, OBJ_VAL(finishedEnv->values));
+    }
+    mapSet(vm->modules, finished->moduleKey, OBJ_VAL(finished->moduleInstance));
+    if (finished->moduleHasAlias && finished->moduleAlias) {
+      envDefine(vm->env, finished->moduleAlias, OBJ_VAL(finished->moduleInstance));
+    }
+  }
+  if (finished->isModule && finished->modulePushResult && finished->moduleInstance) {
+    result = OBJ_VAL(finished->moduleInstance);
+  }
+  if (finished->function->isInitializer) {
+    result = finished->receiver;
+  }
+  vm->stackTop = finished->slots;
+  if (!finished->discardResult) {
+    push(vm, result);
+  }
+  if (vm->frameCount <= targetFrameCount) {
+    if (targetFrameCount == 0 && !finished->discardResult) {
+      pop(vm);
+    }
+    return true;
+  }
+  *frame = &vm->frames[vm->frameCount - 1];
+  return false;
+}
+
 static bool enumValueMatches(VM* vm, Value value, ObjString* enumName, ObjString* variantName) {
   if (!isObjType(value, OBJ_MAP)) return false;
   ObjMap* map = (ObjMap*)AS_OBJ(value);
@@ -522,6 +636,49 @@ static bool enumValueMatches(VM* vm, Value value, ObjString* enumName, ObjString
     return false;
   }
   return true;
+}
+
+static bool enumUnwrap(VM* vm, ObjMap* map, const char* enumName,
+                       const char* okTag, const char* errTag,
+                       Value* out, bool* shouldReturn, bool* matched) {
+  *matched = false;
+  *shouldReturn = false;
+  ObjString* enumKey = copyString(vm, "_enum");
+  ObjString* tagKey = copyString(vm, "_tag");
+  Value enumValue;
+  if (!mapGet(map, enumKey, &enumValue) || !isObjType(enumValue, OBJ_STRING)) {
+    return true;
+  }
+  ObjString* enumStr = (ObjString*)AS_OBJ(enumValue);
+  if (strcmp(enumStr->chars, enumName) != 0) {
+    return true;
+  }
+  *matched = true;
+  Value tagValue;
+  if (!mapGet(map, tagKey, &tagValue) || !isObjType(tagValue, OBJ_STRING)) {
+    return false;
+  }
+  ObjString* tagStr = (ObjString*)AS_OBJ(tagValue);
+  if (strcmp(tagStr->chars, errTag) == 0) {
+    *shouldReturn = true;
+    *out = OBJ_VAL(map);
+    return true;
+  }
+  if (strcmp(tagStr->chars, okTag) == 0) {
+    ObjString* valuesKey = copyString(vm, "_values");
+    Value valuesValue;
+    if (!mapGet(map, valuesKey, &valuesValue) || !isObjType(valuesValue, OBJ_ARRAY)) {
+      return false;
+    }
+    ObjArray* values = (ObjArray*)AS_OBJ(valuesValue);
+    if (values->count <= 0) {
+      *out = NULL_VAL;
+    } else {
+      *out = values->items[0];
+    }
+    return true;
+  }
+  return false;
 }
 
 static bool callValue(VM* vm, Value callee, int argc) {
@@ -846,6 +1003,34 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
           }
           return false;
         }
+        if (isObjType(object, OBJ_MAP)) {
+          ObjMap* map = (ObjMap*)AS_OBJ(object);
+          if (cache && cache->kind == IC_MAP && cache->map == map) {
+            int entryIndex = cache->index;
+            if (entryIndex >= 0 && entryIndex < map->capacity &&
+                map->entries[entryIndex].key == name) {
+              push(vm, map->entries[entryIndex].value);
+              break;
+            }
+          }
+
+          Value out;
+          int entryIndex = -1;
+          if (mapGetIndex(map, name, &out, &entryIndex)) {
+            if (cache) {
+              cache->kind = IC_MAP;
+              cache->map = map;
+              cache->key = name;
+              cache->index = entryIndex;
+              cache->klass = NULL;
+              cache->method = NULL;
+            }
+            push(vm, out);
+          } else {
+            push(vm, NULL_VAL);
+          }
+          break;
+        }
         runtimeError(vm, currentToken(frame), "Only instances have properties.");
         return false;
       }
@@ -920,6 +1105,34 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
           }
           return false;
         }
+        if (isObjType(object, OBJ_MAP)) {
+          ObjMap* map = (ObjMap*)AS_OBJ(object);
+          if (cache && cache->kind == IC_MAP && cache->map == map) {
+            int entryIndex = cache->index;
+            if (entryIndex >= 0 && entryIndex < map->capacity &&
+                map->entries[entryIndex].key == name) {
+              push(vm, map->entries[entryIndex].value);
+              break;
+            }
+          }
+
+          Value out;
+          int entryIndex = -1;
+          if (mapGetIndex(map, name, &out, &entryIndex)) {
+            if (cache) {
+              cache->kind = IC_MAP;
+              cache->map = map;
+              cache->key = name;
+              cache->index = entryIndex;
+              cache->klass = NULL;
+              cache->method = NULL;
+            }
+            push(vm, out);
+          } else {
+            push(vm, NULL_VAL);
+          }
+          break;
+        }
         runtimeError(vm, currentToken(frame), "Only instances have properties.");
         return false;
       }
@@ -927,22 +1140,36 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
         ObjString* name = (ObjString*)AS_OBJ(READ_CONSTANT());
         Value value = pop(vm);
         Value object = pop(vm);
-        if (!isObjType(object, OBJ_INSTANCE)) {
-          runtimeError(vm, currentToken(frame), "Only instances have fields.");
-          return false;
+        if (isObjType(object, OBJ_INSTANCE)) {
+          ObjInstance* instance = (ObjInstance*)AS_OBJ(object);
+          int index = mapSetIndex(instance->fields, name, value);
+          if (cache) {
+            cache->kind = IC_FIELD;
+            cache->map = instance->fields;
+            cache->key = name;
+            cache->index = index;
+            cache->klass = NULL;
+            cache->method = NULL;
+          }
+          push(vm, value);
+          break;
         }
-        ObjInstance* instance = (ObjInstance*)AS_OBJ(object);
-        int index = mapSetIndex(instance->fields, name, value);
-        if (cache) {
-          cache->kind = IC_FIELD;
-          cache->map = instance->fields;
-          cache->key = name;
-          cache->index = index;
-          cache->klass = NULL;
-          cache->method = NULL;
+        if (isObjType(object, OBJ_MAP)) {
+          ObjMap* map = (ObjMap*)AS_OBJ(object);
+          int entryIndex = mapSetIndex(map, name, value);
+          if (cache) {
+            cache->kind = IC_MAP;
+            cache->map = map;
+            cache->key = name;
+            cache->index = entryIndex;
+            cache->klass = NULL;
+            cache->method = NULL;
+          }
+          push(vm, value);
+          break;
         }
-        push(vm, value);
-        break;
+        runtimeError(vm, currentToken(frame), "Only instances have fields.");
+        return false;
       }
       case OP_GET_INDEX: {
         Value index = pop(vm);
@@ -1173,6 +1400,74 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
         frame->ip -= offset;
         break;
       }
+      case OP_TRY: {
+        uint16_t offset = READ_SHORT();
+        if (vm->tryCount >= TRY_MAX) {
+          runtimeError(vm, currentToken(frame), "Too many nested try blocks.");
+          return false;
+        }
+        TryFrame* tryFrame = &vm->tryFrames[vm->tryCount++];
+        tryFrame->frameIndex = vm->frameCount - 1;
+        tryFrame->handler = frame->ip + offset;
+        tryFrame->stackTop = vm->stackTop;
+        tryFrame->env = vm->env;
+        break;
+      }
+      case OP_END_TRY: {
+        if (vm->tryCount > 0 &&
+            vm->tryFrames[vm->tryCount - 1].frameIndex == vm->frameCount - 1) {
+          vm->tryCount--;
+        }
+        break;
+      }
+      case OP_THROW: {
+        Value thrown = pop(vm);
+        push(vm, thrown);
+        Value errorValue = wrapErrorValue(vm, thrown);
+        pop(vm);
+        if (unwindToHandler(vm, &frame, errorValue)) {
+          break;
+        }
+        Token token = currentToken(frame);
+        push(vm, errorValue);
+        ObjString* message = errorMessageForValue(vm, errorValue);
+        char buffer[256];
+        snprintf(buffer, sizeof(buffer), "Uncaught throw: %s", message->chars);
+        pop(vm);
+        runtimeError(vm, token, buffer);
+        return false;
+      }
+      case OP_TRY_UNWRAP: {
+        Value value = pop(vm);
+        if (!isObjType(value, OBJ_MAP)) {
+          runtimeError(vm, currentToken(frame), "Cannot use '?' on this value.");
+          return false;
+        }
+        ObjMap* map = (ObjMap*)AS_OBJ(value);
+        Value out = NULL_VAL;
+        bool shouldReturn = false;
+        bool matched = false;
+        bool ok = enumUnwrap(vm, map, "Result", "Ok", "Err", &out, &shouldReturn, &matched);
+        if (!matched) {
+          ok = enumUnwrap(vm, map, "Option", "Some", "None", &out, &shouldReturn, &matched);
+        }
+        if (!matched) {
+          runtimeError(vm, currentToken(frame), "Cannot use '?' on this value.");
+          return false;
+        }
+        if (!ok) {
+          runtimeError(vm, currentToken(frame), "Invalid value for '?' unwrap.");
+          return false;
+        }
+        if (shouldReturn) {
+          if (returnFromFrame(vm, &frame, out, targetFrameCount)) {
+            return true;
+          }
+          break;
+        }
+        push(vm, out);
+        break;
+      }
       case OP_CALL: {
         int argCount = READ_BYTE();
         Value callee = peek(vm, argCount);
@@ -1196,6 +1491,39 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
         ObjString* name = (ObjString*)AS_OBJ(READ_CONSTANT());
         int argCount = READ_BYTE();
         Value receiver = peek(vm, argCount);
+        if (isObjType(receiver, OBJ_MAP)) {
+          ObjMap* map = (ObjMap*)AS_OBJ(receiver);
+          if (cache && cache->kind == IC_MAP && cache->map == map) {
+            int entryIndex = cache->index;
+            if (entryIndex >= 0 && entryIndex < map->capacity &&
+                map->entries[entryIndex].key == name) {
+              Value callee = map->entries[entryIndex].value;
+              vm->stackTop[-argCount - 1] = callee;
+              if (!callValue(vm, callee, argCount)) return false;
+              frame = &vm->frames[vm->frameCount - 1];
+              break;
+            }
+          }
+
+          Value value;
+          int entryIndex = -1;
+          if (mapGetIndex(map, name, &value, &entryIndex)) {
+            if (cache) {
+              cache->kind = IC_MAP;
+              cache->map = map;
+              cache->key = name;
+              cache->index = entryIndex;
+              cache->klass = NULL;
+              cache->method = NULL;
+            }
+            vm->stackTop[-argCount - 1] = value;
+            if (!callValue(vm, value, argCount)) return false;
+            frame = &vm->frames[vm->frameCount - 1];
+            break;
+          }
+          runtimeError(vm, currentToken(frame), "Undefined property.");
+          return false;
+        }
         if (!isObjType(receiver, OBJ_INSTANCE)) {
           runtimeError(vm, currentToken(frame), "Only instances have properties.");
           return false;
@@ -1283,38 +1611,9 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
       }
       case OP_RETURN: {
         Value result = pop(vm);
-        CallFrame* finished = frame;
-        Env* finishedEnv = vm->env;
-        vm->frameCount--;
-        vm->env = finished->previousEnv;
-        vm->currentProgram = finished->previousProgram;
-        if (finished->isModule && finished->moduleInstance && finished->moduleKey) {
-          if (finishedEnv && mapCount(finished->moduleInstance->fields) == 0) {
-            finished->moduleInstance->fields = finishedEnv->values;
-            gcWriteBarrier(vm, (Obj*)finished->moduleInstance, OBJ_VAL(finishedEnv->values));
-          }
-          mapSet(vm->modules, finished->moduleKey, OBJ_VAL(finished->moduleInstance));
-          if (finished->moduleHasAlias && finished->moduleAlias) {
-            envDefine(vm->env, finished->moduleAlias, OBJ_VAL(finished->moduleInstance));
-          }
-        }
-        if (finished->isModule && finished->modulePushResult && finished->moduleInstance) {
-          result = OBJ_VAL(finished->moduleInstance);
-        }
-        if (finished->function->isInitializer) {
-          result = finished->receiver;
-        }
-        vm->stackTop = finished->slots;
-        if (!finished->discardResult) {
-          push(vm, result);
-        }
-        if (vm->frameCount <= targetFrameCount) {
-          if (targetFrameCount == 0 && !finished->discardResult) {
-            pop(vm);
-          }
+        if (returnFromFrame(vm, &frame, result, targetFrameCount)) {
           return true;
         }
-        frame = &vm->frames[vm->frameCount - 1];
         break;
       }
       case OP_BEGIN_SCOPE:

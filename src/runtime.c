@@ -88,6 +88,38 @@ static bool stackTraceEnabled(void) {
   return true;
 }
 
+ObjArray* captureStackTrace(VM* vm, const char* fallbackPath) {
+  ObjArray* trace = newArray(vm);
+#ifdef ERKAO_FUZZING
+  (void)vm;
+  (void)fallbackPath;
+  return trace;
+#else
+  if (!vm || vm->frameCount <= 0) return trace;
+  for (int i = vm->frameCount - 1, depth = 0; i >= 0; i--, depth++) {
+    CallFrame* frame = &vm->frames[i];
+    const char* name = frameFunctionName(frame);
+    const char* path = framePath(frame, fallbackPath);
+    Token token = frameToken(frame);
+    char buffer[256];
+    if (token.line > 0 && token.column > 0) {
+      if (token.length > 0) {
+        snprintf(buffer, sizeof(buffer), "#%d %s (%s:%d:%d) -> '%.*s'",
+                 depth, name, path, token.line, token.column,
+                 token.length, token.start);
+      } else {
+        snprintf(buffer, sizeof(buffer), "#%d %s (%s:%d:%d)",
+                 depth, name, path, token.line, token.column);
+      }
+    } else {
+      snprintf(buffer, sizeof(buffer), "#%d %s (%s)", depth, name, path);
+    }
+    arrayWrite(trace, OBJ_VAL(copyString(vm, buffer)));
+  }
+  return trace;
+#endif
+}
+
 void runtimeError(VM* vm, Token token, const char* message) {
   const char* displayPath = "<repl>";
   if (vm->currentProgram && vm->currentProgram->path) {

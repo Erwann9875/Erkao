@@ -1,0 +1,52 @@
+fun div(a, b) {
+  if (b == 0) return Result.Err("div0");
+  return Result.Ok(a / b);
+}
+
+fun calc(a, b, c) {
+  let x = div(a, b)?;
+  let y = div(x, c)?;
+  return Result.Ok(y);
+}
+
+let ok = calc(8, 2, 2);
+match (ok) {
+  case Result.Ok(value):
+    print("ok", value);
+  case Result.Err(err):
+    print("err", err);
+}
+
+let bad = calc(8, 0, 2);
+match (bad) {
+  case Result.Ok(value):
+    print("ok", value);
+  case Result.Err(err):
+    print("err", err);
+}
+
+fun first(nums) {
+  if (len(nums) == 0) return Option.None;
+  return Option.Some(nums[0]);
+}
+
+fun incFirst(nums) {
+  let value = first(nums)?;
+  return Option.Some(value + 1);
+}
+
+let some = incFirst([1, 2]);
+match (some) {
+  case Option.Some(v):
+    print("some", v);
+  case Option.None:
+    print("none");
+}
+
+let none = incFirst([]);
+match (none) {
+  case Option.Some(v):
+    print("some", v);
+  case Option.None:
+    print("none");
+}

@@ -310,6 +310,7 @@ void vmInit(VM* vm) {
   vm->globalPackagesDir = resolveGlobalPackagesDir();
   vm->frameCount = 0;
   vm->stackTop = vm->stack;
+  vm->tryCount = 0;
   vm->globals = newEnv(vm, NULL);
   vm->env = vm->globals;
   vm->args = newArray(vm);

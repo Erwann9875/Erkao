@@ -192,7 +192,11 @@ static ErkaoTokenType identifierType(Scanner* scanner) {
     case 'c':
       if ((int)(scanner->current - scanner->start) > 1) {
         switch (scanner->start[1]) {
-          case 'a': return checkKeyword(scanner, 1, 3, "ase", TOKEN_CASE);
+          case 'a': {
+            ErkaoTokenType type = checkKeyword(scanner, 1, 3, "ase", TOKEN_CASE);
+            if (type != TOKEN_IDENTIFIER) return type;
+            return checkKeyword(scanner, 1, 4, "atch", TOKEN_CATCH);
+          }
           case 'l': return checkKeyword(scanner, 1, 4, "lass", TOKEN_CLASS);
           case 'o': {
             ErkaoTokenType type = checkKeyword(scanner, 1, 4, "onst", TOKEN_CONST);
@@ -259,8 +263,16 @@ static ErkaoTokenType identifierType(Scanner* scanner) {
     case 't':
       if ((int)(scanner->current - scanner->start) > 1) {
         switch (scanner->start[1]) {
-          case 'h': return checkKeyword(scanner, 2, 2, "is", TOKEN_THIS);
-          case 'r': return checkKeyword(scanner, 2, 2, "ue", TOKEN_TRUE);
+          case 'h': {
+            ErkaoTokenType type = checkKeyword(scanner, 2, 2, "is", TOKEN_THIS);
+            if (type != TOKEN_IDENTIFIER) return type;
+            return checkKeyword(scanner, 2, 3, "row", TOKEN_THROW);
+          }
+          case 'r': {
+            ErkaoTokenType type = checkKeyword(scanner, 2, 2, "ue", TOKEN_TRUE);
+            if (type != TOKEN_IDENTIFIER) return type;
+            return checkKeyword(scanner, 2, 1, "y", TOKEN_TRY);
+          }
         }
       }
       break;
@@ -608,6 +620,9 @@ const char* tokenTypeName(ErkaoTokenType type) {
     case TOKEN_NULL: return "NULL";
     case TOKEN_OR: return "OR";
     case TOKEN_RETURN: return "RETURN";
+    case TOKEN_TRY: return "TRY";
+    case TOKEN_CATCH: return "CATCH";
+    case TOKEN_THROW: return "THROW";
     case TOKEN_THIS: return "THIS";
     case TOKEN_TRUE: return "TRUE";
     case TOKEN_LET: return "LET";

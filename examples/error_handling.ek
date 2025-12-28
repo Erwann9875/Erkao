@@ -1,0 +1,23 @@
+fun parseNumber(text) {
+  if (text == "") return Result.Err("empty");
+  return Result.Ok(41);
+}
+
+fun plusOne(text) {
+  let value = parseNumber(text)?;
+  return Result.Ok(value + 1);
+}
+
+let result = plusOne("");
+match (result) {
+  case Result.Ok(value):
+    print("ok", value);
+  case Result.Err(err):
+    print("err", err);
+}
+
+try {
+  throw "boom";
+} catch (err) {
+  print("caught", err["message"]);
+}

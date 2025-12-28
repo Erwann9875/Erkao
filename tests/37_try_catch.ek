@@ -1,0 +1,15 @@
+fun risky(name) {
+  if (name == "boom") {
+    throw "kaboom";
+  }
+  return "ok " + name;
+}
+
+try {
+  print(risky("erkao"));
+  print(risky("boom"));
+} catch (err) {
+  print("message", err["message"]);
+  print("value", err["value"]);
+  print("trace", len(err["trace"]) > 0);
+}

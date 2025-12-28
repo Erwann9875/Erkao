@@ -26,6 +26,8 @@ typedef struct {
   } as;
 } ConstValue;
 
+typedef struct EnumVariantInfo EnumVariantInfo;
+
 static void constValueFree(ConstValue* v) {
   if (v->type == CONST_STRING && v->ownsString) {
     free((void*)v->as.string.chars);
@@ -223,6 +225,7 @@ static int instructionLength(const Chunk* chunk, int offset) {
     case OP_JUMP:
     case OP_JUMP_IF_FALSE:
     case OP_LOOP:
+    case OP_TRY:
     case OP_ARRAY:
     case OP_MAP:
       return 3;
@@ -238,6 +241,10 @@ static int instructionLength(const Chunk* chunk, int offset) {
       return 4;
     case OP_CLASS:
       return 5;
+    case OP_END_TRY:
+    case OP_THROW:
+    case OP_TRY_UNWRAP:
+      return 1;
     case OP_IMPORT:
       return 4;
     case OP_IMPORT_MODULE:
@@ -588,6 +595,9 @@ static const KeywordEntry keywordEntries[] = {
   {TOKEN_NULL, "null"},
   {TOKEN_OR, "or"},
   {TOKEN_RETURN, "return"},
+  {TOKEN_TRY, "try"},
+  {TOKEN_CATCH, "catch"},
+  {TOKEN_THROW, "throw"},
   {TOKEN_SWITCH, "switch"},
   {TOKEN_THIS, "this"},
   {TOKEN_TRUE, "true"},
@@ -660,6 +670,9 @@ static const char* tokenDescription(ErkaoTokenType type) {
     case TOKEN_NULL: return "'null'";
     case TOKEN_OR: return "'or'";
     case TOKEN_RETURN: return "'return'";
+    case TOKEN_TRY: return "'try'";
+    case TOKEN_CATCH: return "'catch'";
+    case TOKEN_THROW: return "'throw'";
     case TOKEN_SWITCH: return "'switch'";
     case TOKEN_THIS: return "'this'";
     case TOKEN_TRUE: return "'true'";
@@ -855,6 +868,7 @@ static void synchronize(Compiler* c) {
       case TOKEN_ENUM: case TOKEN_EXPORT: case TOKEN_IMPORT: case TOKEN_FROM:
       case TOKEN_IF: case TOKEN_WHILE: case TOKEN_FOR: case TOKEN_FOREACH:
       case TOKEN_SWITCH: case TOKEN_MATCH: case TOKEN_RETURN:
+      case TOKEN_TRY: case TOKEN_THROW: case TOKEN_CATCH:
       case TOKEN_BREAK: case TOKEN_CONTINUE:
         return;
       default:
@@ -2000,6 +2014,10 @@ static Type* typeFunctionN(TypeChecker* tc, int paramCount, Type* returnType, ..
   return typeFunction(tc, params, paramCount, returnType);
 }
 
+static EnumInfo* compilerAddEnum(Compiler* c, Token name);
+static EnumVariantInfo* enumInfoAddVariant(EnumInfo* info, Token name, int arity);
+static void enumInfoSetAdt(EnumInfo* info, bool isAdt);
+
 static Type* typeLookupStdlibMember(Compiler* c, Type* objectType, Token name) {
   if (!typecheckEnabled(c)) return typeAny();
   if (!objectType || typeIsAny(objectType)) return typeAny();
@@ -2202,32 +2220,34 @@ static Type* typeLookupStdlibMember(Compiler* c, Type* objectType, Token name) {
 }
 
 static void typeDefineStdlib(Compiler* c) {
-  if (!typecheckEnabled(c)) return;
-  TypeChecker* tc = c->typecheck;
+  if (typecheckEnabled(c)) {
+    TypeChecker* tc = c->typecheck;
 
-  typeDefineSynthetic(c, "print", typeFunctionN(tc, -1, typeNull()));
-  typeDefineSynthetic(c, "clock", typeFunctionN(tc, 0, typeNumber()));
-  typeDefineSynthetic(c, "type", typeFunctionN(tc, 1, typeString(), typeAny()));
-  typeDefineSynthetic(c, "len", typeFunctionN(tc, 1, typeNumber(), typeAny()));
-  typeDefineSynthetic(c, "args", typeFunctionN(tc, 0, typeArray(tc, typeString())));
-  {
-    Type* params[2] = { typeArray(tc, typeAny()), typeAny() };
-    typeDefineSynthetic(c, "push", typeFunction(tc, params, 2, typeNumber()));
-  }
-  typeDefineSynthetic(c, "keys", typeFunctionN(tc, 1, typeArray(tc, typeString()),
-                                               typeMap(tc, typeString(), typeAny())));
-  typeDefineSynthetic(c, "values", typeFunctionN(tc, 1, typeArray(tc, typeAny()),
+    typeDefineSynthetic(c, "print", typeFunctionN(tc, -1, typeNull()));
+    typeDefineSynthetic(c, "clock", typeFunctionN(tc, 0, typeNumber()));
+    typeDefineSynthetic(c, "type", typeFunctionN(tc, 1, typeString(), typeAny()));
+    typeDefineSynthetic(c, "len", typeFunctionN(tc, 1, typeNumber(), typeAny()));
+    typeDefineSynthetic(c, "args", typeFunctionN(tc, 0, typeArray(tc, typeString())));
+    {
+      Type* params[2] = { typeArray(tc, typeAny()), typeAny() };
+      typeDefineSynthetic(c, "push", typeFunction(tc, params, 2, typeNumber()));
+    }
+    typeDefineSynthetic(c, "keys", typeFunctionN(tc, 1, typeArray(tc, typeString()),
                                                  typeMap(tc, typeString(), typeAny())));
+    typeDefineSynthetic(c, "values", typeFunctionN(tc, 1, typeArray(tc, typeAny()),
+                                                   typeMap(tc, typeString(), typeAny())));
+    typeDefineSynthetic(c, "Option", typeNamed(tc, copyString(c->vm, "Option")));
+    typeDefineSynthetic(c, "Result", typeNamed(tc, copyString(c->vm, "Result")));
 
-  typeDefineSynthetic(c, "fs", typeNamed(tc, copyString(c->vm, "fs")));
-  typeDefineSynthetic(c, "path", typeNamed(tc, copyString(c->vm, "path")));
-  typeDefineSynthetic(c, "json", typeNamed(tc, copyString(c->vm, "json")));
-  typeDefineSynthetic(c, "yaml", typeNamed(tc, copyString(c->vm, "yaml")));
-  typeDefineSynthetic(c, "math", typeNamed(tc, copyString(c->vm, "math")));
-  typeDefineSynthetic(c, "random", typeNamed(tc, copyString(c->vm, "random")));
-  typeDefineSynthetic(c, "str", typeNamed(tc, copyString(c->vm, "str")));
-  typeDefineSynthetic(c, "array", typeNamed(tc, copyString(c->vm, "array")));
-  typeDefineSynthetic(c, "os", typeNamed(tc, copyString(c->vm, "os")));
+    typeDefineSynthetic(c, "fs", typeNamed(tc, copyString(c->vm, "fs")));
+    typeDefineSynthetic(c, "path", typeNamed(tc, copyString(c->vm, "path")));
+    typeDefineSynthetic(c, "json", typeNamed(tc, copyString(c->vm, "json")));
+    typeDefineSynthetic(c, "yaml", typeNamed(tc, copyString(c->vm, "yaml")));
+    typeDefineSynthetic(c, "math", typeNamed(tc, copyString(c->vm, "math")));
+    typeDefineSynthetic(c, "random", typeNamed(tc, copyString(c->vm, "random")));
+    typeDefineSynthetic(c, "str", typeNamed(tc, copyString(c->vm, "str")));
+    typeDefineSynthetic(c, "array", typeNamed(tc, copyString(c->vm, "array")));
+    typeDefineSynthetic(c, "os", typeNamed(tc, copyString(c->vm, "os")));
     typeDefineSynthetic(c, "time", typeNamed(tc, copyString(c->vm, "time")));
     typeDefineSynthetic(c, "vec2", typeNamed(tc, copyString(c->vm, "vec2")));
     typeDefineSynthetic(c, "vec3", typeNamed(tc, copyString(c->vm, "vec3")));
@@ -2238,18 +2258,58 @@ static void typeDefineStdlib(Compiler* c) {
     typeDefineSynthetic(c, "plugin", typeNamed(tc, copyString(c->vm, "plugin")));
     typeDefineSynthetic(c, "di", typeNamed(tc, copyString(c->vm, "di")));
   }
+  {
+    Token optionToken;
+    memset(&optionToken, 0, sizeof(Token));
+    optionToken.start = "Option";
+    optionToken.length = 6;
+    EnumInfo* optionInfo = compilerAddEnum(c, optionToken);
+    if (optionInfo) {
+      enumInfoSetAdt(optionInfo, true);
+      Token someToken;
+      memset(&someToken, 0, sizeof(Token));
+      someToken.start = "Some";
+      someToken.length = 4;
+      enumInfoAddVariant(optionInfo, someToken, 1);
+      Token noneToken;
+      memset(&noneToken, 0, sizeof(Token));
+      noneToken.start = "None";
+      noneToken.length = 4;
+      enumInfoAddVariant(optionInfo, noneToken, 0);
+    }
 
-  static Type* typeNamed(TypeChecker* tc, ObjString* name) {
-    Type* type = typeAlloc(tc, TYPE_NAMED);
-    type->name = name;
-    return type;
+    Token resultToken;
+    memset(&resultToken, 0, sizeof(Token));
+    resultToken.start = "Result";
+    resultToken.length = 6;
+    EnumInfo* resultInfo = compilerAddEnum(c, resultToken);
+    if (resultInfo) {
+      enumInfoSetAdt(resultInfo, true);
+      Token okToken;
+      memset(&okToken, 0, sizeof(Token));
+      okToken.start = "Ok";
+      okToken.length = 2;
+      enumInfoAddVariant(resultInfo, okToken, 1);
+      Token errToken;
+      memset(&errToken, 0, sizeof(Token));
+      errToken.start = "Err";
+      errToken.length = 3;
+      enumInfoAddVariant(resultInfo, errToken, 1);
+    }
   }
+}
 
-  static Type* typeGeneric(TypeChecker* tc, ObjString* name) {
-    Type* type = typeAlloc(tc, TYPE_GENERIC);
-    type->name = name;
-    return type;
-  }
+static Type* typeNamed(TypeChecker* tc, ObjString* name) {
+  Type* type = typeAlloc(tc, TYPE_NAMED);
+  type->name = name;
+  return type;
+}
+
+static Type* typeGeneric(TypeChecker* tc, ObjString* name) {
+  Type* type = typeAlloc(tc, TYPE_GENERIC);
+  type->name = name;
+  return type;
+}
 
 static Type* typeArray(TypeChecker* tc, Type* elem) {
   Type* type = typeAlloc(tc, TYPE_ARRAY);
@@ -2329,80 +2389,80 @@ static Type* typeFromToken(Compiler* c, Token token) {
   return typeNamed(c->typecheck, name);
 }
 
-  static Type* parseTypeArguments(Compiler* c, Type* base, Token typeToken) {
-    if (!match(c, TOKEN_LESS)) {
-      return base;
-    }
-
-    if (base->kind == TYPE_ARRAY) {
-      Type* elem = parseType(c);
-      consume(c, TOKEN_GREATER, "Expect '>' after array type.");
-      return typeArray(c->typecheck, elem);
-    }
-
-    if (base->kind == TYPE_MAP) {
-      Type* key = parseType(c);
-      Type* value = NULL;
-      if (match(c, TOKEN_COMMA)) {
-        value = parseType(c);
-      } else {
-        value = key;
-        key = typeString();
-      }
-      if (!typeIsAny(key) && key->kind != TYPE_STRING) {
-        typeErrorAt(c, typeToken, "Map keys must be string.");
-        key = typeString();
-      }
-      consume(c, TOKEN_GREATER, "Expect '>' after map type.");
-      return typeMap(c->typecheck, key, value);
-    }
-
-    if (base->kind == TYPE_NAMED) {
-      int count = 0;
-      int capacity = 0;
-      Type** args = NULL;
-      if (!check(c, TOKEN_GREATER)) {
-        do {
-          Type* arg = parseType(c);
-          if (count >= capacity) {
-            int oldCap = capacity;
-            capacity = GROW_CAPACITY(oldCap);
-            args = GROW_ARRAY(Type*, args, oldCap, capacity);
-            if (!args) {
-              fprintf(stderr, "Out of memory.\n");
-              exit(1);
-            }
-          }
-          args[count++] = arg;
-        } while (match(c, TOKEN_COMMA));
-      }
-      consume(c, TOKEN_GREATER, "Expect '>' after type arguments.");
-      base->typeArgs = args;
-      base->typeArgCount = count;
-      return base;
-    }
-
-    typeErrorAt(c, typeToken, "Only array/map/named types accept type arguments.");
-    int depth = 1;
-    while (!isAtEnd(c) && depth > 0) {
-      if (match(c, TOKEN_LESS)) depth++;
-      else if (match(c, TOKEN_GREATER)) depth--;
-      else advance(c);
-    }
+static Type* parseTypeArguments(Compiler* c, Type* base, Token typeToken) {
+  if (!match(c, TOKEN_LESS)) {
     return base;
   }
 
-  static Type* parseType(Compiler* c) {
-    if (!check(c, TOKEN_IDENTIFIER) && !check(c, TOKEN_NULL)) {
-      errorAtCurrent(c, "Expect type name.");
-      return typeAny();
+  if (base->kind == TYPE_ARRAY) {
+    Type* elem = parseType(c);
+    consume(c, TOKEN_GREATER, "Expect '>' after array type.");
+    return typeArray(c->typecheck, elem);
+  }
+
+  if (base->kind == TYPE_MAP) {
+    Type* key = parseType(c);
+    Type* value = NULL;
+    if (match(c, TOKEN_COMMA)) {
+      value = parseType(c);
+    } else {
+      value = key;
+      key = typeString();
     }
-    Token name = advance(c);
-    TypeParam* param = typeParamFindToken(c->typecheck, name);
-    Type* base = param ? typeGeneric(c->typecheck, param->name) : typeFromToken(c, name);
-    if (check(c, TOKEN_LESS)) {
-      base = parseTypeArguments(c, base, name);
+    if (!typeIsAny(key) && key->kind != TYPE_STRING) {
+      typeErrorAt(c, typeToken, "Map keys must be string.");
+      key = typeString();
     }
+    consume(c, TOKEN_GREATER, "Expect '>' after map type.");
+    return typeMap(c->typecheck, key, value);
+  }
+
+  if (base->kind == TYPE_NAMED) {
+    int count = 0;
+    int capacity = 0;
+    Type** args = NULL;
+    if (!check(c, TOKEN_GREATER)) {
+      do {
+        Type* arg = parseType(c);
+        if (count >= capacity) {
+          int oldCap = capacity;
+          capacity = GROW_CAPACITY(oldCap);
+          args = GROW_ARRAY(Type*, args, oldCap, capacity);
+          if (!args) {
+            fprintf(stderr, "Out of memory.\n");
+            exit(1);
+          }
+        }
+        args[count++] = arg;
+      } while (match(c, TOKEN_COMMA));
+    }
+    consume(c, TOKEN_GREATER, "Expect '>' after type arguments.");
+    base->typeArgs = args;
+    base->typeArgCount = count;
+    return base;
+  }
+
+  typeErrorAt(c, typeToken, "Only array/map/named types accept type arguments.");
+  int depth = 1;
+  while (!isAtEnd(c) && depth > 0) {
+    if (match(c, TOKEN_LESS)) depth++;
+    else if (match(c, TOKEN_GREATER)) depth--;
+    else advance(c);
+  }
+  return base;
+}
+
+static Type* parseType(Compiler* c) {
+  if (!check(c, TOKEN_IDENTIFIER) && !check(c, TOKEN_NULL)) {
+    errorAtCurrent(c, "Expect type name.");
+    return typeAny();
+  }
+  Token name = advance(c);
+  TypeParam* param = typeParamFindToken(c->typecheck, name);
+  Type* base = param ? typeGeneric(c->typecheck, param->name) : typeFromToken(c, name);
+  if (check(c, TOKEN_LESS)) {
+    base = parseTypeArguments(c, base, name);
+  }
   if (match(c, TOKEN_QUESTION)) {
     base = typeMakeNullable(c->typecheck, base);
   }
@@ -2625,11 +2685,11 @@ static char* copyTokenLexeme(Token token) {
   return buffer;
 }
 
-typedef struct {
+struct EnumVariantInfo {
   char* name;
   int nameLength;
   int arity;
-} EnumVariantInfo;
+};
 
 struct EnumInfo {
   char* name;
@@ -2639,6 +2699,12 @@ struct EnumInfo {
   int variantCapacity;
   bool isAdt;
 };
+
+static void enumInfoSetAdt(EnumInfo* info, bool isAdt) {
+  if (info) {
+    info->isAdt = isAdt;
+  }
+}
 
 static void enumInfoFree(EnumInfo* info) {
   if (!info) return;
@@ -3177,6 +3243,15 @@ static void optionalDot(Compiler* c, bool canAssign) {
   c->pendingOptionalCall = true;
 }
 
+static void tryUnwrap(Compiler* c, bool canAssign) {
+  (void)canAssign;
+  Token op = previous(c);
+  c->pendingOptionalCall = false;
+  typePop(c);
+  typePush(c, typeAny());
+  emitByte(c, OP_TRY_UNWRAP, op);
+}
+
 static void index_(Compiler* c, bool canAssign) {
   c->pendingOptionalCall = false;
   Token bracket = previous(c);
@@ -3278,6 +3353,7 @@ static void initRules(void) {
   rules[TOKEN_LEFT_BRACKET] = (ParseRule){array, index_, PREC_CALL};
   rules[TOKEN_LEFT_BRACE] = (ParseRule){map, NULL, PREC_NONE};
   rules[TOKEN_DOT] = (ParseRule){NULL, dot, PREC_CALL};
+  rules[TOKEN_QUESTION] = (ParseRule){NULL, tryUnwrap, PREC_CALL};
   rules[TOKEN_QUESTION_DOT] = (ParseRule){NULL, optionalDot, PREC_CALL};
   rules[TOKEN_MINUS] = (ParseRule){unary, binary, PREC_TERM};
   rules[TOKEN_PLUS] = (ParseRule){NULL, binary, PREC_TERM};
@@ -3760,10 +3836,10 @@ static void switchStatement(Compiler* c) {
           errorAt(c, enumToken, "Match patterns must use a single enum.");
         }
 
-        Token openParen;
-        memset(&openParen, 0, sizeof(Token));
+        Token patternParen;
+        memset(&patternParen, 0, sizeof(Token));
         if (match(c, TOKEN_LEFT_PAREN)) {
-          openParen = previous(c);
+          patternParen = previous(c);
           if (!check(c, TOKEN_RIGHT_PAREN)) {
             do {
               if (bindCount >= ERK_MAX_ARGS) {
@@ -3773,18 +3849,18 @@ static void switchStatement(Compiler* c) {
                   consume(c, TOKEN_IDENTIFIER, "Expect binding name.");
             } while (match(c, TOKEN_COMMA));
           }
-          consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after match pattern.", openParen);
+          consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after match pattern.", patternParen);
         }
 
         EnumVariantInfo* variantInfo = info ? findEnumVariant(info, variantToken) : NULL;
         if (!variantInfo && info) {
           errorAt(c, variantToken, "Unknown enum variant.");
         } else if (variantInfo && variantInfo->arity != bindCount) {
-          char message[96];
-          snprintf(message, sizeof(message),
+          char patternMessage[96];
+          snprintf(patternMessage, sizeof(patternMessage),
                    "Pattern expects %d bindings but got %d.",
                    variantInfo->arity, bindCount);
-          errorAt(c, variantToken, message);
+          errorAt(c, variantToken, patternMessage);
         }
 
         consume(c, TOKEN_COLON, "Expect ':' after case value.");
@@ -3897,6 +3973,60 @@ static void switchStatement(Compiler* c) {
   c->scopeDepth--;
   typeCheckerExitScope(c);
   emitGc(c);
+}
+
+static void tryStatement(Compiler* c) {
+  Token keyword = previous(c);
+  Token openBrace = consume(c, TOKEN_LEFT_BRACE, "Expect '{' after 'try'.");
+
+  int handlerJump = emitJump(c, OP_TRY, keyword);
+
+  emitByte(c, OP_BEGIN_SCOPE, noToken());
+  c->scopeDepth++;
+  typeCheckerEnterScope(c);
+  block(c, openBrace);
+  emitByte(c, OP_END_SCOPE, noToken());
+  c->scopeDepth--;
+  typeCheckerExitScope(c);
+  emitGc(c);
+
+  emitByte(c, OP_END_TRY, keyword);
+  int endJump = emitJump(c, OP_JUMP, keyword);
+  patchJump(c, handlerJump, keyword);
+
+  consume(c, TOKEN_CATCH, "Expect 'catch' after try block.");
+  Token openParen = consume(c, TOKEN_LEFT_PAREN, "Expect '(' after 'catch'.");
+  Token name = consume(c, TOKEN_IDENTIFIER, "Expect catch binding name.");
+  consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after catch binding.", openParen);
+  Token catchBrace = consume(c, TOKEN_LEFT_BRACE, "Expect '{' after catch clause.");
+
+  emitByte(c, OP_BEGIN_SCOPE, noToken());
+  c->scopeDepth++;
+  typeCheckerEnterScope(c);
+
+  int nameIdx = emitStringConstant(c, name);
+  emitByte(c, OP_DEFINE_VAR, name);
+  emitShort(c, (uint16_t)nameIdx, name);
+  if (typecheckEnabled(c)) {
+    typeDefine(c, name, typeAny(), true);
+  }
+
+  block(c, catchBrace);
+
+  emitByte(c, OP_END_SCOPE, noToken());
+  c->scopeDepth--;
+  typeCheckerExitScope(c);
+  emitGc(c);
+
+  patchJump(c, endJump, keyword);
+}
+
+static void throwStatement(Compiler* c) {
+  Token keyword = previous(c);
+  expression(c);
+  typePop(c);
+  consume(c, TOKEN_SEMICOLON, "Expect ';' after throw value.");
+  emitByte(c, OP_THROW, keyword);
 }
 
 static void breakStatement(Compiler* c) {
@@ -4701,6 +4831,10 @@ static void statement(Compiler* c) {
     foreachStatement(c);
   } else if (match(c, TOKEN_SWITCH) || match(c, TOKEN_MATCH)) {
     switchStatement(c);
+  } else if (match(c, TOKEN_TRY)) {
+    tryStatement(c);
+  } else if (match(c, TOKEN_THROW)) {
+    throwStatement(c);
   } else if (match(c, TOKEN_RETURN)) {
     returnStatement(c);
   } else if (match(c, TOKEN_BREAK)) {
