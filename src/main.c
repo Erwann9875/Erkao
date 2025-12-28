@@ -399,6 +399,29 @@ static int runFile(VM* vm, const char* path, int argc, const char** argv) {
   return ok ? 0 : 65;
 }
 
+static int typecheckFile(VM* vm, const char* path) {
+  char* source = readFile(path);
+  if (!source) return 74;
+
+  const char* displayPath = path ? path : "<repl>";
+  bool lexError = false;
+  TokenArray tokens = scanTokens(source, displayPath, &lexError);
+  if (lexError) {
+    freeTokenArray(&tokens);
+    free(source);
+    return 65;
+  }
+
+  bool compileError = false;
+  bool prevTypecheck = vm->typecheck;
+  vm->typecheck = true;
+  ObjFunction* function = compile(vm, &tokens, source, displayPath, &compileError);
+  vm->typecheck = prevTypecheck;
+  freeTokenArray(&tokens);
+  free(source);
+  return (compileError || !function) ? 65 : 0;
+}
+
 static void repl(VM* vm) {
   History history;
   historyInit(&history, resolveHistoryPath());
@@ -455,6 +478,7 @@ static void printHelp(const char* exe) {
           "  %s [--help|-h] [--version|-v]\n"
           "  %s repl\n"
           "  %s run [--bytecode|--disasm] <file> [-- args...]\n"
+          "  %s typecheck <file>\n"
           "  %s pkg <command>\n"
           "  %s fmt <file> [--check]\n"
           "  %s lint <file>\n"
@@ -462,6 +486,7 @@ static void printHelp(const char* exe) {
           "\n"
           "Commands:\n"
           "  run   Run a script file.\n"
+          "  typecheck  Typecheck a script file.\n"
           "  repl  Start the interactive REPL.\n"
           "  pkg   Manage packages.\n"
           "  fmt   Format a source file in-place.\n"
@@ -479,7 +504,7 @@ static void printHelp(const char* exe) {
           "  --indent       Formatter indentation width.\n"
           "  --max-line     Linter max line length.\n"
           "  --rules        Linter rules list (comma-separated).\n",
-          exe, exe, exe, exe, exe, exe, exe);
+          exe, exe, exe, exe, exe, exe, exe, exe);
 }
 
 static void printVersion(void) {
@@ -710,6 +735,36 @@ static int runFileCommand(VM* vm, const char* exe, int argc, const char** argv, 
   return runWithArgs(vm, path, argc - index, argv + index);
 }
 
+static int runTypecheckCommand(VM* vm, const char* exe, int argc, const char** argv, int startIndex) {
+  int index = startIndex;
+  while (index < argc) {
+    if (isFlag(argv[index], "--module-path", "-M")) {
+      if (index + 1 >= argc) {
+        fprintf(stderr, "Missing value for --module-path.\n");
+        printHelp(exe);
+        return 64;
+      }
+      vmAddModulePath(vm, argv[index + 1]);
+      index += 2;
+      continue;
+    }
+    break;
+  }
+
+  if (index >= argc || isFlag(argv[index], "--help", "-h")) {
+    printHelp(exe);
+    return index >= argc ? 64 : 0;
+  }
+
+  const char* path = argv[index++];
+  if (index < argc) {
+    fprintf(stderr, "Unexpected extra arguments for 'typecheck'.\n");
+    printHelp(exe);
+    return 64;
+  }
+  return typecheckFile(vm, path);
+}
+
 int main(int argc, const char** argv) {
   const char* exe = exeName(argv[0]);
   if (argc > 1 && isFlag(argv[1], "--help", "-h")) {
@@ -744,6 +799,8 @@ int main(int argc, const char** argv) {
     } else {
       repl(&vm);
     }
+  } else if (strcmp(argv[1], "typecheck") == 0) {
+    result = runTypecheckCommand(&vm, exe, argc, argv, 2);
   } else if (strcmp(argv[1], "run") == 0) {
     result = runFileCommand(&vm, exe, argc, argv, 2);
   } else {

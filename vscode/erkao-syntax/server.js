@@ -138,6 +138,162 @@ function getWordInfo(doc, position) {
   return info;
 }
 
+function skipWhitespace(text, index) {
+  let i = index;
+  while (i < text.length && /\s/.test(text[i])) {
+    i++;
+  }
+  return i;
+}
+
+function extractTypeAnnotation(text, index) {
+  let i = skipWhitespace(text, index);
+  if (text[i] !== ":") return null;
+  i++;
+  i = skipWhitespace(text, i);
+  const start = i;
+  let depth = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === "<") depth++;
+    else if (ch === ">" && depth > 0) depth--;
+    else if (depth === 0 &&
+             (ch === "=" || ch === ";" || ch === "," || ch === ")" ||
+              ch === "{" || ch === "\n" || ch === "\r")) {
+      break;
+    }
+    i++;
+  }
+  const typeText = text.slice(start, i).trim();
+  return typeText.length ? typeText : null;
+}
+
+function parseParamSegment(segment) {
+  let part = segment.trim();
+  if (!part) return null;
+  const eqIndex = part.indexOf("=");
+  if (eqIndex !== -1) {
+    part = part.slice(0, eqIndex).trim();
+  }
+  if (!part) return null;
+  const colonIndex = part.indexOf(":");
+  if (colonIndex === -1) {
+    return { name: part, type: null };
+  }
+  const name = part.slice(0, colonIndex).trim();
+  const type = part.slice(colonIndex + 1).trim();
+  if (!name) return null;
+  return { name, type: type || null };
+}
+
+function parseParamList(text, startIndex) {
+  let i = startIndex;
+  let depthParen = 0;
+  let depthBracket = 0;
+  let depthBrace = 0;
+  let depthAngle = 0;
+  let inString = false;
+  let stringTriple = false;
+  let segmentStart = i;
+  const segments = [];
+
+  while (i < text.length) {
+    const ch = text[i];
+    const next = text[i + 1];
+    const next2 = text[i + 2];
+
+    if (inString) {
+      if (stringTriple) {
+        if (ch === "\"" && next === "\"" && next2 === "\"") {
+          inString = false;
+          stringTriple = false;
+          i += 3;
+          continue;
+        }
+        i++;
+        continue;
+      }
+      if (ch === "\\") {
+        i += 2;
+        continue;
+      }
+      if (ch === "\"") {
+        inString = false;
+        i++;
+        continue;
+      }
+      i++;
+      continue;
+    }
+
+    if (ch === "\"") {
+      if (next === "\"" && next2 === "\"") {
+        inString = true;
+        stringTriple = true;
+        i += 3;
+        continue;
+      }
+      inString = true;
+      stringTriple = false;
+      i++;
+      continue;
+    }
+
+    if (ch === "(") {
+      depthParen++;
+      i++;
+      continue;
+    }
+    if (ch === ")") {
+      if (depthParen === 0 && depthBracket === 0 && depthBrace === 0) {
+        segments.push(text.slice(segmentStart, i));
+        return { segments, endIndex: i };
+      }
+      if (depthParen > 0) depthParen--;
+      i++;
+      continue;
+    }
+    if (ch === "[") { depthBracket++; i++; continue; }
+    if (ch === "]") { if (depthBracket > 0) depthBracket--; i++; continue; }
+    if (ch === "{") { depthBrace++; i++; continue; }
+    if (ch === "}") { if (depthBrace > 0) depthBrace--; i++; continue; }
+    if (ch === "<") { depthAngle++; i++; continue; }
+    if (ch === ">") { if (depthAngle > 0) depthAngle--; i++; continue; }
+
+    if (ch === "," && depthParen === 0 && depthBracket === 0 &&
+        depthBrace === 0 && depthAngle === 0) {
+      segments.push(text.slice(segmentStart, i));
+      i++;
+      segmentStart = i;
+      continue;
+    }
+
+    i++;
+  }
+  return null;
+}
+
+function buildFunctionDetail(text, name, nameEnd) {
+  let i = skipWhitespace(text, nameEnd);
+  if (text[i] !== "(") return null;
+  const parsed = parseParamList(text, i + 1);
+  if (!parsed) return null;
+
+  const params = parsed.segments
+    .map(parseParamSegment)
+    .filter(Boolean);
+  const returnType = extractTypeAnnotation(text, parsed.endIndex + 1);
+  const hasTypes = params.some((param) => param.type) || returnType;
+  if (!hasTypes) return null;
+
+  const signatureParams = params.map((param) => {
+    if (param.type) return `${param.name}: ${param.type}`;
+    return param.name;
+  }).join(", ");
+  const returnSuffix = returnType ? `: ${returnType}` : "";
+  return `fun ${name}(${signatureParams})${returnSuffix}`;
+}
+
 function findIdentifierOccurrences(text, target) {
   const ranges = [];
   if (!target) return ranges;
@@ -285,13 +441,15 @@ function rangesToEdits(doc, ranges, newText) {
   });
 }
 
-function addSymbol(doc, symbols, byName, name, kind, nameIndex) {
+function addSymbol(doc, symbols, byName, name, kind, nameIndex, detail) {
   const start = doc.positionAt(nameIndex);
   const end = doc.positionAt(nameIndex + name.length);
   const range = Range.create(start, end);
-  symbols.push({ name, kind, range, selectionRange: range });
+  const symbol = { name, kind, range, selectionRange: range };
+  if (detail) symbol.detail = detail;
+  symbols.push(symbol);
   if (!byName.has(name)) {
-    byName.set(name, { range, kind });
+    byName.set(name, { range, kind, detail });
   }
 }
 
@@ -305,35 +463,40 @@ function parseSymbols(doc) {
   while ((match = classRegex.exec(text)) !== null) {
     const name = match[1];
     const nameIndex = match.index + match[0].indexOf(name);
-    addSymbol(doc, symbols, byName, name, SymbolKind.Class, nameIndex);
+    addSymbol(doc, symbols, byName, name, SymbolKind.Class, nameIndex, null);
   }
 
   const funRegex = /\bfun\s+([A-Za-z_][A-Za-z0-9_]*)/g;
   while ((match = funRegex.exec(text)) !== null) {
     const name = match[1];
     const nameIndex = match.index + match[0].indexOf(name);
-    addSymbol(doc, symbols, byName, name, SymbolKind.Function, nameIndex);
+    const detail = buildFunctionDetail(text, name, nameIndex + name.length);
+    addSymbol(doc, symbols, byName, name, SymbolKind.Function, nameIndex, detail);
   }
 
   const letRegex = /\blet\s+([A-Za-z_][A-Za-z0-9_]*)/g;
   while ((match = letRegex.exec(text)) !== null) {
     const name = match[1];
     const nameIndex = match.index + match[0].indexOf(name);
-    addSymbol(doc, symbols, byName, name, SymbolKind.Variable, nameIndex);
+    const type = extractTypeAnnotation(text, nameIndex + name.length);
+    const detail = type ? `${name}: ${type}` : null;
+    addSymbol(doc, symbols, byName, name, SymbolKind.Variable, nameIndex, detail);
   }
 
   const constRegex = /\bconst\s+([A-Za-z_][A-Za-z0-9_]*)/g;
   while ((match = constRegex.exec(text)) !== null) {
     const name = match[1];
     const nameIndex = match.index + match[0].indexOf(name);
-    addSymbol(doc, symbols, byName, name, SymbolKind.Variable, nameIndex);
+    const type = extractTypeAnnotation(text, nameIndex + name.length);
+    const detail = type ? `${name}: ${type}` : null;
+    addSymbol(doc, symbols, byName, name, SymbolKind.Variable, nameIndex, detail);
   }
 
   const enumRegex = /\benum\s+([A-Za-z_][A-Za-z0-9_]*)/g;
   while ((match = enumRegex.exec(text)) !== null) {
     const name = match[1];
     const nameIndex = match.index + match[0].indexOf(name);
-    addSymbol(doc, symbols, byName, name, SymbolKind.Enum, nameIndex);
+    addSymbol(doc, symbols, byName, name, SymbolKind.Enum, nameIndex, null);
   }
 
   return { symbols, byName };
@@ -413,6 +576,17 @@ connection.onHover((params) => {
 
   if (KEYWORDS.includes(wordInfo.word)) {
     return { contents: { kind: MarkupKind.Markdown, value: `Keyword \`${wordInfo.word}\`.` } };
+  }
+
+  const { byName } = getSymbols(doc);
+  const info = byName.get(wordInfo.word);
+  if (info && info.detail) {
+    return {
+      contents: {
+        kind: MarkupKind.Markdown,
+        value: `\`${info.detail}\``
+      }
+    };
   }
 
   return null;

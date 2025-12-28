@@ -72,6 +72,12 @@ Run with bytecode output:
 ./build/Debug/erkao.exe run --bytecode ./examples/hello.ek
 ```
 
+Typecheck a file (no execution):
+
+```sh
+./build/Debug/erkao.exe typecheck ./examples/hello.ek
+```
+
 Package manager:
 
 ```sh
@@ -304,12 +310,30 @@ print(greet(name));
 - Match: `match (value) { case 1: ... }` (alias of `switch`)
 - Imports: `import "path/to/file.ek" as name;`, `import name from "path";`, `import * as name from "path";`
 - Functions: `fun name(a, b) { return a + b; }`
+- Type hints: `let total: number = 3;`, `fun greet(name: string): string { ... }`
 - Classes: `class Name { fun init(...) { ... } fun method(...) { ... } }`
 - Arrays: `[1, 2, 3]`, indexing with `arr[0]`
 - Maps: `{ key: value, "other": value }`, indexing with `map["key"]`
 - Enums: `enum Color { Red, Green, Blue }`, access with `Color["Red"]`
 - Strings: `"Hello ${name}"` and multiline `"""line 1\nline 2"""`
 - Optional chaining: `user?.profile` returns `null` if `user` is `null`
+
+## Type hints (optional)
+
+Type annotations are checked only when you run `erkao typecheck`.
+
+```ek
+let score: number = 42;
+let tags: array<string> = ["a", "b"];
+let stats: map<string, number> = { hp: 10, mp: 5 };
+
+fun greet(name: string): string {
+  return "Hi " + name;
+}
+```
+
+Supported types: `number`, `string`, `bool`, `null`/`void`, `any`,
+`array<T>`, `map<K, V>`, and class names.
 
 ## Imports
 

@@ -959,6 +959,596 @@ static void freeJumpList(JumpList* list) {
   initJumpList(list);
 }
 
+typedef enum {
+  TYPE_ANY,
+  TYPE_UNKNOWN,
+  TYPE_NUMBER,
+  TYPE_STRING,
+  TYPE_BOOL,
+  TYPE_NULL,
+  TYPE_ARRAY,
+  TYPE_MAP,
+  TYPE_NAMED,
+  TYPE_FUNCTION
+} TypeKind;
+
+typedef struct Type {
+  TypeKind kind;
+  ObjString* name;
+  struct Type* elem;
+  struct Type* key;
+  struct Type* value;
+  struct Type** params;
+  int paramCount;
+  struct Type* returnType;
+} Type;
+
+typedef struct {
+  ObjString* name;
+  Type* type;
+  bool explicitType;
+  int depth;
+} TypeEntry;
+
+struct TypeChecker {
+  bool enabled;
+  int errorCount;
+  int scopeDepth;
+  struct TypeChecker* enclosing;
+  TypeEntry* entries;
+  int count;
+  int capacity;
+  Type** stack;
+  int stackCount;
+  int stackCapacity;
+  Type** allocated;
+  int allocatedCount;
+  int allocatedCapacity;
+  Type* currentReturn;
+};
+
+static Type TYPE_ANY_VALUE = { TYPE_ANY, NULL, NULL, NULL, NULL, NULL, 0, NULL };
+static Type TYPE_UNKNOWN_VALUE = { TYPE_UNKNOWN, NULL, NULL, NULL, NULL, NULL, 0, NULL };
+static Type TYPE_NUMBER_VALUE = { TYPE_NUMBER, NULL, NULL, NULL, NULL, NULL, 0, NULL };
+static Type TYPE_STRING_VALUE = { TYPE_STRING, NULL, NULL, NULL, NULL, NULL, 0, NULL };
+static Type TYPE_BOOL_VALUE = { TYPE_BOOL, NULL, NULL, NULL, NULL, NULL, 0, NULL };
+static Type TYPE_NULL_VALUE = { TYPE_NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL };
+
+static bool typecheckEnabled(Compiler* c) {
+  return c->typecheck && c->typecheck->enabled;
+}
+
+static Type* typeAny(void) { return &TYPE_ANY_VALUE; }
+static Type* typeUnknown(void) { return &TYPE_UNKNOWN_VALUE; }
+static Type* typeNumber(void) { return &TYPE_NUMBER_VALUE; }
+static Type* typeString(void) { return &TYPE_STRING_VALUE; }
+static Type* typeBool(void) { return &TYPE_BOOL_VALUE; }
+static Type* typeNull(void) { return &TYPE_NULL_VALUE; }
+
+static Type* typeAlloc(TypeChecker* tc, TypeKind kind) {
+  if (!tc) return typeAny();
+  Type* type = (Type*)malloc(sizeof(Type));
+  if (!type) {
+    fprintf(stderr, "Out of memory.\n");
+    exit(1);
+  }
+  memset(type, 0, sizeof(Type));
+  type->kind = kind;
+  if (tc->allocatedCount >= tc->allocatedCapacity) {
+    int oldCap = tc->allocatedCapacity;
+    tc->allocatedCapacity = GROW_CAPACITY(oldCap);
+    tc->allocated = GROW_ARRAY(Type*, tc->allocated, oldCap, tc->allocatedCapacity);
+    if (!tc->allocated) {
+      fprintf(stderr, "Out of memory.\n");
+      exit(1);
+    }
+  }
+  tc->allocated[tc->allocatedCount++] = type;
+  return type;
+}
+
+static void typeCheckerInit(TypeChecker* tc, TypeChecker* enclosing, bool enabled) {
+  tc->enabled = enabled;
+  tc->errorCount = 0;
+  tc->scopeDepth = 0;
+  tc->enclosing = enclosing;
+  tc->entries = NULL;
+  tc->count = 0;
+  tc->capacity = 0;
+  tc->stack = NULL;
+  tc->stackCount = 0;
+  tc->stackCapacity = 0;
+  tc->allocated = NULL;
+  tc->allocatedCount = 0;
+  tc->allocatedCapacity = 0;
+  tc->currentReturn = NULL;
+}
+
+static void typeCheckerFree(TypeChecker* tc) {
+  if (!tc) return;
+  for (int i = 0; i < tc->allocatedCount; i++) {
+    if (tc->allocated[i] && tc->allocated[i]->params) {
+      free(tc->allocated[i]->params);
+    }
+    free(tc->allocated[i]);
+  }
+  FREE_ARRAY(Type*, tc->allocated, tc->allocatedCapacity);
+  FREE_ARRAY(TypeEntry, tc->entries, tc->capacity);
+  FREE_ARRAY(Type*, tc->stack, tc->stackCapacity);
+  tc->allocated = NULL;
+  tc->allocatedCount = 0;
+  tc->allocatedCapacity = 0;
+  tc->entries = NULL;
+  tc->count = 0;
+  tc->capacity = 0;
+  tc->stack = NULL;
+  tc->stackCount = 0;
+  tc->stackCapacity = 0;
+}
+
+static void typePush(Compiler* c, Type* type) {
+  if (!typecheckEnabled(c)) return;
+  TypeChecker* tc = c->typecheck;
+  if (tc->stackCount >= tc->stackCapacity) {
+    int oldCap = tc->stackCapacity;
+    tc->stackCapacity = GROW_CAPACITY(oldCap);
+    tc->stack = GROW_ARRAY(Type*, tc->stack, oldCap, tc->stackCapacity);
+    if (!tc->stack) {
+      fprintf(stderr, "Out of memory.\n");
+      exit(1);
+    }
+  }
+  tc->stack[tc->stackCount++] = type;
+}
+
+static Type* typePop(Compiler* c) {
+  if (!typecheckEnabled(c)) return typeAny();
+  TypeChecker* tc = c->typecheck;
+  if (tc->stackCount <= 0) return typeAny();
+  return tc->stack[--tc->stackCount];
+}
+
+static Type* typePeek(Compiler* c) {
+  if (!typecheckEnabled(c)) return typeAny();
+  TypeChecker* tc = c->typecheck;
+  if (tc->stackCount <= 0) return typeAny();
+  return tc->stack[tc->stackCount - 1];
+}
+
+static bool typeIsAny(Type* type) {
+  if (!type) return true;
+  return type->kind == TYPE_ANY || type->kind == TYPE_UNKNOWN;
+}
+
+static bool typeNamesEqual(ObjString* a, ObjString* b) {
+  if (a == b) return true;
+  if (!a || !b) return false;
+  if (a->length != b->length) return false;
+  return memcmp(a->chars, b->chars, (size_t)a->length) == 0;
+}
+
+static bool typeEquals(Type* a, Type* b) {
+  if (a == b) return true;
+  if (!a || !b) return false;
+  if (a->kind != b->kind) return false;
+  switch (a->kind) {
+    case TYPE_ANY:
+    case TYPE_UNKNOWN:
+    case TYPE_NUMBER:
+    case TYPE_STRING:
+    case TYPE_BOOL:
+    case TYPE_NULL:
+      return true;
+    case TYPE_NAMED:
+      return typeNamesEqual(a->name, b->name);
+    case TYPE_ARRAY:
+      return typeEquals(a->elem, b->elem);
+    case TYPE_MAP:
+      return typeEquals(a->key, b->key) && typeEquals(a->value, b->value);
+    case TYPE_FUNCTION:
+      if (a->paramCount != b->paramCount) return false;
+      for (int i = 0; i < a->paramCount; i++) {
+        if (!typeEquals(a->params[i], b->params[i])) return false;
+      }
+      return typeEquals(a->returnType, b->returnType);
+  }
+  return false;
+}
+
+static bool typeAssignable(Type* dst, Type* src) {
+  if (typeIsAny(dst) || typeIsAny(src)) return true;
+  if (!dst || !src) return true;
+  if (dst->kind != src->kind) return false;
+  switch (dst->kind) {
+    case TYPE_ANY:
+    case TYPE_UNKNOWN:
+    case TYPE_NUMBER:
+    case TYPE_STRING:
+    case TYPE_BOOL:
+    case TYPE_NULL:
+      return true;
+    case TYPE_NAMED:
+      return typeNamesEqual(dst->name, src->name);
+    case TYPE_ARRAY:
+      return typeAssignable(dst->elem, src->elem);
+    case TYPE_MAP:
+      return typeAssignable(dst->key, src->key) && typeAssignable(dst->value, src->value);
+    case TYPE_FUNCTION:
+      if (dst->paramCount != src->paramCount) return false;
+      for (int i = 0; i < dst->paramCount; i++) {
+        if (!typeAssignable(dst->params[i], src->params[i])) return false;
+      }
+      return typeAssignable(dst->returnType, src->returnType);
+  }
+  return true;
+}
+
+static void typeToString(Type* type, char* buffer, size_t size) {
+  if (!buffer || size == 0) return;
+  if (!type) {
+    snprintf(buffer, size, "any");
+    return;
+  }
+  switch (type->kind) {
+    case TYPE_ANY:
+      snprintf(buffer, size, "any");
+      return;
+    case TYPE_UNKNOWN:
+      snprintf(buffer, size, "unknown");
+      return;
+    case TYPE_NUMBER:
+      snprintf(buffer, size, "number");
+      return;
+    case TYPE_STRING:
+      snprintf(buffer, size, "string");
+      return;
+    case TYPE_BOOL:
+      snprintf(buffer, size, "bool");
+      return;
+    case TYPE_NULL:
+      snprintf(buffer, size, "null");
+      return;
+    case TYPE_NAMED:
+      if (type->name) {
+        snprintf(buffer, size, "%s", type->name->chars);
+      } else {
+        snprintf(buffer, size, "named");
+      }
+      return;
+    case TYPE_ARRAY: {
+      char inner[64];
+      typeToString(type->elem, inner, sizeof(inner));
+      snprintf(buffer, size, "array<%s>", inner);
+      return;
+    }
+    case TYPE_MAP: {
+      char key[64];
+      char value[64];
+      typeToString(type->key, key, sizeof(key));
+      typeToString(type->value, value, sizeof(value));
+      snprintf(buffer, size, "map<%s, %s>", key, value);
+      return;
+    }
+    case TYPE_FUNCTION:
+      snprintf(buffer, size, "fun");
+      return;
+  }
+  snprintf(buffer, size, "any");
+}
+
+static void typeErrorAt(Compiler* c, Token token, const char* format, ...) {
+  if (!typecheckEnabled(c)) return;
+  char message[256];
+  va_list args;
+  va_start(args, format);
+  vsnprintf(message, sizeof(message), format, args);
+  va_end(args);
+  errorAt(c, token, message);
+  if (c->typecheck) {
+    c->typecheck->errorCount++;
+  }
+}
+
+static void typeCheckerEnterScope(Compiler* c) {
+  if (!typecheckEnabled(c)) return;
+  c->typecheck->scopeDepth = c->scopeDepth;
+}
+
+static void typeCheckerExitScope(Compiler* c) {
+  if (!typecheckEnabled(c)) return;
+  TypeChecker* tc = c->typecheck;
+  int targetDepth = c->scopeDepth;
+  while (tc->count > 0 && tc->entries[tc->count - 1].depth > targetDepth) {
+    tc->count--;
+  }
+  tc->scopeDepth = targetDepth;
+}
+
+static void typeDefine(Compiler* c, Token name, Type* type, bool explicitType) {
+  if (!typecheckEnabled(c)) return;
+  TypeChecker* tc = c->typecheck;
+  if (tc->count >= tc->capacity) {
+    int oldCap = tc->capacity;
+    tc->capacity = GROW_CAPACITY(oldCap);
+    tc->entries = GROW_ARRAY(TypeEntry, tc->entries, oldCap, tc->capacity);
+    if (!tc->entries) {
+      fprintf(stderr, "Out of memory.\n");
+      exit(1);
+    }
+  }
+  ObjString* nameStr = stringFromToken(c->vm, name);
+  tc->entries[tc->count].name = nameStr;
+  tc->entries[tc->count].type = type ? type : typeAny();
+  tc->entries[tc->count].explicitType = explicitType;
+  tc->entries[tc->count].depth = c->scopeDepth;
+  tc->count++;
+}
+
+static TypeEntry* typeLookupEntry(TypeChecker* tc, ObjString* name) {
+  if (!tc) return NULL;
+  for (int i = tc->count - 1; i >= 0; i--) {
+    if (tc->entries[i].name == name) {
+      return &tc->entries[i];
+    }
+  }
+  if (tc->enclosing) {
+    return typeLookupEntry(tc->enclosing, name);
+  }
+  return NULL;
+}
+
+static Type* typeLookup(Compiler* c, Token name) {
+  if (!typecheckEnabled(c)) return typeAny();
+  ObjString* nameStr = stringFromToken(c->vm, name);
+  TypeEntry* entry = typeLookupEntry(c->typecheck, nameStr);
+  if (!entry) return typeAny();
+  return entry->type ? entry->type : typeAny();
+}
+
+static void typeAssign(Compiler* c, Token name, Type* valueType) {
+  if (!typecheckEnabled(c)) return;
+  ObjString* nameStr = stringFromToken(c->vm, name);
+  TypeEntry* entry = typeLookupEntry(c->typecheck, nameStr);
+  if (!entry) {
+    return;
+  }
+  Type* target = entry->type ? entry->type : typeAny();
+  if (entry->explicitType) {
+    if (!typeAssignable(target, valueType)) {
+      char expected[64];
+      char got[64];
+      typeToString(target, expected, sizeof(expected));
+      typeToString(valueType, got, sizeof(got));
+      typeErrorAt(c, name, "Type mismatch. Expected %s but got %s.", expected, got);
+    }
+    return;
+  }
+  if (target->kind == TYPE_UNKNOWN) {
+    entry->type = valueType ? valueType : typeAny();
+    return;
+  }
+  if (!typeAssignable(target, valueType)) {
+    entry->type = typeAny();
+  }
+}
+
+static bool tokenMatches(Token token, const char* text) {
+  int length = (int)strlen(text);
+  if (token.length != length) return false;
+  return memcmp(token.start, text, (size_t)length) == 0;
+}
+
+static Type* typeNamed(TypeChecker* tc, ObjString* name) {
+  Type* type = typeAlloc(tc, TYPE_NAMED);
+  type->name = name;
+  return type;
+}
+
+static Type* typeArray(TypeChecker* tc, Type* elem) {
+  Type* type = typeAlloc(tc, TYPE_ARRAY);
+  type->elem = elem ? elem : typeAny();
+  return type;
+}
+
+static Type* typeMap(TypeChecker* tc, Type* key, Type* value) {
+  Type* type = typeAlloc(tc, TYPE_MAP);
+  type->key = key ? key : typeString();
+  type->value = value ? value : typeAny();
+  return type;
+}
+
+static Type* typeFunction(TypeChecker* tc, Type** params, int paramCount, Type* returnType) {
+  Type* type = typeAlloc(tc, TYPE_FUNCTION);
+  type->paramCount = paramCount;
+  type->returnType = returnType ? returnType : typeAny();
+  if (paramCount > 0) {
+    type->params = (Type**)malloc(sizeof(Type*) * (size_t)paramCount);
+    if (!type->params) {
+      fprintf(stderr, "Out of memory.\n");
+      exit(1);
+    }
+    for (int i = 0; i < paramCount; i++) {
+      type->params[i] = params[i] ? params[i] : typeAny();
+    }
+  }
+  return type;
+}
+
+static Type* parseType(Compiler* c);
+
+static Type* typeFromToken(Compiler* c, Token token) {
+  if (tokenMatches(token, "number")) return typeNumber();
+  if (tokenMatches(token, "string")) return typeString();
+  if (tokenMatches(token, "bool") || tokenMatches(token, "boolean")) return typeBool();
+  if (tokenMatches(token, "null") || tokenMatches(token, "void")) return typeNull();
+  if (tokenMatches(token, "any")) return typeAny();
+  if (tokenMatches(token, "array")) return typeArray(c->typecheck, typeAny());
+  if (tokenMatches(token, "map")) return typeMap(c->typecheck, typeString(), typeAny());
+  ObjString* name = stringFromToken(c->vm, token);
+  return typeNamed(c->typecheck, name);
+}
+
+static Type* parseTypeArguments(Compiler* c, Type* base, Token typeToken) {
+  if (!match(c, TOKEN_LESS)) {
+    return base;
+  }
+
+  if (base->kind == TYPE_ARRAY) {
+    Type* elem = parseType(c);
+    consume(c, TOKEN_GREATER, "Expect '>' after array type.");
+    return typeArray(c->typecheck, elem);
+  }
+
+  if (base->kind == TYPE_MAP) {
+    Type* key = parseType(c);
+    Type* value = NULL;
+    if (match(c, TOKEN_COMMA)) {
+      value = parseType(c);
+    } else {
+      value = key;
+      key = typeString();
+    }
+    consume(c, TOKEN_GREATER, "Expect '>' after map type.");
+    return typeMap(c->typecheck, key, value);
+  }
+
+  typeErrorAt(c, typeToken, "Only array/map types accept type arguments.");
+  int depth = 1;
+  while (!isAtEnd(c) && depth > 0) {
+    if (match(c, TOKEN_LESS)) depth++;
+    else if (match(c, TOKEN_GREATER)) depth--;
+    else advance(c);
+  }
+  return base;
+}
+
+static Type* parseType(Compiler* c) {
+  if (!check(c, TOKEN_IDENTIFIER) && !check(c, TOKEN_NULL)) {
+    errorAtCurrent(c, "Expect type name.");
+    return typeAny();
+  }
+  Token name = advance(c);
+  Type* base = typeFromToken(c, name);
+  if (check(c, TOKEN_LESS)) {
+    return parseTypeArguments(c, base, name);
+  }
+  return base;
+}
+
+static Type* typeMerge(Type* current, Type* next) {
+  if (!current) return next;
+  if (!next) return current;
+  if (current->kind == TYPE_UNKNOWN) return next;
+  if (next->kind == TYPE_UNKNOWN) return current;
+  if (typeEquals(current, next)) return current;
+  if (typeIsAny(current) || typeIsAny(next)) return typeAny();
+  return typeAny();
+}
+
+static Type* typeUnaryResult(Compiler* c, Token op, Type* right) {
+  if (op.type == TOKEN_MINUS) {
+    if (!typeIsAny(right) && right->kind != TYPE_NUMBER) {
+      typeErrorAt(c, op, "Unary '-' expects a number.");
+    }
+    return typeNumber();
+  }
+  if (op.type == TOKEN_BANG) {
+    return typeBool();
+  }
+  return typeAny();
+}
+
+static Type* typeBinaryResult(Compiler* c, Token op, Type* left, Type* right) {
+  switch (op.type) {
+    case TOKEN_PLUS:
+      if (left->kind == TYPE_NUMBER && right->kind == TYPE_NUMBER) return typeNumber();
+      if (left->kind == TYPE_STRING && right->kind == TYPE_STRING) return typeString();
+      if (typeIsAny(left) || typeIsAny(right)) return typeAny();
+      typeErrorAt(c, op, "Operator '+' expects two numbers or two strings.");
+      return typeAny();
+    case TOKEN_MINUS:
+    case TOKEN_STAR:
+    case TOKEN_SLASH:
+      if (!typeIsAny(left) && left->kind != TYPE_NUMBER) {
+        typeErrorAt(c, op, "Operator expects numbers.");
+      }
+      if (!typeIsAny(right) && right->kind != TYPE_NUMBER) {
+        typeErrorAt(c, op, "Operator expects numbers.");
+      }
+      return typeNumber();
+    case TOKEN_GREATER:
+    case TOKEN_GREATER_EQUAL:
+    case TOKEN_LESS:
+    case TOKEN_LESS_EQUAL:
+      if (!typeIsAny(left) && left->kind != TYPE_NUMBER) {
+        typeErrorAt(c, op, "Comparison expects numbers.");
+      }
+      if (!typeIsAny(right) && right->kind != TYPE_NUMBER) {
+        typeErrorAt(c, op, "Comparison expects numbers.");
+      }
+      return typeBool();
+    case TOKEN_BANG_EQUAL:
+    case TOKEN_EQUAL_EQUAL:
+      return typeBool();
+    default:
+      return typeAny();
+  }
+}
+
+static Type* typeLogicalResult(Type* left, Type* right) {
+  if (typeIsAny(left) || typeIsAny(right)) return typeAny();
+  if (typeEquals(left, right)) return left;
+  return typeAny();
+}
+
+static Type* typeIndexResult(Compiler* c, Token op, Type* objectType, Type* indexType) {
+  if (typeIsAny(objectType)) return typeAny();
+  if (objectType->kind == TYPE_ARRAY) {
+    if (!typeIsAny(indexType) && indexType->kind != TYPE_NUMBER) {
+      typeErrorAt(c, op, "Array index expects a number.");
+    }
+    return objectType->elem ? objectType->elem : typeAny();
+  }
+  if (objectType->kind == TYPE_MAP) {
+    if (!typeIsAny(indexType) && indexType->kind != TYPE_STRING) {
+      typeErrorAt(c, op, "Map index expects a string.");
+    }
+    return objectType->value ? objectType->value : typeAny();
+  }
+  return typeAny();
+}
+
+static void typeCheckIndexAssign(Compiler* c, Token op, Type* objectType, Type* indexType,
+                                 Type* valueType) {
+  if (typeIsAny(objectType)) return;
+  if (objectType->kind == TYPE_ARRAY) {
+    if (!typeIsAny(indexType) && indexType->kind != TYPE_NUMBER) {
+      typeErrorAt(c, op, "Array index expects a number.");
+    }
+    if (objectType->elem && !typeAssignable(objectType->elem, valueType)) {
+      char expected[64];
+      char got[64];
+      typeToString(objectType->elem, expected, sizeof(expected));
+      typeToString(valueType, got, sizeof(got));
+      typeErrorAt(c, op, "Array element expects %s but got %s.", expected, got);
+    }
+    return;
+  }
+  if (objectType->kind == TYPE_MAP) {
+    if (!typeIsAny(indexType) && indexType->kind != TYPE_STRING) {
+      typeErrorAt(c, op, "Map index expects a string.");
+    }
+    if (objectType->value && !typeAssignable(objectType->value, valueType)) {
+      char expected[64];
+      char got[64];
+      typeToString(objectType->value, expected, sizeof(expected));
+      typeToString(valueType, got, sizeof(got));
+      typeErrorAt(c, op, "Map value expects %s but got %s.", expected, got);
+    }
+  }
+}
+
+
 static void patchJumpTo(Compiler* c, int offset, int target, Token token) {
   int jump = target - offset - 2;
   if (jump < 0 || jump > UINT16_MAX) {
@@ -1086,6 +1676,7 @@ static void number(Compiler* c, bool canAssign) {
   double value = strtod(temp, NULL);
   free(temp);
   emitConstant(c, NUMBER_VAL(value), token);
+  typePush(c, typeNumber());
 }
 
 static double parseNumberToken(Token token) {
@@ -1101,6 +1692,7 @@ static void string(Compiler* c, bool canAssign) {
   char* value = parseStringLiteral(token);
   ObjString* str = takeStringWithLength(c->vm, value, (int)strlen(value));
   emitConstant(c, OBJ_VAL(str), token);
+  typePush(c, typeString());
 }
 
 static void stringSegment(Compiler* c, bool canAssign) {
@@ -1113,6 +1705,7 @@ static void stringSegment(Compiler* c, bool canAssign) {
   while (match(c, TOKEN_INTERP_START)) {
     Token interpStart = previous(c);
     expression(c);
+    typePop(c);
     consumeClosing(c, TOKEN_INTERP_END, "Expect '}' after interpolation.", interpStart);
     emitByte(c, OP_STRINGIFY, segment);
     emitByte(c, OP_ADD, segment);
@@ -1123,6 +1716,7 @@ static void stringSegment(Compiler* c, bool canAssign) {
     emitConstant(c, OBJ_VAL(tailStr), tail);
     emitByte(c, OP_ADD, tail);
   }
+  typePush(c, typeString());
 }
 
 static void literal(Compiler* c, bool canAssign) {
@@ -1134,6 +1728,11 @@ static void literal(Compiler* c, bool canAssign) {
     case TOKEN_NULL: emitByte(c, OP_NULL, token); break;
     default: break;
   }
+  if (token.type == TOKEN_FALSE || token.type == TOKEN_TRUE) {
+    typePush(c, typeBool());
+  } else if (token.type == TOKEN_NULL) {
+    typePush(c, typeNull());
+  }
 }
 
 static void variable(Compiler* c, bool canAssign) {
@@ -1141,11 +1740,15 @@ static void variable(Compiler* c, bool canAssign) {
   int nameIdx = emitStringConstant(c, name);
   if (canAssign && match(c, TOKEN_EQUAL)) {
     expression(c);
+    Type* valueType = typePop(c);
+    typeAssign(c, name, valueType);
+    typePush(c, valueType);
     emitByte(c, OP_SET_VAR, name);
     emitShort(c, (uint16_t)nameIdx, name);
   } else {
     emitByte(c, OP_GET_VAR, name);
     emitShort(c, (uint16_t)nameIdx, name);
+    typePush(c, typeLookup(c, name));
   }
 }
 
@@ -1155,6 +1758,7 @@ static void thisExpr(Compiler* c, bool canAssign) {
   int name = emitStringConstant(c, token);
   emitByte(c, OP_GET_THIS, token);
   emitShort(c, (uint16_t)name, token);
+  typePush(c, typeAny());
 }
 
 static void grouping(Compiler* c, bool canAssign) {
@@ -1168,6 +1772,8 @@ static void unary(Compiler* c, bool canAssign) {
   (void)canAssign;
   Token op = previous(c);
   parsePrecedence(c, PREC_UNARY);
+  Type* right = typePop(c);
+  typePush(c, typeUnaryResult(c, op, right));
   switch (op.type) {
     case TOKEN_MINUS: emitByte(c, OP_NEGATE, op); break;
     case TOKEN_BANG: emitByte(c, OP_NOT, op); break;
@@ -1181,6 +1787,9 @@ static void binary(Compiler* c, bool canAssign) {
   Token op = previous(c);
   ParseRule* rule = getRule(op.type);
   parsePrecedence(c, (Precedence)(rule->precedence + 1));
+  Type* right = typePop(c);
+  Type* left = typePop(c);
+  typePush(c, typeBinaryResult(c, op, left, right));
   switch (op.type) {
     case TOKEN_PLUS: emitByte(c, OP_ADD, op); break;
     case TOKEN_MINUS: emitByte(c, OP_SUBTRACT, op); break;
@@ -1203,6 +1812,9 @@ static void andExpr(Compiler* c, bool canAssign) {
   int jumpIfFalse = emitJump(c, OP_JUMP_IF_FALSE, op);
   emitByte(c, OP_POP, noToken());
   parsePrecedence(c, PREC_AND);
+  Type* right = typePop(c);
+  Type* left = typePop(c);
+  typePush(c, typeLogicalResult(left, right));
   patchJump(c, jumpIfFalse, op);
 }
 
@@ -1215,6 +1827,9 @@ static void orExpr(Compiler* c, bool canAssign) {
   patchJump(c, jumpIfFalse, op);
   emitByte(c, OP_POP, noToken());
   parsePrecedence(c, PREC_OR);
+  Type* right = typePop(c);
+  Type* left = typePop(c);
+  typePush(c, typeLogicalResult(left, right));
   patchJump(c, jumpToEnd, op);
 }
 
@@ -1234,6 +1849,33 @@ static void call(Compiler* c, bool canAssign) {
     } while (match(c, TOKEN_COMMA));
   }
   consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after arguments.", paren);
+  if (typecheckEnabled(c)) {
+    Type* argTypes[ERK_MAX_ARGS];
+    for (int i = argc - 1; i >= 0; i--) {
+      argTypes[i] = typePop(c);
+    }
+    Type* callee = typePop(c);
+    Type* result = typeAny();
+    if (callee && callee->kind == TYPE_FUNCTION) {
+      if (callee->paramCount != argc) {
+        typeErrorAt(c, paren, "Function expects %d arguments but got %d.",
+                    callee->paramCount, argc);
+      } else {
+        for (int i = 0; i < argc; i++) {
+          if (!typeAssignable(callee->params[i], argTypes[i])) {
+            char expected[64];
+            char got[64];
+            typeToString(callee->params[i], expected, sizeof(expected));
+            typeToString(argTypes[i], got, sizeof(got));
+            typeErrorAt(c, paren, "Argument %d expects %s but got %s.",
+                        i + 1, expected, got);
+          }
+        }
+      }
+      result = callee->returnType ? callee->returnType : typeAny();
+    }
+    typePush(c, result);
+  }
   emitByte(c, optionalCall ? OP_CALL_OPTIONAL : OP_CALL, paren);
   emitByte(c, (uint8_t)argc, paren);
 }
@@ -1242,8 +1884,11 @@ static void dot(Compiler* c, bool canAssign) {
   c->pendingOptionalCall = false;
   Token name = consume(c, TOKEN_IDENTIFIER, "Expect property name after '.'.");
   int nameIdx = emitStringConstant(c, name);
+  Type* objectType = typePop(c);
   if (canAssign && match(c, TOKEN_EQUAL)) {
     expression(c);
+    Type* valueType = typePop(c);
+    typePush(c, valueType);
     emitByte(c, OP_SET_PROPERTY, name);
     emitShort(c, (uint16_t)nameIdx, name);
   } else if (check(c, TOKEN_LEFT_PAREN)) {
@@ -1259,19 +1904,29 @@ static void dot(Compiler* c, bool canAssign) {
       } while (match(c, TOKEN_COMMA));
     }
     consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after arguments.", paren);
+    if (typecheckEnabled(c)) {
+      for (int i = 0; i < argc; i++) {
+        typePop(c);
+      }
+      typePush(c, typeAny());
+    }
     emitByte(c, OP_INVOKE, paren);
     emitShort(c, (uint16_t)nameIdx, name);
     emitByte(c, (uint8_t)argc, paren);
   } else {
+    typePush(c, typeAny());
     emitByte(c, OP_GET_PROPERTY, name);
     emitShort(c, (uint16_t)nameIdx, name);
   }
+  (void)objectType;
 }
 
 static void optionalDot(Compiler* c, bool canAssign) {
   (void)canAssign;
   Token name = consume(c, TOKEN_IDENTIFIER, "Expect property name after '?.'.");
   int nameIdx = emitStringConstant(c, name);
+  typePop(c);
+  typePush(c, typeAny());
   emitByte(c, OP_GET_PROPERTY_OPTIONAL, name);
   emitShort(c, (uint16_t)nameIdx, name);
   c->pendingOptionalCall = true;
@@ -1281,11 +1936,17 @@ static void index_(Compiler* c, bool canAssign) {
   c->pendingOptionalCall = false;
   Token bracket = previous(c);
   expression(c);
+  Type* indexType = typePop(c);
+  Type* objectType = typePop(c);
   consumeClosing(c, TOKEN_RIGHT_BRACKET, "Expect ']' after index.", bracket);
   if (canAssign && match(c, TOKEN_EQUAL)) {
     expression(c);
+    Type* valueType = typePop(c);
+    typeCheckIndexAssign(c, bracket, objectType, indexType, valueType);
+    typePush(c, valueType);
     emitByte(c, OP_SET_INDEX, bracket);
   } else {
+    typePush(c, typeIndexResult(c, bracket, objectType, indexType));
     emitByte(c, OP_GET_INDEX, bracket);
   }
 }
@@ -1294,12 +1955,15 @@ static void array(Compiler* c, bool canAssign) {
   (void)canAssign;
   Token open = previous(c);
   int count = 0;
+  Type* elementType = NULL;
   emitByte(c, OP_ARRAY, noToken());
   emitShort(c, 0, noToken());
   int sizeOffset = c->chunk->count - 2;
   if (!check(c, TOKEN_RIGHT_BRACKET)) {
     do {
       expression(c);
+      Type* itemType = typePop(c);
+      elementType = typeMerge(elementType, itemType);
       emitByte(c, OP_ARRAY_APPEND, noToken());
       count++;
     } while (match(c, TOKEN_COMMA));
@@ -1307,12 +1971,17 @@ static void array(Compiler* c, bool canAssign) {
   consumeClosing(c, TOKEN_RIGHT_BRACKET, "Expect ']' after array literal.", open);
   c->chunk->code[sizeOffset] = (uint8_t)((count >> 8) & 0xff);
   c->chunk->code[sizeOffset + 1] = (uint8_t)(count & 0xff);
+  if (typecheckEnabled(c)) {
+    if (!elementType) elementType = typeAny();
+    typePush(c, typeArray(c->typecheck, elementType));
+  }
 }
 
 static void map(Compiler* c, bool canAssign) {
   (void)canAssign;
   Token open = previous(c);
   int count = 0;
+  Type* valueType = NULL;
   emitByte(c, OP_MAP, noToken());
   emitShort(c, 0, noToken());
   int sizeOffset = c->chunk->count - 2;
@@ -1334,6 +2003,8 @@ static void map(Compiler* c, bool canAssign) {
       }
       consume(c, TOKEN_COLON, "Expect ':' after map key.");
       expression(c);
+      Type* entryType = typePop(c);
+      valueType = typeMerge(valueType, entryType);
       emitByte(c, OP_MAP_SET, noToken());
       count++;
     } while (match(c, TOKEN_COMMA));
@@ -1341,6 +2012,10 @@ static void map(Compiler* c, bool canAssign) {
   consumeClosing(c, TOKEN_RIGHT_BRACE, "Expect '}' after map literal.", open);
   c->chunk->code[sizeOffset] = (uint8_t)((count >> 8) & 0xff);
   c->chunk->code[sizeOffset + 1] = (uint8_t)(count & 0xff);
+  if (typecheckEnabled(c)) {
+    if (!valueType) valueType = typeAny();
+    typePush(c, typeMap(c->typecheck, typeString(), valueType));
+  }
 }
 
 static ParseRule rules[TOKEN_EOF + 1];
@@ -1419,6 +2094,7 @@ static void expression(Compiler* c) {
 
 static void expressionStatement(Compiler* c) {
   expression(c);
+  typePop(c);
   consume(c, TOKEN_SEMICOLON, "Expect ';' after expression.");
   emitByte(c, OP_POP, noToken());
   emitGc(c);
@@ -1426,19 +2102,43 @@ static void expressionStatement(Compiler* c) {
 
 static void varDeclaration(Compiler* c, bool isConst, bool isExport) {
   Token name = consume(c, TOKEN_IDENTIFIER, "Expect variable name.");
+  Type* declaredType = NULL;
+  bool hasType = false;
+  if (match(c, TOKEN_COLON)) {
+    declaredType = parseType(c);
+    hasType = true;
+  }
   bool hasInitializer = match(c, TOKEN_EQUAL);
+  Type* valueType = typeUnknown();
   if (hasInitializer) {
     expression(c);
+    valueType = typePop(c);
   } else {
     if (isConst) {
       errorAt(c, name, "Const declarations require an initializer.");
     }
     emitByte(c, OP_NULL, noToken());
+    valueType = typeNull();
   }
   consume(c, TOKEN_SEMICOLON, "Expect ';' after variable declaration.");
   int nameIdx = emitStringConstant(c, name);
   emitByte(c, isConst ? OP_DEFINE_CONST : OP_DEFINE_VAR, name);
   emitShort(c, (uint16_t)nameIdx, name);
+  if (typecheckEnabled(c)) {
+    if (hasType) {
+      if (hasInitializer && !typeAssignable(declaredType, valueType)) {
+        char expected[64];
+        char got[64];
+        typeToString(declaredType, expected, sizeof(expected));
+        typeToString(valueType, got, sizeof(got));
+        typeErrorAt(c, name, "Type mismatch. Expected %s but got %s.", expected, got);
+      }
+      typeDefine(c, name, declaredType, true);
+    } else {
+      Type* inferred = hasInitializer ? valueType : typeUnknown();
+      typeDefine(c, name, inferred, false);
+    }
+  }
   if (isExport) {
     emitByte(c, OP_EXPORT, name);
     emitShort(c, (uint16_t)nameIdx, name);
@@ -1457,9 +2157,11 @@ static void blockStatement(Compiler* c) {
   Token open = previous(c);
   emitByte(c, OP_BEGIN_SCOPE, noToken());
   c->scopeDepth++;
+  typeCheckerEnterScope(c);
   block(c, open);
   emitByte(c, OP_END_SCOPE, noToken());
   c->scopeDepth--;
+  typeCheckerExitScope(c);
   emitGc(c);
 }
 
@@ -1467,6 +2169,7 @@ static void ifStatement(Compiler* c) {
   Token keyword = previous(c);
   Token openParen = consume(c, TOKEN_LEFT_PAREN, "Expect '(' after 'if'.");
   expression(c);
+  typePop(c);
   consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after if condition.", openParen);
   int thenJump = emitJump(c, OP_JUMP_IF_FALSE, keyword);
   emitByte(c, OP_POP, noToken());
@@ -1491,6 +2194,7 @@ static void whileStatement(Compiler* c) {
   int loopStart = c->chunk->count;
   Token openParen = consume(c, TOKEN_LEFT_PAREN, "Expect '(' after 'while'.");
   expression(c);
+  typePop(c);
   consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after condition.", openParen);
   int exitJump = emitJump(c, OP_JUMP_IF_FALSE, keyword);
   emitByte(c, OP_POP, noToken());
@@ -1523,6 +2227,7 @@ static void forStatement(Compiler* c) {
   Token keyword = previous(c);
   emitByte(c, OP_BEGIN_SCOPE, noToken());
   c->scopeDepth++;
+  typeCheckerEnterScope(c);
   Token openParen = consume(c, TOKEN_LEFT_PAREN, "Expect '(' after 'for'.");
 
   if (match(c, TOKEN_SEMICOLON)) {
@@ -1532,6 +2237,7 @@ static void forStatement(Compiler* c) {
     varDeclaration(c, true, false);
   } else {
     expression(c);
+    typePop(c);
     consume(c, TOKEN_SEMICOLON, "Expect ';' after loop initializer.");
     emitByte(c, OP_POP, noToken());
   }
@@ -1540,6 +2246,7 @@ static void forStatement(Compiler* c) {
   int exitJump = -1;
   if (!check(c, TOKEN_SEMICOLON)) {
     expression(c);
+    typePop(c);
     exitJump = emitJump(c, OP_JUMP_IF_FALSE, keyword);
     emitByte(c, OP_POP, noToken());
   }
@@ -1551,6 +2258,7 @@ static void forStatement(Compiler* c) {
     int bodyJump = emitJump(c, OP_JUMP, keyword);
     incrementOffset = c->chunk->count;
     expression(c);
+    typePop(c);
     emitByte(c, OP_POP, noToken());
     emitLoop(c, loopStart, keyword);
     loopStart = incrementOffset;
@@ -1585,6 +2293,7 @@ static void forStatement(Compiler* c) {
 
   emitByte(c, OP_END_SCOPE, noToken());
   c->scopeDepth--;
+  typeCheckerExitScope(c);
   emitGc(c);
 }
 
@@ -1592,6 +2301,7 @@ static void foreachStatement(Compiler* c) {
   Token keyword = previous(c);
   emitByte(c, OP_BEGIN_SCOPE, noToken());
   c->scopeDepth++;
+  typeCheckerEnterScope(c);
   Token openParen = consume(c, TOKEN_LEFT_PAREN, "Expect '(' after 'foreach'.");
 
   Token first = consume(c, TOKEN_IDENTIFIER, "Expect loop variable.");
@@ -1606,6 +2316,7 @@ static void foreachStatement(Compiler* c) {
   }
   consume(c, TOKEN_IN, "Expect 'in' after foreach variable.");
   expression(c);
+  Type* iterType = typePop(c);
   consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after foreach iterable.", openParen);
 
   int iterName = emitTempNameConstant(c, "iter");
@@ -1669,6 +2380,22 @@ static void foreachStatement(Compiler* c) {
     emitShort(c, (uint16_t)valueName, valueToken);
   }
 
+  if (typecheckEnabled(c)) {
+    Type* keyType = typeAny();
+    Type* valueType = typeAny();
+    if (iterType && iterType->kind == TYPE_ARRAY) {
+      keyType = typeNumber();
+      valueType = iterType->elem ? iterType->elem : typeAny();
+    } else if (iterType && iterType->kind == TYPE_MAP) {
+      keyType = iterType->key ? iterType->key : typeString();
+      valueType = iterType->value ? iterType->value : typeAny();
+    }
+    if (hasKey) {
+      typeDefine(c, keyToken, keyType, true);
+    }
+    typeDefine(c, valueToken, valueType, true);
+  }
+
   statement(c);
   int continueTarget = c->chunk->count;
   emitGetVarConstant(c, indexName);
@@ -1691,6 +2418,7 @@ static void foreachStatement(Compiler* c) {
 
   emitByte(c, OP_END_SCOPE, noToken());
   c->scopeDepth--;
+  typeCheckerExitScope(c);
   emitGc(c);
 }
 
@@ -1700,9 +2428,11 @@ static void switchStatement(Compiler* c) {
   char message[64];
   emitByte(c, OP_BEGIN_SCOPE, noToken());
   c->scopeDepth++;
+  typeCheckerEnterScope(c);
   snprintf(message, sizeof(message), "Expect '(' after '%s'.", keywordName);
   Token openParen = consume(c, TOKEN_LEFT_PAREN, message);
   expression(c);
+  Type* switchType = typePop(c);
   snprintf(message, sizeof(message), "Expect ')' after %s value.", keywordName);
   consumeClosing(c, TOKEN_RIGHT_PAREN, message, openParen);
   snprintf(message, sizeof(message), "Expect '{' after %s value.", keywordName);
@@ -1731,6 +2461,14 @@ static void switchStatement(Compiler* c) {
       }
       emitGetVarConstant(c, switchValue);
       expression(c);
+      Type* caseType = typePop(c);
+      if (switchType && !typeIsAny(switchType) && !typeAssignable(switchType, caseType)) {
+        char expected[64];
+        char got[64];
+        typeToString(switchType, expected, sizeof(expected));
+        typeToString(caseType, got, sizeof(got));
+        typeErrorAt(c, previous(c), "Case type %s does not match %s.", got, expected);
+      }
       consume(c, TOKEN_COLON, "Expect ':' after case value.");
       emitByte(c, OP_EQUAL, keyword);
       previousJump = emitJump(c, OP_JUMP_IF_FALSE, keyword);
@@ -1776,6 +2514,7 @@ static void switchStatement(Compiler* c) {
 
   emitByte(c, OP_END_SCOPE, noToken());
   c->scopeDepth--;
+  typeCheckerExitScope(c);
   emitGc(c);
 }
 
@@ -1808,7 +2547,25 @@ static void returnStatement(Compiler* c) {
   Token keyword = previous(c);
   if (!check(c, TOKEN_SEMICOLON)) {
     expression(c);
+    Type* valueType = typePop(c);
+    if (typecheckEnabled(c) && c->typecheck->currentReturn) {
+      if (!typeAssignable(c->typecheck->currentReturn, valueType)) {
+        char expected[64];
+        char got[64];
+        typeToString(c->typecheck->currentReturn, expected, sizeof(expected));
+        typeToString(valueType, got, sizeof(got));
+        typeErrorAt(c, keyword, "Return type mismatch. Expected %s but got %s.", expected, got);
+      }
+    }
   } else {
+    if (typecheckEnabled(c) && c->typecheck->currentReturn &&
+        c->typecheck->currentReturn->kind != TYPE_NULL &&
+        c->typecheck->currentReturn->kind != TYPE_ANY &&
+        c->typecheck->currentReturn->kind != TYPE_UNKNOWN) {
+      char expected[64];
+      typeToString(c->typecheck->currentReturn, expected, sizeof(expected));
+      typeErrorAt(c, keyword, "Return type mismatch. Expected %s but got null.", expected);
+    }
     emitByte(c, OP_NULL, noToken());
   }
   consume(c, TOKEN_SEMICOLON, "Expect ';' after return value.");
@@ -1822,6 +2579,7 @@ static void importStatement(Compiler* c) {
     Token alias = consume(c, TOKEN_IDENTIFIER, "Expect name after 'as'.");
     consume(c, TOKEN_FROM, "Expect 'from' after import alias.");
     expression(c);
+    typePop(c);
     consume(c, TOKEN_SEMICOLON, "Expect ';' after import.");
     emitByte(c, OP_IMPORT, keyword);
     emitByte(c, 1, keyword);
@@ -1835,6 +2593,7 @@ static void importStatement(Compiler* c) {
     Token alias = consume(c, TOKEN_IDENTIFIER, "Expect name after 'import'.");
     consume(c, TOKEN_FROM, "Expect 'from' after import name.");
     expression(c);
+    typePop(c);
     consume(c, TOKEN_SEMICOLON, "Expect ';' after import.");
     emitByte(c, OP_IMPORT_MODULE, keyword);
     int defaultIdx = emitStringConstantFromChars(c, "default", 7);
@@ -1848,6 +2607,7 @@ static void importStatement(Compiler* c) {
   }
 
   expression(c);
+  typePop(c);
   Token alias; memset(&alias, 0, sizeof(Token));
   bool hasAlias = false;
   if (match(c, TOKEN_AS)) {
@@ -1868,6 +2628,7 @@ static void importStatement(Compiler* c) {
 static void fromImportStatement(Compiler* c) {
   Token keyword = previous(c);
   expression(c);
+  typePop(c);
   consume(c, TOKEN_IMPORT, "Expect 'import' after module path.");
   Token alias = consume(c, TOKEN_IDENTIFIER, "Expect name after 'import'.");
   consume(c, TOKEN_SEMICOLON, "Expect ';' after import.");
@@ -1878,11 +2639,13 @@ static void fromImportStatement(Compiler* c) {
   emitGc(c);
 }
 
-static ObjFunction* compileFunction(Compiler* c, Token name, bool isMethod);
+static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer, Type** outType);
 
 static void functionDeclaration(Compiler* c, bool isExport) {
   Token name = consume(c, TOKEN_IDENTIFIER, "Expect function name.");
-  ObjFunction* function = compileFunction(c, name, false);
+  Type* functionType = NULL;
+  ObjFunction* function = compileFunction(c, name, false, &functionType);
+  (void)functionType;
   if (!function) return;
   int constant = makeConstant(c, OBJ_VAL(function), name);
   emitByte(c, OP_CLOSURE, name);
@@ -1915,7 +2678,7 @@ static void classDeclaration(Compiler* c, bool isExport) {
     }
     Token methodName = consume(c, TOKEN_IDENTIFIER, "Expect method name.");
     bool isInit = methodName.length == 4 && memcmp(methodName.start, "init", 4) == 0;
-    ObjFunction* method = compileFunction(c, methodName, isInit);
+    ObjFunction* method = compileFunction(c, methodName, isInit, NULL);
     if (!method) return;
     int constant = makeConstant(c, OBJ_VAL(method), methodName);
     emitByte(c, OP_CLOSURE, methodName);
@@ -2041,10 +2804,12 @@ static void exportDeclaration(Compiler* c) {
   }
 
   if (match(c, TOKEN_DEFAULT)) {
-    if (match(c, TOKEN_FUN)) {
-      Token name = consume(c, TOKEN_IDENTIFIER, "Expect function name.");
-      ObjFunction* function = compileFunction(c, name, false);
-      if (!function) return;
+      if (match(c, TOKEN_FUN)) {
+        Token name = consume(c, TOKEN_IDENTIFIER, "Expect function name.");
+        Type* functionType = NULL;
+        ObjFunction* function = compileFunction(c, name, false, &functionType);
+        (void)functionType;
+        if (!function) return;
       int constant = makeConstant(c, OBJ_VAL(function), name);
       emitByte(c, OP_CLOSURE, name);
       emitShort(c, (uint16_t)constant, name);
@@ -2077,7 +2842,7 @@ static void exportDeclaration(Compiler* c) {
         }
         Token methodName = consume(c, TOKEN_IDENTIFIER, "Expect method name.");
         bool isInit = methodName.length == 4 && memcmp(methodName.start, "init", 4) == 0;
-        ObjFunction* method = compileFunction(c, methodName, isInit);
+        ObjFunction* method = compileFunction(c, methodName, isInit, NULL);
         if (!method) return;
         int constant = makeConstant(c, OBJ_VAL(method), methodName);
         emitByte(c, OP_CLOSURE, methodName);
@@ -2098,6 +2863,7 @@ static void exportDeclaration(Compiler* c) {
       return;
     }
     expression(c);
+    typePop(c);
     consume(c, TOKEN_SEMICOLON, "Expect ';' after export.");
     if (allowExport) {
       int defaultIdx = emitStringConstantFromChars(c, "default", 7);
@@ -2111,6 +2877,7 @@ static void exportDeclaration(Compiler* c) {
   if (match(c, TOKEN_STAR)) {
     consume(c, TOKEN_FROM, "Expect 'from' after '*'.");
     expression(c);
+    typePop(c);
     consume(c, TOKEN_SEMICOLON, "Expect ';' after export.");
     if (allowExport) {
       emitByte(c, OP_IMPORT_MODULE, keyword);
@@ -2130,6 +2897,7 @@ static void exportDeclaration(Compiler* c) {
     bool hasFrom = match(c, TOKEN_FROM);
     if (hasFrom) {
       expression(c);
+      typePop(c);
     }
     consume(c, TOKEN_SEMICOLON, "Expect ';' after export.");
 
@@ -2232,19 +3000,13 @@ static void statement(Compiler* c) {
   }
 }
 
-static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer) {
+static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer, Type** outType) {
   Token openParen = consume(c, TOKEN_LEFT_PAREN, "Expect '(' after function name.");
 
   int arity = 0;
-  int minArity = 0;
-  ObjString** params = NULL;
-  Token* paramTokens = NULL;
-  int* defaultStarts = NULL;
-  int* defaultEnds = NULL;
   bool sawDefault = false;
-
   int savedStart = c->current;
-  int tempArity = 0;
+
   if (!check(c, TOKEN_RIGHT_PAREN)) {
     do {
       if (!check(c, TOKEN_IDENTIFIER)) {
@@ -2252,43 +3014,57 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer)
         break;
       }
       advance(c);
-      tempArity++;
+      arity++;
+      if (match(c, TOKEN_COLON)) {
+        parseType(c);
+      }
       if (match(c, TOKEN_EQUAL)) {
         sawDefault = true;
         int depth = 0;
         while (!isAtEnd(c)) {
           if (check(c, TOKEN_COMMA) && depth == 0) break;
           if (check(c, TOKEN_RIGHT_PAREN) && depth == 0) break;
-          if (check(c, TOKEN_LEFT_PAREN) || check(c, TOKEN_LEFT_BRACKET) || check(c, TOKEN_LEFT_BRACE)) depth++;
-          if (check(c, TOKEN_RIGHT_PAREN) || check(c, TOKEN_RIGHT_BRACKET) || check(c, TOKEN_RIGHT_BRACE)) depth--;
+          if (check(c, TOKEN_LEFT_PAREN) || check(c, TOKEN_LEFT_BRACKET) ||
+              check(c, TOKEN_LEFT_BRACE)) depth++;
+          if (check(c, TOKEN_RIGHT_PAREN) || check(c, TOKEN_RIGHT_BRACKET) ||
+              check(c, TOKEN_RIGHT_BRACE)) depth--;
           advance(c);
         }
       }
     } while (match(c, TOKEN_COMMA));
   }
   consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after parameters.", openParen);
-  consume(c, TOKEN_LEFT_BRACE, "Expect '{' before function body.");
-  int bodyStart = c->current;
 
-  arity = tempArity;
+  c->current = savedStart;
+
+  int minArity = arity;
+  ObjString** params = NULL;
+  Token* paramTokens = NULL;
+  Type** paramTypes = NULL;
+  bool* paramHasType = NULL;
+  int* defaultStarts = NULL;
+  int* defaultEnds = NULL;
   if (arity > 0) {
     params = (ObjString**)malloc(sizeof(ObjString*) * (size_t)arity);
     paramTokens = (Token*)malloc(sizeof(Token) * (size_t)arity);
+    paramTypes = (Type**)malloc(sizeof(Type*) * (size_t)arity);
+    paramHasType = (bool*)malloc(sizeof(bool) * (size_t)arity);
     defaultStarts = (int*)malloc(sizeof(int) * (size_t)arity);
     defaultEnds = (int*)malloc(sizeof(int) * (size_t)arity);
-    if (!params || !paramTokens || !defaultStarts || !defaultEnds) {
+    if (!params || !paramTokens || !paramTypes || !paramHasType ||
+        !defaultStarts || !defaultEnds) {
       fprintf(stderr, "Out of memory.\n");
       exit(1);
     }
     for (int i = 0; i < arity; i++) {
       defaultStarts[i] = -1;
       defaultEnds[i] = -1;
+      paramTypes[i] = typeUnknown();
+      paramHasType[i] = false;
     }
   }
 
-  c->current = savedStart;
   sawDefault = false;
-  minArity = arity;
   int paramIdx = 0;
   if (!check(c, TOKEN_RIGHT_PAREN)) {
     do {
@@ -2296,6 +3072,10 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer)
       Token paramName = consume(c, TOKEN_IDENTIFIER, "Expect parameter name.");
       params[paramIdx] = stringFromToken(c->vm, paramName);
       paramTokens[paramIdx] = paramName;
+      if (match(c, TOKEN_COLON)) {
+        paramTypes[paramIdx] = parseType(c);
+        paramHasType[paramIdx] = true;
+      }
       if (match(c, TOKEN_EQUAL)) {
         if (!sawDefault) minArity = paramIdx;
         sawDefault = true;
@@ -2304,8 +3084,10 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer)
         while (!isAtEnd(c)) {
           if (check(c, TOKEN_COMMA) && depth == 0) break;
           if (check(c, TOKEN_RIGHT_PAREN) && depth == 0) break;
-          if (check(c, TOKEN_LEFT_PAREN) || check(c, TOKEN_LEFT_BRACKET) || check(c, TOKEN_LEFT_BRACE)) depth++;
-          if (check(c, TOKEN_RIGHT_PAREN) || check(c, TOKEN_RIGHT_BRACKET) || check(c, TOKEN_RIGHT_BRACE)) depth--;
+          if (check(c, TOKEN_LEFT_PAREN) || check(c, TOKEN_LEFT_BRACKET) ||
+              check(c, TOKEN_LEFT_BRACE)) depth++;
+          if (check(c, TOKEN_RIGHT_PAREN) || check(c, TOKEN_RIGHT_BRACKET) ||
+              check(c, TOKEN_RIGHT_BRACE)) depth--;
           advance(c);
         }
         defaultEnds[paramIdx] = c->current;
@@ -2316,7 +3098,22 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer)
     } while (match(c, TOKEN_COMMA));
   }
   consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after parameters.", openParen);
+
+  Type* returnType = typeAny();
+  if (match(c, TOKEN_COLON)) {
+    returnType = parseType(c);
+  }
   Token openBrace = consume(c, TOKEN_LEFT_BRACE, "Expect '{' before function body.");
+  int bodyStart = c->current;
+
+  Type* functionType = NULL;
+  if (outType) {
+    functionType = typeFunction(c->typecheck, paramTypes, arity, returnType);
+    *outType = functionType;
+    if (typecheckEnabled(c)) {
+      typeDefine(c, name, functionType, true);
+    }
+  }
 
   Chunk* chunk = (Chunk*)malloc(sizeof(Chunk));
   if (!chunk) { fprintf(stderr, "Out of memory.\n"); exit(1); }
@@ -2340,8 +3137,22 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer)
   fnCompiler.breakContext = NULL;
   fnCompiler.enclosing = c;
 
+  TypeChecker fnTypeChecker;
+  typeCheckerInit(&fnTypeChecker, c->typecheck,
+                  c->typecheck ? c->typecheck->enabled : false);
+  fnTypeChecker.currentReturn = returnType;
+  fnCompiler.typecheck = &fnTypeChecker;
+
+  if (typecheckEnabled(&fnCompiler)) {
+    for (int i = 0; i < arity; i++) {
+      Type* paramType = paramHasType && paramHasType[i] ? paramTypes[i] : typeUnknown();
+      bool isExplicit = paramHasType && paramHasType[i];
+      typeDefine(&fnCompiler, paramTokens[i], paramType, isExplicit);
+    }
+  }
+
   for (int i = 0; i < arity; i++) {
-    if (defaultStarts[i] < 0) continue;
+    if (!defaultStarts || defaultStarts[i] < 0) continue;
 
     Token ptoken = paramTokens[i];
     emitByte(&fnCompiler, OP_ARG_COUNT, ptoken);
@@ -2353,6 +3164,16 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer)
     int savedCurrent = fnCompiler.current;
     fnCompiler.current = defaultStarts[i];
     expression(&fnCompiler);
+    Type* defaultType = typePop(&fnCompiler);
+    if (typecheckEnabled(&fnCompiler) && paramHasType && paramHasType[i]) {
+      if (!typeAssignable(paramTypes[i], defaultType)) {
+        char expected[64];
+        char got[64];
+        typeToString(paramTypes[i], expected, sizeof(expected));
+        typeToString(defaultType, got, sizeof(got));
+        typeErrorAt(&fnCompiler, ptoken, "Default value expects %s but got %s.", expected, got);
+      }
+    }
     fnCompiler.current = savedCurrent;
 
     int nameIndex = emitStringConstant(&fnCompiler, ptoken);
@@ -2379,8 +3200,12 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer)
   c->current = fnCompiler.current;
 
   free(paramTokens);
+  free(paramTypes);
+  free(paramHasType);
   free(defaultStarts);
   free(defaultEnds);
+
+  typeCheckerFree(&fnTypeChecker);
 
   if (fnCompiler.hadError) {
     c->hadError = true;
@@ -2402,6 +3227,8 @@ ObjFunction* compile(VM* vm, const TokenArray* tokens, const char* source,
   ObjFunction* function = newFunction(vm, NULL, 0, 0, false, NULL, chunk, NULL, NULL);
 
   Compiler c;
+  TypeChecker typecheck;
+  typeCheckerInit(&typecheck, NULL, vm->typecheck);
   c.vm = vm;
   c.tokens = tokens;
   c.source = source;
@@ -2415,6 +3242,7 @@ ObjFunction* compile(VM* vm, const TokenArray* tokens, const char* source,
   c.pendingOptionalCall = false;
   c.breakContext = NULL;
   c.enclosing = NULL;
+  c.typecheck = &typecheck;
   vm->compiler = &c;
 
   while (!isAtEnd(&c)) {
@@ -2428,8 +3256,10 @@ ObjFunction* compile(VM* vm, const TokenArray* tokens, const char* source,
 
   *hadError = c.hadError;
   if (c.hadError) {
+    typeCheckerFree(&typecheck);
     return NULL;
   }
   optimizeChunk(vm, chunk);
+  typeCheckerFree(&typecheck);
   return function;
 }

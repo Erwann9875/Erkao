@@ -24,6 +24,8 @@ typedef struct BreakContext {
   JumpList continues;
 } BreakContext;
 
+typedef struct TypeChecker TypeChecker;
+
 typedef struct Compiler {
   VM* vm;
   const TokenArray* tokens;
@@ -38,6 +40,7 @@ typedef struct Compiler {
   bool pendingOptionalCall;
   BreakContext* breakContext;
   struct Compiler* enclosing;
+  TypeChecker* typecheck;
 } Compiler;
 
 ObjFunction* compile(VM* vm, const TokenArray* tokens, const char* source,

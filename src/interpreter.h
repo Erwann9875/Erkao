@@ -78,6 +78,7 @@ typedef struct VM {
   bool gcLogFullActive;
   bool hadError;
   bool debugBytecode;
+  bool typecheck;
   char** modulePaths;
   int modulePathCount;
   int modulePathCapacity;

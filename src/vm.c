@@ -243,6 +243,7 @@ void vmInit(VM* vm) {
   vm->gcLogFullActive = false;
   vm->hadError = false;
   vm->debugBytecode = false;
+  vm->typecheck = false;
   vm->modulePaths = NULL;
   vm->modulePathCount = 0;
   vm->modulePathCapacity = 0;
