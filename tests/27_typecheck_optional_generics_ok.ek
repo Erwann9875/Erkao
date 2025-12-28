@@ -1,0 +1,11 @@
+let items: array<map<string, number>> = [
+  { a: 1 },
+  { b: 2 }
+];
+
+let value = items[0]?.["a"];
+
+let user = { profile: { name: "Ada" } };
+let maybeName = user?.profile?.name;
+print(value);
+print(maybeName);

@@ -22,6 +22,12 @@ const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
 const typecheckTimers = new Map();
 let workspaceRoots = [];
+let clientSupportsConfig = false;
+let settings = {
+  diagnosticsMode: "change",
+  debounceMs: 300,
+  typecheckExecutable: ""
+};
 
 const KEYWORDS = [
   "let",
@@ -146,8 +152,9 @@ function getWordInfo(doc, position) {
 }
 
 function resolveErkaoExe() {
-  const override = process.env.ERKAO_LSP_EXE;
-  if (override && fs.existsSync(override)) {
+  const override = settings.typecheckExecutable || process.env.ERKAO_LSP_EXE;
+  if (override) {
+    if (fs.existsSync(override)) return override;
     return override;
   }
   for (const root of workspaceRoots) {
@@ -159,6 +166,34 @@ function resolveErkaoExe() {
     if (fs.existsSync(unixCandidate)) return unixCandidate;
   }
   return "erkao";
+}
+
+async function loadSettings() {
+  if (!clientSupportsConfig) return;
+  try {
+    const config = await connection.workspace.getConfiguration("erkao");
+    if (config && typeof config === "object") {
+      const lspConfig = config.lsp || {};
+      if (typeof lspConfig.diagnosticsMode === "string") {
+        settings.diagnosticsMode = lspConfig.diagnosticsMode;
+      }
+      if (typeof lspConfig.diagnosticsDebounceMs === "number") {
+        settings.debounceMs = lspConfig.diagnosticsDebounceMs;
+      }
+      if (typeof lspConfig.typecheckExecutable === "string") {
+        settings.typecheckExecutable = lspConfig.typecheckExecutable;
+      }
+    }
+  } catch (err) {
+  }
+}
+
+function shouldRunDiagnostics(trigger) {
+  if (settings.diagnosticsMode === "off") return false;
+  if (settings.diagnosticsMode === "save") {
+    return trigger === "save";
+  }
+  return true;
 }
 
 function parseTypecheckDiagnostics(output, filePath) {
@@ -188,12 +223,14 @@ function parseTypecheckDiagnostics(output, filePath) {
   return diagnostics;
 }
 
-function scheduleTypecheck(doc) {
+function scheduleTypecheck(doc, trigger) {
   if (!doc || !doc.uri.startsWith("file://")) return;
   if (!doc.uri.endsWith(".ek")) return;
+  if (!shouldRunDiagnostics(trigger)) return;
   const existing = typecheckTimers.get(doc.uri);
   if (existing) clearTimeout(existing);
-  const handle = setTimeout(() => runTypecheck(doc), 300);
+  const delay = Math.max(0, settings.debounceMs || 0);
+  const handle = setTimeout(() => runTypecheck(doc), delay);
   typecheckTimers.set(doc.uri, handle);
 }
 
@@ -598,11 +635,11 @@ documents.onDidClose((event) => {
 });
 
 documents.onDidChangeContent((event) => {
-  scheduleTypecheck(event.document);
+  scheduleTypecheck(event.document, "change");
 });
 
 documents.onDidSave((event) => {
-  scheduleTypecheck(event.document);
+  scheduleTypecheck(event.document, "save");
 });
 
 connection.onInitialize((params) => {
@@ -616,6 +653,10 @@ connection.onInitialize((params) => {
   } else if (params && params.rootUri && params.rootUri.startsWith("file://")) {
     workspaceRoots.push(fileURLToPath(params.rootUri));
   }
+  clientSupportsConfig = !!(params &&
+    params.capabilities &&
+    params.capabilities.workspace &&
+    params.capabilities.workspace.configuration);
   return {
     capabilities: {
       textDocumentSync: documents.syncKind,
@@ -627,6 +668,32 @@ connection.onInitialize((params) => {
       renameProvider: { prepareProvider: true }
     }
   };
+});
+
+connection.onInitialized(() => {
+  if (clientSupportsConfig) {
+    loadSettings().then(() => {
+      if (settings.diagnosticsMode === "off") return;
+      for (const doc of documents.all()) {
+        scheduleTypecheck(doc, "save");
+      }
+    });
+  }
+});
+
+connection.onDidChangeConfiguration(() => {
+  if (!clientSupportsConfig) return;
+  loadSettings().then(() => {
+    if (settings.diagnosticsMode === "off") {
+      for (const doc of documents.all()) {
+        connection.sendDiagnostics({ uri: doc.uri, diagnostics: [] });
+      }
+      return;
+    }
+    for (const doc of documents.all()) {
+      scheduleTypecheck(doc, "save");
+    }
+  });
 });
 
 connection.onCompletion((params) => {

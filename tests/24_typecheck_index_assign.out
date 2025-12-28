@@ -1,0 +1,15 @@
+tests/24_typecheck_index_assign.ek:2:5: Error at '[': Array element expects number but got string.
+  nums[0] = "oops";
+      ^
+tests/24_typecheck_index_assign.ek:6:8: Error at '[': Array index expects a number.
+  letters[idx] = "b";
+         ^
+tests/24_typecheck_index_assign.ek:9:7: Error at '[': Map index expects a string.
+  scores[0] = 5;
+        ^
+tests/24_typecheck_index_assign.ek:10:7: Error at '[': Map value expects number but got string.
+  scores["bob"] = "ten";
+        ^
+tests/24_typecheck_index_assign.ek:12:7: Error at '[': Map index expects a string.
+  scores[key] = 3;
+        ^

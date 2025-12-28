@@ -1,0 +1,12 @@
+let nums: array<number> = [1, 2];
+nums[0] = "oops";
+
+let letters: array<string> = ["a"];
+let idx = "1";
+letters[idx] = "b";
+
+let scores: map<string, number> = { alice: 1 };
+scores[0] = 5;
+scores["bob"] = "ten";
+let key = 1;
+scores[key] = 3;

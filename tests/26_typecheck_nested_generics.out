@@ -1,0 +1,6 @@
+tests/26_typecheck_nested_generics.ek:2:5: Error at '[': Array element expects array<number> but got array<string>.
+  grid[0] = ["oops"];
+      ^
+tests/26_typecheck_nested_generics.ek:5:5: Error at '[': Map value expects array<number> but got array<string>.
+  dict["a"] = ["bad"];
+      ^

@@ -1,0 +1,9 @@
+let names: array<string> = ["a", "b"];
+let badNames: array<string> = [1, 2];
+
+let scores: map<string, number> = { alice: "ten" };
+let idx = names["zero"];
+let val = scores[0];
+
+let user = { profile: { name: "Ada" } };
+let maybeName = user?.profile?.name;

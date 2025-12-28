@@ -900,6 +900,47 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
         push(vm, result);
         break;
       }
+      case OP_GET_INDEX_OPTIONAL: {
+        Value index = pop(vm);
+        Value object = pop(vm);
+        if (IS_NULL(object)) {
+          push(vm, NULL_VAL);
+          break;
+        }
+        if (isObjType(object, OBJ_MAP) && isString(index)) {
+          ObjMap* map = (ObjMap*)AS_OBJ(object);
+          ObjString* key = asString(index);
+          if (cache && cache->kind == IC_MAP && cache->map == map) {
+            int entryIndex = cache->index;
+            if (entryIndex >= 0 && entryIndex < map->capacity &&
+                map->entries[entryIndex].key == key) {
+              push(vm, map->entries[entryIndex].value);
+              break;
+            }
+          }
+
+          Value out;
+          int entryIndex = -1;
+          if (mapGetIndex(map, key, &out, &entryIndex)) {
+            if (cache) {
+              cache->kind = IC_MAP;
+              cache->map = map;
+              cache->key = key;
+              cache->index = entryIndex;
+              cache->klass = NULL;
+              cache->method = NULL;
+            }
+            push(vm, out);
+          } else {
+            push(vm, NULL_VAL);
+          }
+          break;
+        }
+        Value result = evaluateIndex(vm, currentToken(frame), object, index);
+        if (vm->hadError) return false;
+        push(vm, result);
+        break;
+      }
       case OP_SET_INDEX: {
         Value value = pop(vm);
         Value index = pop(vm);

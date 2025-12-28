@@ -1,0 +1,9 @@
+let names: array<string> = ["a", "b"];
+names[1] = "c";
+
+let scores: map<string, number> = { alice: 10 };
+scores["bob"] = 5;
+
+let user = { profile: { name: "Ada" } };
+let maybeName = user?.profile?.name;
+print(maybeName);

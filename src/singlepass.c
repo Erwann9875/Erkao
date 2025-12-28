@@ -1934,6 +1934,17 @@ static void dot(Compiler* c, bool canAssign) {
 
 static void optionalDot(Compiler* c, bool canAssign) {
   (void)canAssign;
+  if (match(c, TOKEN_LEFT_BRACKET)) {
+    Token bracket = previous(c);
+    expression(c);
+    Type* indexType = typePop(c);
+    Type* objectType = typePop(c);
+    consumeClosing(c, TOKEN_RIGHT_BRACKET, "Expect ']' after index.", bracket);
+    typePush(c, typeIndexResult(c, bracket, objectType, indexType));
+    emitByte(c, OP_GET_INDEX_OPTIONAL, bracket);
+    c->pendingOptionalCall = true;
+    return;
+  }
   Token name = consume(c, TOKEN_IDENTIFIER, "Expect property name after '?.'.");
   int nameIdx = emitStringConstant(c, name);
   typePop(c);

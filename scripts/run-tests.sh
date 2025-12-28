@@ -203,7 +203,7 @@ for test in "${tests[@]}"; do
   test_rel="${test_rel#./}"
 
   command="run"
-  if [[ "$(basename "$test_rel")" == *_typecheck.ek ]]; then
+  if [[ "$(basename "$test_rel")" == *_typecheck*.ek ]]; then
     command="typecheck"
   fi
 

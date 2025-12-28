@@ -200,7 +200,7 @@ try {
       }
       $relativeTest = $relativeTest -replace "\\", "/"
       $command = "run"
-      if ($test.BaseName -like "*_typecheck") {
+      if ($test.BaseName -like "*_typecheck*") {
         $command = "typecheck"
       }
 

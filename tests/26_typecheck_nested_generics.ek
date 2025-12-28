@@ -1,0 +1,5 @@
+let grid: array<array<number>> = [[1, 2], [3]];
+grid[0] = ["oops"];
+
+let dict: map<string, array<number>> = { a: [1] };
+dict["a"] = ["bad"];

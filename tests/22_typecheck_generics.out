@@ -1,0 +1,12 @@
+tests/22_typecheck_generics.ek:2:5: Error at 'badNames': Type mismatch. Expected array<string> but got array<number>.
+  let badNames: array<string> = [1, 2];
+      ^~~~~~~~
+tests/22_typecheck_generics.ek:4:5: Error at 'scores': Type mismatch. Expected map<string, number> but got map<string, string>.
+  let scores: map<string, number> = { alice: "ten" };
+      ^~~~~~
+tests/22_typecheck_generics.ek:5:16: Error at '[': Array index expects a number.
+  let idx = names["zero"];
+                 ^
+tests/22_typecheck_generics.ek:6:17: Error at '[': Map index expects a string.
+  let val = scores[0];
+                  ^

@@ -34,7 +34,33 @@
         "scopeName": "source.erkao",
         "path": "./syntaxes/erkao.tmLanguage.json"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Erkao",
+      "properties": {
+        "erkao.lsp.diagnosticsMode": {
+          "type": "string",
+          "enum": [
+            "change",
+            "save",
+            "off"
+          ],
+          "default": "change",
+          "description": "When to run erkao typecheck for diagnostics."
+        },
+        "erkao.lsp.diagnosticsDebounceMs": {
+          "type": "number",
+          "default": 300,
+          "minimum": 0,
+          "description": "Debounce time in milliseconds for diagnostics on change."
+        },
+        "erkao.lsp.typecheckExecutable": {
+          "type": "string",
+          "default": "",
+          "description": "Path to erkao executable used for typecheck diagnostics."
+        }
+      }
+    }
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1",

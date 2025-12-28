@@ -128,6 +128,8 @@ static int disassembleInstruction(const Chunk* chunk, int offset) {
       return constantInstruction("OP_GET_THIS", chunk, offset);
     case OP_GET_INDEX:
       return simpleInstruction("OP_GET_INDEX", chunk, offset);
+    case OP_GET_INDEX_OPTIONAL:
+      return simpleInstruction("OP_GET_INDEX_OPTIONAL", chunk, offset);
     case OP_SET_INDEX:
       return simpleInstruction("OP_SET_INDEX", chunk, offset);
     case OP_EQUAL:
