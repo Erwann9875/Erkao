@@ -1,0 +1,3 @@
+tests/31_typecheck_map_key_constraint.ek:1:10: Error at 'map': Map keys must be string.
+  let bad: map<number, string> = {};
+           ^

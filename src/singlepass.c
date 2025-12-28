@@ -595,6 +595,7 @@ static const char* tokenDescription(ErkaoTokenType type) {
     case TOKEN_RIGHT_BRACKET: return "']'";
     case TOKEN_COMMA: return "','";
     case TOKEN_DOT: return "'.'";
+    case TOKEN_QUESTION: return "'?'";
     case TOKEN_QUESTION_DOT: return "'?.'";
     case TOKEN_MINUS: return "'-'";
     case TOKEN_PLUS: return "'+'";
@@ -981,6 +982,7 @@ typedef struct Type {
   struct Type** params;
   int paramCount;
   struct Type* returnType;
+  bool nullable;
 } Type;
 
 typedef struct {
@@ -1007,12 +1009,12 @@ struct TypeChecker {
   Type* currentReturn;
 };
 
-static Type TYPE_ANY_VALUE = { TYPE_ANY, NULL, NULL, NULL, NULL, NULL, 0, NULL };
-static Type TYPE_UNKNOWN_VALUE = { TYPE_UNKNOWN, NULL, NULL, NULL, NULL, NULL, 0, NULL };
-static Type TYPE_NUMBER_VALUE = { TYPE_NUMBER, NULL, NULL, NULL, NULL, NULL, 0, NULL };
-static Type TYPE_STRING_VALUE = { TYPE_STRING, NULL, NULL, NULL, NULL, NULL, 0, NULL };
-static Type TYPE_BOOL_VALUE = { TYPE_BOOL, NULL, NULL, NULL, NULL, NULL, 0, NULL };
-static Type TYPE_NULL_VALUE = { TYPE_NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL };
+static Type TYPE_ANY_VALUE = { TYPE_ANY, NULL, NULL, NULL, NULL, NULL, 0, NULL, false };
+static Type TYPE_UNKNOWN_VALUE = { TYPE_UNKNOWN, NULL, NULL, NULL, NULL, NULL, 0, NULL, false };
+static Type TYPE_NUMBER_VALUE = { TYPE_NUMBER, NULL, NULL, NULL, NULL, NULL, 0, NULL, false };
+static Type TYPE_STRING_VALUE = { TYPE_STRING, NULL, NULL, NULL, NULL, NULL, 0, NULL, false };
+static Type TYPE_BOOL_VALUE = { TYPE_BOOL, NULL, NULL, NULL, NULL, NULL, 0, NULL, false };
+static Type TYPE_NULL_VALUE = { TYPE_NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, false };
 
 static bool typecheckEnabled(Compiler* c) {
   return c->typecheck && c->typecheck->enabled;
@@ -1120,6 +1122,89 @@ static bool typeIsAny(Type* type) {
   return type->kind == TYPE_ANY || type->kind == TYPE_UNKNOWN;
 }
 
+static bool typeIsNullable(Type* type) {
+  if (!type) return false;
+  return type->kind == TYPE_NULL || type->nullable;
+}
+
+static Type* typeClone(TypeChecker* tc, Type* src) {
+  if (!src) return typeAny();
+  switch (src->kind) {
+    case TYPE_ANY:
+      return typeAny();
+    case TYPE_UNKNOWN:
+      return typeUnknown();
+    case TYPE_NUMBER: {
+      if (!src->nullable) return typeNumber();
+      Type* type = typeAlloc(tc, TYPE_NUMBER);
+      type->nullable = true;
+      return type;
+    }
+    case TYPE_STRING: {
+      if (!src->nullable) return typeString();
+      Type* type = typeAlloc(tc, TYPE_STRING);
+      type->nullable = true;
+      return type;
+    }
+    case TYPE_BOOL: {
+      if (!src->nullable) return typeBool();
+      Type* type = typeAlloc(tc, TYPE_BOOL);
+      type->nullable = true;
+      return type;
+    }
+    case TYPE_NULL:
+      return typeNull();
+    case TYPE_NAMED: {
+      Type* type = typeAlloc(tc, TYPE_NAMED);
+      type->name = src->name;
+      type->nullable = src->nullable;
+      return type;
+    }
+    case TYPE_ARRAY: {
+      Type* type = typeAlloc(tc, TYPE_ARRAY);
+      type->elem = typeClone(tc, src->elem);
+      type->nullable = src->nullable;
+      return type;
+    }
+    case TYPE_MAP: {
+      Type* type = typeAlloc(tc, TYPE_MAP);
+      type->key = typeClone(tc, src->key);
+      type->value = typeClone(tc, src->value);
+      type->nullable = src->nullable;
+      return type;
+    }
+    case TYPE_FUNCTION: {
+      Type* type = typeAlloc(tc, TYPE_FUNCTION);
+      type->paramCount = src->paramCount;
+      type->returnType = typeClone(tc, src->returnType);
+      type->nullable = src->nullable;
+      if (src->paramCount > 0 && src->params) {
+        type->params = (Type**)malloc(sizeof(Type*) * (size_t)src->paramCount);
+        if (!type->params) {
+          fprintf(stderr, "Out of memory.\n");
+          exit(1);
+        }
+        for (int i = 0; i < src->paramCount; i++) {
+          type->params[i] = typeClone(tc, src->params[i]);
+        }
+      }
+      return type;
+    }
+  }
+  return typeAny();
+}
+
+static Type* typeMakeNullable(TypeChecker* tc, Type* type) {
+  if (!type) return typeAny();
+  if (type->kind == TYPE_ANY) return typeAny();
+  if (type->kind == TYPE_UNKNOWN) return typeUnknown();
+  if (type->kind == TYPE_NULL) return typeNull();
+  if (type->nullable) return type;
+  Type* copy = typeClone(tc, type);
+  if (copy) copy->nullable = true;
+  return copy;
+}
+
 static bool typeNamesEqual(ObjString* a, ObjString* b) {
   if (a == b) return true;
   if (!a || !b) return false;
@@ -1131,6 +1216,7 @@ static bool typeEquals(Type* a, Type* b) {
   if (a == b) return true;
   if (!a || !b) return false;
   if (a->kind != b->kind) return false;
+  if (a->kind != TYPE_NULL && a->nullable != b->nullable) return false;
   switch (a->kind) {
     case TYPE_ANY:
     case TYPE_UNKNOWN:
@@ -1158,6 +1244,9 @@ static bool typeEquals(Type* a, Type* b) {
 static bool typeAssignable(Type* dst, Type* src) {
   if (typeIsAny(dst) || typeIsAny(src)) return true;
   if (!dst || !src) return true;
+  if (dst->kind == TYPE_NULL) return src->kind == TYPE_NULL;
+  if (src->kind == TYPE_NULL) return dst->nullable;
+  if (typeIsNullable(src) && !typeIsNullable(dst)) return false;
   if (dst->kind != src->kind) return false;
   switch (dst->kind) {
     case TYPE_ANY:
@@ -1197,20 +1286,24 @@ static void typeToString(Type* type, char* buffer, size_t size) {
       snprintf(buffer, size, "unknown");
       return;
     case TYPE_NUMBER:
-      snprintf(buffer, size, "number");
+      snprintf(buffer, size, type->nullable ? "number?" : "number");
       return;
     case TYPE_STRING:
-      snprintf(buffer, size, "string");
+      snprintf(buffer, size, type->nullable ? "string?" : "string");
       return;
     case TYPE_BOOL:
-      snprintf(buffer, size, "bool");
+      snprintf(buffer, size, type->nullable ? "bool?" : "bool");
       return;
     case TYPE_NULL:
       snprintf(buffer, size, "null");
       return;
     case TYPE_NAMED:
       if (type->name) {
-        snprintf(buffer, size, "%s", type->name->chars);
+        if (type->nullable) {
+          snprintf(buffer, size, "%s?", type->name->chars);
+        } else {
+          snprintf(buffer, size, "%s", type->name->chars);
+        }
       } else {
         snprintf(buffer, size, "named");
       }
@@ -1218,7 +1311,11 @@ static void typeToString(Type* type, char* buffer, size_t size) {
     case TYPE_ARRAY: {
       char inner[64];
       typeToString(type->elem, inner, sizeof(inner));
-      snprintf(buffer, size, "array<%s>", inner);
+      if (type->nullable) {
+        snprintf(buffer, size, "array<%s>?", inner);
+      } else {
+        snprintf(buffer, size, "array<%s>", inner);
+      }
       return;
     }
     case TYPE_MAP: {
@@ -1226,11 +1323,15 @@ static void typeToString(Type* type, char* buffer, size_t size) {
       char value[64];
       typeToString(type->key, key, sizeof(key));
       typeToString(type->value, value, sizeof(value));
-      snprintf(buffer, size, "map<%s, %s>", key, value);
+      if (type->nullable) {
+        snprintf(buffer, size, "map<%s, %s>?", key, value);
+      } else {
+        snprintf(buffer, size, "map<%s, %s>", key, value);
+      }
       return;
     }
     case TYPE_FUNCTION:
-      snprintf(buffer, size, "fun");
+      snprintf(buffer, size, type->nullable ? "fun?" : "fun");
       return;
   }
   snprintf(buffer, size, "any");
@@ -1338,8 +1439,30 @@ static void typeAssign(Compiler* c, Token name, Type* valueType) {
     entry->type = valueType ? valueType : typeAny();
     return;
   }
+  if (typeIsAny(target) || typeIsAny(valueType)) {
+    return;
+  }
+  if (valueType->kind == TYPE_NULL && target->kind != TYPE_NULL) {
+    entry->type = typeMakeNullable(c->typecheck, target);
+    return;
+  }
+  if (target->kind == TYPE_NULL && valueType->kind != TYPE_NULL) {
+    entry->type = typeMakeNullable(c->typecheck, valueType);
+    return;
+  }
   if (!typeAssignable(target, valueType)) {
-    entry->type = typeAny();
+    if (target->kind == valueType->kind && typeIsNullable(valueType)) {
+      entry->type = typeMakeNullable(c->typecheck, target);
+      return;
+    }
+    {
+      char expected[64];
+      char got[64];
+      typeToString(target, expected, sizeof(expected));
+      typeToString(valueType, got, sizeof(got));
+      typeErrorAt(c, name, "Type mismatch. Expected %s but got %s.", expected, got);
+    }
+    return;
   }
 }
 
@@ -1347,6 +1470,273 @@ static bool tokenMatches(Token token, const char* text) {
   int length = (int)strlen(text);
   if (token.length != length) return false;
   return memcmp(token.start, text, (size_t)length) == 0;
+}
+
+static Token syntheticToken(const char* text) {
+  Token token;
+  memset(&token, 0, sizeof(Token));
+  token.start = text;
+  token.length = (int)strlen(text);
+  return token;
+}
+
+static void typeDefineSynthetic(Compiler* c, const char* name, Type* type) {
+  if (!typecheckEnabled(c)) return;
+  Token token = syntheticToken(name);
+  typeDefine(c, token, type, true);
+}
+
+static bool typeNamedIs(Type* type, const char* name) {
+  if (!type || type->kind != TYPE_NAMED || !type->name || !name) return false;
+  size_t length = strlen(name);
+  if ((size_t)type->name->length != length) return false;
+  return memcmp(type->name->chars, name, length) == 0;
+}
+
+static Type* typeFunctionN(TypeChecker* tc, int paramCount, Type* returnType, ...) {
+  if (paramCount < 0) {
+    return typeFunction(tc, NULL, -1, returnType);
+  }
+  Type* params[8];
+  if (paramCount > (int)(sizeof(params) / sizeof(params[0]))) {
+    paramCount = (int)(sizeof(params) / sizeof(params[0]));
+  }
+  va_list args;
+  va_start(args, returnType);
+  for (int i = 0; i < paramCount; i++) {
+    params[i] = va_arg(args, Type*);
+  }
+  va_end(args);
+  return typeFunction(tc, params, paramCount, returnType);
+}
+
+static Type* typeLookupStdlibMember(Compiler* c, Type* objectType, Token name) {
+  if (!typecheckEnabled(c)) return typeAny();
+  if (!objectType || typeIsAny(objectType)) return typeAny();
+  if (objectType->kind != TYPE_NAMED || !objectType->name) return typeAny();
+  TypeChecker* tc = c->typecheck;
+  Type* any = typeAny();
+  Type* number = typeNumber();
+  Type* string = typeString();
+  Type* boolean = typeBool();
+
+  if (typeNamedIs(objectType, "fs")) {
+    Type* arrayString = typeArray(tc, string);
+    if (tokenMatches(name, "readText")) return typeFunctionN(tc, 1, string, string);
+    if (tokenMatches(name, "writeText")) return typeFunctionN(tc, 2, boolean, string, string);
+    if (tokenMatches(name, "exists")) return typeFunctionN(tc, 1, boolean, string);
+    if (tokenMatches(name, "cwd")) return typeFunctionN(tc, 0, string);
+    if (tokenMatches(name, "listDir")) return typeFunctionN(tc, 1, arrayString, string);
+    if (tokenMatches(name, "isFile")) return typeFunctionN(tc, 1, boolean, string);
+    if (tokenMatches(name, "isDir")) return typeFunctionN(tc, 1, boolean, string);
+    if (tokenMatches(name, "size")) return typeFunctionN(tc, 1, number, string);
+    if (tokenMatches(name, "glob")) return typeFunctionN(tc, 1, arrayString, string);
+  }
+
+  if (typeNamedIs(objectType, "path")) {
+    Type* arrayString = typeArray(tc, string);
+    if (tokenMatches(name, "join")) return typeFunctionN(tc, 2, string, string, string);
+    if (tokenMatches(name, "dirname")) return typeFunctionN(tc, 1, string, string);
+    if (tokenMatches(name, "basename")) return typeFunctionN(tc, 1, string, string);
+    if (tokenMatches(name, "extname")) return typeFunctionN(tc, 1, string, string);
+    if (tokenMatches(name, "isAbs")) return typeFunctionN(tc, 1, boolean, string);
+    if (tokenMatches(name, "normalize")) return typeFunctionN(tc, 1, string, string);
+    if (tokenMatches(name, "stem")) return typeFunctionN(tc, 1, string, string);
+    if (tokenMatches(name, "split")) return typeFunctionN(tc, 1, arrayString, string);
+  }
+
+  if (typeNamedIs(objectType, "json") || typeNamedIs(objectType, "yaml")) {
+    if (tokenMatches(name, "parse")) return typeFunctionN(tc, 1, any, string);
+    if (tokenMatches(name, "stringify")) return typeFunctionN(tc, 1, string, any);
+  }
+
+  if (typeNamedIs(objectType, "math")) {
+    if (tokenMatches(name, "abs")) return typeFunctionN(tc, 1, number, number);
+    if (tokenMatches(name, "floor")) return typeFunctionN(tc, 1, number, number);
+    if (tokenMatches(name, "ceil")) return typeFunctionN(tc, 1, number, number);
+    if (tokenMatches(name, "round")) return typeFunctionN(tc, 1, number, number);
+    if (tokenMatches(name, "sqrt")) return typeFunctionN(tc, 1, number, number);
+    if (tokenMatches(name, "pow")) return typeFunctionN(tc, 2, number, number, number);
+    if (tokenMatches(name, "min")) return typeFunctionN(tc, -1, number);
+    if (tokenMatches(name, "max")) return typeFunctionN(tc, -1, number);
+    if (tokenMatches(name, "clamp")) return typeFunctionN(tc, 3, number, number, number, number);
+    if (tokenMatches(name, "PI") || tokenMatches(name, "E")) return number;
+  }
+
+  if (typeNamedIs(objectType, "random")) {
+    Type* arrayAny = typeArray(tc, any);
+    if (tokenMatches(name, "seed")) return typeFunctionN(tc, 1, typeNull(), number);
+    if (tokenMatches(name, "int")) return typeFunctionN(tc, -1, number);
+    if (tokenMatches(name, "float")) return typeFunctionN(tc, -1, number);
+    if (tokenMatches(name, "choice")) return typeFunctionN(tc, 1, any, arrayAny);
+    if (tokenMatches(name, "normal")) return typeFunctionN(tc, 2, number, number, number);
+    if (tokenMatches(name, "gaussian")) return typeFunctionN(tc, 2, number, number, number);
+    if (tokenMatches(name, "exponential")) return typeFunctionN(tc, 1, number, number);
+    if (tokenMatches(name, "uniform")) return typeFunctionN(tc, -1, number);
+  }
+
+  if (typeNamedIs(objectType, "str")) {
+    Type* arrayString = typeArray(tc, string);
+    if (tokenMatches(name, "upper")) return typeFunctionN(tc, 1, string, string);
+    if (tokenMatches(name, "lower")) return typeFunctionN(tc, 1, string, string);
+    if (tokenMatches(name, "trim")) return typeFunctionN(tc, 1, string, string);
+    if (tokenMatches(name, "trimStart")) return typeFunctionN(tc, 1, string, string);
+    if (tokenMatches(name, "trimEnd")) return typeFunctionN(tc, 1, string, string);
+    if (tokenMatches(name, "startsWith")) return typeFunctionN(tc, 2, boolean, string, string);
+    if (tokenMatches(name, "endsWith")) return typeFunctionN(tc, 2, boolean, string, string);
+    if (tokenMatches(name, "contains")) return typeFunctionN(tc, 2, boolean, string, string);
+    if (tokenMatches(name, "split")) return typeFunctionN(tc, 2, arrayString, string, string);
+    if (tokenMatches(name, "join")) return typeFunctionN(tc, 2, string, arrayString, string);
+    if (tokenMatches(name, "builder")) return typeFunctionN(tc, 0, arrayString);
+    if (tokenMatches(name, "append")) return typeFunctionN(tc, 2, arrayString, arrayString, string);
+    if (tokenMatches(name, "build")) return typeFunctionN(tc, -1, string);
+    if (tokenMatches(name, "replace")) return typeFunctionN(tc, 3, string, string, string, string);
+    if (tokenMatches(name, "replaceAll")) return typeFunctionN(tc, 3, string, string, string, string);
+    if (tokenMatches(name, "repeat")) return typeFunctionN(tc, 2, string, string, number);
+  }
+
+  if (typeNamedIs(objectType, "array")) {
+    Type* arrayAny = typeArray(tc, any);
+    if (tokenMatches(name, "slice")) return typeFunctionN(tc, -1, arrayAny);
+    if (tokenMatches(name, "map")) {
+      Type* params[2] = { arrayAny, typeFunctionN(tc, 1, any, any) };
+      return typeFunction(tc, params, 2, arrayAny);
+    }
+    if (tokenMatches(name, "filter")) {
+      Type* params[2] = { arrayAny, typeFunctionN(tc, 1, boolean, any) };
+      return typeFunction(tc, params, 2, arrayAny);
+    }
+    if (tokenMatches(name, "reduce")) return typeFunctionN(tc, -1, any);
+    if (tokenMatches(name, "contains")) return typeFunctionN(tc, 2, boolean, arrayAny, any);
+    if (tokenMatches(name, "indexOf")) return typeFunctionN(tc, 2, number, arrayAny, any);
+    if (tokenMatches(name, "concat")) return typeFunctionN(tc, 2, arrayAny, arrayAny, arrayAny);
+    if (tokenMatches(name, "reverse")) return typeFunctionN(tc, 1, arrayAny, arrayAny);
+  }
+
+  if (typeNamedIs(objectType, "os")) {
+    if (tokenMatches(name, "platform")) return typeFunctionN(tc, 0, string);
+    if (tokenMatches(name, "arch")) return typeFunctionN(tc, 0, string);
+    if (tokenMatches(name, "sep")) return typeFunctionN(tc, 0, string);
+    if (tokenMatches(name, "eol")) return typeFunctionN(tc, 0, string);
+    if (tokenMatches(name, "cwd")) return typeFunctionN(tc, 0, string);
+    if (tokenMatches(name, "home")) return typeFunctionN(tc, 0, string);
+    if (tokenMatches(name, "tmp")) return typeFunctionN(tc, 0, string);
+  }
+
+  if (typeNamedIs(objectType, "time")) {
+    Type* mapAny = typeMap(tc, string, any);
+    if (tokenMatches(name, "now")) return typeFunctionN(tc, 0, number);
+    if (tokenMatches(name, "sleep")) return typeFunctionN(tc, 1, typeNull(), number);
+    if (tokenMatches(name, "format")) return typeFunctionN(tc, -1, string);
+    if (tokenMatches(name, "iso")) return typeFunctionN(tc, -1, string);
+    if (tokenMatches(name, "parts")) return typeFunctionN(tc, -1, mapAny);
+  }
+
+  if (typeNamedIs(objectType, "vec2")) {
+    Type* arrayNumber = typeArray(tc, number);
+    if (tokenMatches(name, "make")) return typeFunctionN(tc, 2, arrayNumber, number, number);
+    if (tokenMatches(name, "add")) return typeFunctionN(tc, 2, arrayNumber, arrayNumber, arrayNumber);
+    if (tokenMatches(name, "sub")) return typeFunctionN(tc, 2, arrayNumber, arrayNumber, arrayNumber);
+    if (tokenMatches(name, "scale")) return typeFunctionN(tc, 2, arrayNumber, arrayNumber, number);
+    if (tokenMatches(name, "dot")) return typeFunctionN(tc, 2, number, arrayNumber, arrayNumber);
+    if (tokenMatches(name, "len")) return typeFunctionN(tc, 1, number, arrayNumber);
+    if (tokenMatches(name, "norm")) return typeFunctionN(tc, 1, arrayNumber, arrayNumber);
+    if (tokenMatches(name, "lerp")) return typeFunctionN(tc, 3, arrayNumber, arrayNumber, arrayNumber, number);
+    if (tokenMatches(name, "dist")) return typeFunctionN(tc, 2, number, arrayNumber, arrayNumber);
+  }
+
+  if (typeNamedIs(objectType, "vec3")) {
+    Type* arrayNumber = typeArray(tc, number);
+    if (tokenMatches(name, "make")) return typeFunctionN(tc, 3, arrayNumber, number, number, number);
+    if (tokenMatches(name, "add")) return typeFunctionN(tc, 2, arrayNumber, arrayNumber, arrayNumber);
+    if (tokenMatches(name, "sub")) return typeFunctionN(tc, 2, arrayNumber, arrayNumber, arrayNumber);
+    if (tokenMatches(name, "scale")) return typeFunctionN(tc, 2, arrayNumber, arrayNumber, number);
+    if (tokenMatches(name, "dot")) return typeFunctionN(tc, 2, number, arrayNumber, arrayNumber);
+    if (tokenMatches(name, "len")) return typeFunctionN(tc, 1, number, arrayNumber);
+    if (tokenMatches(name, "norm")) return typeFunctionN(tc, 1, arrayNumber, arrayNumber);
+    if (tokenMatches(name, "lerp")) return typeFunctionN(tc, 3, arrayNumber, arrayNumber, arrayNumber, number);
+    if (tokenMatches(name, "dist")) return typeFunctionN(tc, 2, number, arrayNumber, arrayNumber);
+    if (tokenMatches(name, "cross")) return typeFunctionN(tc, 2, arrayNumber, arrayNumber, arrayNumber);
+  }
+
+  if (typeNamedIs(objectType, "vec4")) {
+    Type* arrayNumber = typeArray(tc, number);
+    if (tokenMatches(name, "make")) return typeFunctionN(tc, 4, arrayNumber, number, number, number, number);
+    if (tokenMatches(name, "add")) return typeFunctionN(tc, 2, arrayNumber, arrayNumber, arrayNumber);
+    if (tokenMatches(name, "sub")) return typeFunctionN(tc, 2, arrayNumber, arrayNumber, arrayNumber);
+    if (tokenMatches(name, "scale")) return typeFunctionN(tc, 2, arrayNumber, arrayNumber, number);
+    if (tokenMatches(name, "dot")) return typeFunctionN(tc, 2, number, arrayNumber, arrayNumber);
+    if (tokenMatches(name, "len")) return typeFunctionN(tc, 1, number, arrayNumber);
+    if (tokenMatches(name, "norm")) return typeFunctionN(tc, 1, arrayNumber, arrayNumber);
+    if (tokenMatches(name, "lerp")) return typeFunctionN(tc, 3, arrayNumber, arrayNumber, arrayNumber, number);
+    if (tokenMatches(name, "dist")) return typeFunctionN(tc, 2, number, arrayNumber, arrayNumber);
+  }
+
+  if (typeNamedIs(objectType, "http")) {
+    Type* mapAny = typeMap(tc, string, any);
+    if (tokenMatches(name, "get")) return typeFunctionN(tc, 1, mapAny, string);
+    if (tokenMatches(name, "post")) return typeFunctionN(tc, 2, mapAny, string, string);
+    if (tokenMatches(name, "request")) return typeFunctionN(tc, 3, mapAny, string, string, any);
+    if (tokenMatches(name, "serve")) return typeFunctionN(tc, -1, typeNull());
+  }
+
+  if (typeNamedIs(objectType, "proc")) {
+    if (tokenMatches(name, "run")) return typeFunctionN(tc, 1, number, string);
+  }
+
+  if (typeNamedIs(objectType, "env")) {
+    Type* arrayString = typeArray(tc, string);
+    Type* mapString = typeMap(tc, string, string);
+    if (tokenMatches(name, "args")) return typeFunctionN(tc, 0, arrayString);
+    if (tokenMatches(name, "get")) return typeFunctionN(tc, 1, typeMakeNullable(tc, string), string);
+    if (tokenMatches(name, "set")) return typeFunctionN(tc, 2, boolean, string, string);
+    if (tokenMatches(name, "has")) return typeFunctionN(tc, 1, boolean, string);
+    if (tokenMatches(name, "unset")) return typeFunctionN(tc, 1, boolean, string);
+    if (tokenMatches(name, "all")) return typeFunctionN(tc, 0, mapString);
+  }
+
+  if (typeNamedIs(objectType, "plugin")) {
+    if (tokenMatches(name, "load")) return typeFunctionN(tc, 1, boolean, string);
+  }
+
+  return typeAny();
+}
+
+static void typeDefineStdlib(Compiler* c) {
+  if (!typecheckEnabled(c)) return;
+  TypeChecker* tc = c->typecheck;
+
+  typeDefineSynthetic(c, "print", typeFunctionN(tc, -1, typeNull()));
+  typeDefineSynthetic(c, "clock", typeFunctionN(tc, 0, typeNumber()));
+  typeDefineSynthetic(c, "type", typeFunctionN(tc, 1, typeString(), typeAny()));
+  typeDefineSynthetic(c, "len", typeFunctionN(tc, 1, typeNumber(), typeAny()));
+  typeDefineSynthetic(c, "args", typeFunctionN(tc, 0, typeArray(tc, typeString())));
+  {
+    Type* params[2] = { typeArray(tc, typeAny()), typeAny() };
+    typeDefineSynthetic(c, "push", typeFunction(tc, params, 2, typeNumber()));
+  }
+  typeDefineSynthetic(c, "keys", typeFunctionN(tc, 1, typeArray(tc, typeString()),
+                                               typeMap(tc, typeString(), typeAny())));
+  typeDefineSynthetic(c, "values", typeFunctionN(tc, 1, typeArray(tc, typeAny()),
+                                                 typeMap(tc, typeString(), typeAny())));
+
+  typeDefineSynthetic(c, "fs", typeNamed(tc, copyString(c->vm, "fs")));
+  typeDefineSynthetic(c, "path", typeNamed(tc, copyString(c->vm, "path")));
+  typeDefineSynthetic(c, "json", typeNamed(tc, copyString(c->vm, "json")));
+  typeDefineSynthetic(c, "yaml", typeNamed(tc, copyString(c->vm, "yaml")));
+  typeDefineSynthetic(c, "math", typeNamed(tc, copyString(c->vm, "math")));
+  typeDefineSynthetic(c, "random", typeNamed(tc, copyString(c->vm, "random")));
+  typeDefineSynthetic(c, "str", typeNamed(tc, copyString(c->vm, "str")));
+  typeDefineSynthetic(c, "array", typeNamed(tc, copyString(c->vm, "array")));
+  typeDefineSynthetic(c, "os", typeNamed(tc, copyString(c->vm, "os")));
+  typeDefineSynthetic(c, "time", typeNamed(tc, copyString(c->vm, "time")));
+  typeDefineSynthetic(c, "vec2", typeNamed(tc, copyString(c->vm, "vec2")));
+  typeDefineSynthetic(c, "vec3", typeNamed(tc, copyString(c->vm, "vec3")));
+  typeDefineSynthetic(c, "vec4", typeNamed(tc, copyString(c->vm, "vec4")));
+  typeDefineSynthetic(c, "http", typeNamed(tc, copyString(c->vm, "http")));
+  typeDefineSynthetic(c, "proc", typeNamed(tc, copyString(c->vm, "proc")));
+  typeDefineSynthetic(c, "env", typeNamed(tc, copyString(c->vm, "env")));
+  typeDefineSynthetic(c, "plugin", typeNamed(tc, copyString(c->vm, "plugin")));
 }
 
 static Type* typeNamed(TypeChecker* tc, ObjString* name) {
@@ -1386,6 +1776,8 @@ static Type* typeFunction(TypeChecker* tc, Type** params, int paramCount, Type* 
 }
 
 static Type* parseType(Compiler* c);
+static Type* typeLookupStdlibMember(Compiler* c, Type* objectType, Token name);
+static void typeDefineStdlib(Compiler* c);
 
 static Type* typeFromToken(Compiler* c, Token token) {
   if (tokenMatches(token, "number")) return typeNumber();
@@ -1419,6 +1811,10 @@ static Type* parseTypeArguments(Compiler* c, Type* base, Token typeToken) {
       value = key;
       key = typeString();
     }
+    if (!typeIsAny(key) && key->kind != TYPE_STRING) {
+      typeErrorAt(c, typeToken, "Map keys must be string.");
+      key = typeString();
+    }
     consume(c, TOKEN_GREATER, "Expect '>' after map type.");
     return typeMap(c->typecheck, key, value);
   }
@@ -1441,23 +1837,75 @@ static Type* parseType(Compiler* c) {
   Token name = advance(c);
   Type* base = typeFromToken(c, name);
   if (check(c, TOKEN_LESS)) {
-    return parseTypeArguments(c, base, name);
+    base = parseTypeArguments(c, base, name);
+  }
+  if (match(c, TOKEN_QUESTION)) {
+    base = typeMakeNullable(c->typecheck, base);
   }
   return base;
 }
 
-static Type* typeMerge(Type* current, Type* next) {
+static Type* typeMerge(TypeChecker* tc, Type* current, Type* next) {
   if (!current) return next;
   if (!next) return current;
   if (current->kind == TYPE_UNKNOWN) return next;
   if (next->kind == TYPE_UNKNOWN) return current;
   if (typeEquals(current, next)) return current;
+  if (current->kind == TYPE_NULL) {
+    return typeMakeNullable(tc, next);
+  }
+  if (next->kind == TYPE_NULL) {
+    return typeMakeNullable(tc, current);
+  }
+  if (current->kind == next->kind) {
+    if (typeEquals(current, next)) return current;
+    switch (current->kind) {
+      case TYPE_NUMBER:
+      case TYPE_STRING:
+      case TYPE_BOOL:
+        return typeMakeNullable(tc, current);
+      case TYPE_NAMED:
+        if (typeNamesEqual(current->name, next->name)) {
+          return typeMakeNullable(tc, current);
+        }
+        break;
+      case TYPE_ARRAY:
+        if (typeEquals(current->elem, next->elem)) {
+          return typeMakeNullable(tc, current);
+        }
+        break;
+      case TYPE_MAP:
+        if (typeEquals(current->key, next->key) &&
+            typeEquals(current->value, next->value)) {
+          return typeMakeNullable(tc, current);
+        }
+        break;
+      case TYPE_FUNCTION:
+        if (typeEquals(current, next)) return current;
+        break;
+      case TYPE_ANY:
+      case TYPE_UNKNOWN:
+      case TYPE_NULL:
+        break;
+    }
+  }
   if (typeIsAny(current) || typeIsAny(next)) return typeAny();
   return typeAny();
 }
 
+static bool typeEnsureNonNull(Compiler* c, Token token, Type* type, const char* message) {
+  if (!typecheckEnabled(c)) return true;
+  if (typeIsAny(type)) return true;
+  if (typeIsNullable(type)) {
+    typeErrorAt(c, token, "%s", message);
+    return false;
+  }
+  return true;
+}
+
 static Type* typeUnaryResult(Compiler* c, Token op, Type* right) {
   if (op.type == TOKEN_MINUS) {
+    typeEnsureNonNull(c, op, right, "Unary '-' expects a non-null number.");
     if (!typeIsAny(right) && right->kind != TYPE_NUMBER) {
       typeErrorAt(c, op, "Unary '-' expects a number.");
     }
@@ -1472,6 +1920,8 @@ static Type* typeUnaryResult(Compiler* c, Token op, Type* right) {
 static Type* typeBinaryResult(Compiler* c, Token op, Type* left, Type* right) {
   switch (op.type) {
     case TOKEN_PLUS:
+      typeEnsureNonNull(c, op, left, "Operator '+' expects non-null operands.");
+      typeEnsureNonNull(c, op, right, "Operator '+' expects non-null operands.");
       if (left->kind == TYPE_NUMBER && right->kind == TYPE_NUMBER) return typeNumber();
       if (left->kind == TYPE_STRING && right->kind == TYPE_STRING) return typeString();
       if (typeIsAny(left) || typeIsAny(right)) return typeAny();
@@ -1480,6 +1930,8 @@ static Type* typeBinaryResult(Compiler* c, Token op, Type* left, Type* right) {
     case TOKEN_MINUS:
     case TOKEN_STAR:
     case TOKEN_SLASH:
+      typeEnsureNonNull(c, op, left, "Operator expects non-null numbers.");
+      typeEnsureNonNull(c, op, right, "Operator expects non-null numbers.");
       if (!typeIsAny(left) && left->kind != TYPE_NUMBER) {
         typeErrorAt(c, op, "Operator expects numbers.");
       }
@@ -1491,6 +1943,8 @@ static Type* typeBinaryResult(Compiler* c, Token op, Type* left, Type* right) {
     case TOKEN_GREATER_EQUAL:
     case TOKEN_LESS:
     case TOKEN_LESS_EQUAL:
+      typeEnsureNonNull(c, op, left, "Comparison expects non-null numbers.");
+      typeEnsureNonNull(c, op, right, "Comparison expects non-null numbers.");
       if (!typeIsAny(left) && left->kind != TYPE_NUMBER) {
         typeErrorAt(c, op, "Comparison expects numbers.");
       }
@@ -1514,6 +1968,7 @@ static Type* typeLogicalResult(Type* left, Type* right) {
 
 static Type* typeIndexResult(Compiler* c, Token op, Type* objectType, Type* indexType) {
   if (typeIsAny(objectType)) return typeAny();
+  if (objectType->kind == TYPE_NULL) return typeNull();
   if (objectType->kind == TYPE_ARRAY) {
     if (!typeIsAny(indexType) && indexType->kind != TYPE_NUMBER) {
       typeErrorAt(c, op, "Array index expects a number.");
@@ -1532,6 +1987,10 @@ static Type* typeIndexResult(Compiler* c, Token op, Type* objectType, Type* inde
 static void typeCheckIndexAssign(Compiler* c, Token op, Type* objectType, Type* indexType,
                                  Type* valueType) {
   if (typeIsAny(objectType)) return;
+  if (!typeEnsureNonNull(c, op, objectType,
+                         "Cannot index nullable value. Use '?.['.")) {
+    return;
+  }
   if (objectType->kind == TYPE_ARRAY) {
     if (!typeIsAny(indexType) && indexType->kind != TYPE_NUMBER) {
       typeErrorAt(c, op, "Array index expects a number.");
@@ -1868,11 +2327,12 @@ static void call(Compiler* c, bool canAssign) {
     Type* callee = typePop(c);
     Type* result = typeAny();
     if (callee && callee->kind == TYPE_FUNCTION) {
-      if (callee->paramCount != argc) {
+      if (callee->paramCount >= 0 && callee->paramCount != argc) {
         typeErrorAt(c, paren, "Function expects %d arguments but got %d.",
                     callee->paramCount, argc);
-      } else {
-        for (int i = 0; i < argc; i++) {
+      } else if (callee->params) {
+        int checkCount = callee->paramCount >= 0 ? callee->paramCount : argc;
+        for (int i = 0; i < checkCount && i < argc; i++) {
           if (!typeAssignable(callee->params[i], argTypes[i])) {
             char expected[64];
             char got[64];
@@ -1885,6 +2345,11 @@ static void call(Compiler* c, bool canAssign) {
       }
       result = callee->returnType ? callee->returnType : typeAny();
     }
+    if (!optionalCall) {
+      typeEnsureNonNull(c, paren, callee, "Cannot call nullable value. Use '?.'.");
+    } else if (typeIsNullable(callee)) {
+      result = typeMakeNullable(c->typecheck, result);
+    }
     typePush(c, result);
   }
   emitByte(c, optionalCall ? OP_CALL_OPTIONAL : OP_CALL, paren);
@@ -1896,6 +2361,8 @@ static void dot(Compiler* c, bool canAssign) {
   Token name = consume(c, TOKEN_IDENTIFIER, "Expect property name after '.'.");
   int nameIdx = emitStringConstant(c, name);
   Type* objectType = typePop(c);
+  typeEnsureNonNull(c, name, objectType,
+                    "Cannot access property on nullable value. Use '?.'.");
   if (canAssign && match(c, TOKEN_EQUAL)) {
     expression(c);
     Type* valueType = typePop(c);
@@ -1916,16 +2383,44 @@ static void dot(Compiler* c, bool canAssign) {
     }
     consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after arguments.", paren);
     if (typecheckEnabled(c)) {
-      for (int i = 0; i < argc; i++) {
-        typePop(c);
+      Type* argTypes[ERK_MAX_ARGS];
+      for (int i = argc - 1; i >= 0; i--) {
+        argTypes[i] = typePop(c);
       }
-      typePush(c, typeAny());
+      Type* memberType = typeLookupStdlibMember(c, objectType, name);
+      Type* resultType = typeAny();
+      if (memberType && memberType->kind == TYPE_FUNCTION) {
+        if (memberType->paramCount >= 0 && memberType->paramCount != argc) {
+          typeErrorAt(c, paren, "Function expects %d arguments but got %d.",
+                      memberType->paramCount, argc);
+        } else if (memberType->params) {
+          int checkCount = memberType->paramCount >= 0 ? memberType->paramCount : argc;
+          for (int i = 0; i < checkCount && i < argc; i++) {
+            if (!typeAssignable(memberType->params[i], argTypes[i])) {
+              char expected[64];
+              char got[64];
+              typeToString(memberType->params[i], expected, sizeof(expected));
+              typeToString(argTypes[i], got, sizeof(got));
+              typeErrorAt(c, paren, "Argument %d expects %s but got %s.",
+                          i + 1, expected, got);
+            }
+          }
+        }
+        resultType = memberType->returnType ? memberType->returnType : typeAny();
+      } else if (memberType && !typeIsAny(memberType)) {
+        typeErrorAt(c, paren, "Property is not callable.");
+      }
+      typePush(c, resultType);
     }
     emitByte(c, OP_INVOKE, paren);
     emitShort(c, (uint16_t)nameIdx, name);
     emitByte(c, (uint8_t)argc, paren);
   } else {
-    typePush(c, typeAny());
+    Type* memberType = typeAny();
+    if (typecheckEnabled(c)) {
+      memberType = typeLookupStdlibMember(c, objectType, name);
+    }
+    typePush(c, memberType);
     emitByte(c, OP_GET_PROPERTY, name);
     emitShort(c, (uint16_t)nameIdx, name);
   }
@@ -1934,21 +2429,30 @@ static void dot(Compiler* c, bool canAssign) {
 
 static void optionalDot(Compiler* c, bool canAssign) {
   (void)canAssign;
+  if (check(c, TOKEN_LEFT_PAREN)) {
+    c->pendingOptionalCall = true;
+    return;
+  }
   if (match(c, TOKEN_LEFT_BRACKET)) {
     Token bracket = previous(c);
     expression(c);
     Type* indexType = typePop(c);
     Type* objectType = typePop(c);
     consumeClosing(c, TOKEN_RIGHT_BRACKET, "Expect ']' after index.", bracket);
-    typePush(c, typeIndexResult(c, bracket, objectType, indexType));
+    Type* result = typeIndexResult(c, bracket, objectType, indexType);
+    typePush(c, typeMakeNullable(c->typecheck, result));
     emitByte(c, OP_GET_INDEX_OPTIONAL, bracket);
     c->pendingOptionalCall = true;
     return;
   }
   Token name = consume(c, TOKEN_IDENTIFIER, "Expect property name after '?.'.");
   int nameIdx = emitStringConstant(c, name);
-  typePop(c);
-  typePush(c, typeAny());
+  Type* objectType = typePop(c);
+  Type* memberType = typeAny();
+  if (typecheckEnabled(c)) {
+    memberType = typeLookupStdlibMember(c, objectType, name);
+  }
+  typePush(c, typeMakeNullable(c->typecheck, memberType));
   emitByte(c, OP_GET_PROPERTY_OPTIONAL, name);
   emitShort(c, (uint16_t)nameIdx, name);
   c->pendingOptionalCall = true;
@@ -1960,6 +2464,8 @@ static void index_(Compiler* c, bool canAssign) {
   expression(c);
   Type* indexType = typePop(c);
   Type* objectType = typePop(c);
+  typeEnsureNonNull(c, bracket, objectType,
+                    "Cannot index nullable value. Use '?.['.");
   consumeClosing(c, TOKEN_RIGHT_BRACKET, "Expect ']' after index.", bracket);
   if (canAssign && match(c, TOKEN_EQUAL)) {
     expression(c);
@@ -1985,7 +2491,7 @@ static void array(Compiler* c, bool canAssign) {
     do {
       expression(c);
       Type* itemType = typePop(c);
-      elementType = typeMerge(elementType, itemType);
+      elementType = typeMerge(c->typecheck, elementType, itemType);
       emitByte(c, OP_ARRAY_APPEND, noToken());
       count++;
     } while (match(c, TOKEN_COMMA));
@@ -2026,7 +2532,7 @@ static void map(Compiler* c, bool canAssign) {
       consume(c, TOKEN_COLON, "Expect ':' after map key.");
       expression(c);
       Type* entryType = typePop(c);
-      valueType = typeMerge(valueType, entryType);
+      valueType = typeMerge(c->typecheck, valueType, entryType);
       emitByte(c, OP_MAP_SET, noToken());
       count++;
     } while (match(c, TOKEN_COMMA));
@@ -3266,6 +3772,7 @@ ObjFunction* compile(VM* vm, const TokenArray* tokens, const char* source,
   c.enclosing = NULL;
   c.typecheck = &typecheck;
   vm->compiler = &c;
+  typeDefineStdlib(&c);
 
   while (!isAtEnd(&c)) {
     declaration(&c);

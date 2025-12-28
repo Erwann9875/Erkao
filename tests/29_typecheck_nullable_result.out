@@ -1,0 +1,3 @@
+tests/29_typecheck_nullable_result.ek:2:5: Error at 'value': Type mismatch. Expected number but got number?.
+  let value: number = nums?.[0];
+      ^

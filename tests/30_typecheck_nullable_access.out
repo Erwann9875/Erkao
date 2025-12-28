@@ -1,0 +1,3 @@
+tests/30_typecheck_nullable_access.ek:2:15: Error at '[': Cannot index nullable value. Use '?.['.
+  let bad = nums[0];
+                ^

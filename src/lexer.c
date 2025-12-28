@@ -471,7 +471,7 @@ static Token scanToken(Scanner* scanner) {
       return makeToken(scanner, TOKEN_PLUS);
     case '?':
       if (match(scanner, '.')) return makeToken(scanner, TOKEN_QUESTION_DOT);
-      return errorToken(scanner, "Unexpected character.");
+      return makeToken(scanner, TOKEN_QUESTION);
     case ';':
       return makeToken(scanner, TOKEN_SEMICOLON);
     case '*':
@@ -535,6 +535,7 @@ const char* tokenTypeName(ErkaoTokenType type) {
     case TOKEN_RIGHT_BRACKET: return "RIGHT_BRACKET";
     case TOKEN_COMMA: return "COMMA";
     case TOKEN_DOT: return "DOT";
+    case TOKEN_QUESTION: return "QUESTION";
     case TOKEN_QUESTION_DOT: return "QUESTION_DOT";
     case TOKEN_MINUS: return "MINUS";
     case TOKEN_PLUS: return "PLUS";

@@ -1,0 +1,2 @@
+let nums: array<number>? = null;
+let value: number = nums?.[0];
