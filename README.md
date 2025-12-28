@@ -108,6 +108,10 @@ Backward-compatible shorthand:
 ./build/Debug/erkao.exe ./examples/hello.ek
 ```
 
+## Docs
+
+- `docs/cookbook.md` (recipes + build-a-game/app guides)
+
 ## VS Code extension (syntax + LSP)
 
 This repo includes a VS Code extension for `.ek` syntax highlighting plus
