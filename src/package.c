@@ -431,10 +431,6 @@ static bool writeLockFromDeps(const char* path, const PackageDep* deps, int coun
   return true;
 }
 
-static bool writeLock(const char* path, const PackageManifest* manifest) {
-  return writeLockFromDeps(path, manifest->deps, manifest->count);
-}
-
 static int readLock(const char* path, PackageDep** outDeps, int* outCount) {
   FILE* file = fopen(path, "rb");
   if (!file) return -1;
@@ -471,6 +467,24 @@ static int readLock(const char* path, PackageDep** outDeps, int* outCount) {
   *outDeps = deps;
   *outCount = count;
   return 0;
+}
+
+static bool lockMatchesManifest(const PackageManifest* manifest,
+                                const PackageDep* deps, int count) {
+  if (!manifest) return false;
+  if (manifest->count != count) return false;
+  for (int i = 0; i < manifest->count; i++) {
+    const char* name = manifest->deps[i].name;
+    bool found = false;
+    for (int j = 0; j < count; j++) {
+      if (strcmp(deps[j].name, name) == 0) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) return false;
+  }
+  return true;
 }
 
 typedef struct {
@@ -916,10 +930,11 @@ static void printPkgHelp(const char* exe) {
   fprintf(stdout,
           "Usage:\n"
           "  %s pkg init [name] [version]\n"
-          "  %s pkg add <path> [--global]\n"
-          "  %s pkg install\n"
+          "  %s pkg add <path> [--global] [--range <range>]\n"
+          "  %s pkg install [--update]\n"
+          "  %s pkg update\n"
           "  %s pkg list\n",
-          exe, exe, exe, exe);
+          exe, exe, exe, exe, exe);
 }
 
 static char* resolveGlobalPackagesDir(void) {
@@ -1006,7 +1021,7 @@ static int cmdPkgInit(const char* name, const char* version) {
   return ok ? 0 : 1;
 }
 
-static int cmdPkgAdd(const char* path, bool copyGlobal) {
+static int cmdPkgAdd(const char* path, bool copyGlobal, const char* range) {
   if (!path) {
     fprintf(stderr, "Missing package path.\n");
     return 1;
@@ -1047,7 +1062,8 @@ static int cmdPkgAdd(const char* path, bool copyGlobal) {
     return 1;
   }
 
-  manifestAddDep(&manifest, packageManifest.name, packageManifest.version);
+  const char* depVersion = range ? range : packageManifest.version;
+  manifestAddDep(&manifest, packageManifest.name, depVersion);
   if (!writeManifest(manifestPath, &manifest)) {
     fprintf(stderr, "Failed to write manifest.\n");
     manifestFree(&manifest);
@@ -1059,21 +1075,6 @@ static int cmdPkgAdd(const char* path, bool copyGlobal) {
     free(packageManifestPath);
     return 1;
   }
-
-  char* lockPath = joinPaths(projectRoot, ERKAO_LOCK_NAME);
-  if (!writeLock(lockPath, &manifest)) {
-    fprintf(stderr, "Failed to write lock file.\n");
-    free(lockPath);
-    manifestFree(&manifest);
-    manifestFree(&packageManifest);
-    free(projectRoot);
-    free(cwd);
-    free(manifestPath);
-    free(packageDir);
-    free(packageManifestPath);
-    return 1;
-  }
-  free(lockPath);
 
   char* packagesDir = joinPaths(projectRoot, "packages");
   char* destRoot = joinPaths(packagesDir, packageManifest.name);
@@ -1127,7 +1128,7 @@ static int cmdPkgAdd(const char* path, bool copyGlobal) {
   return 0;
 }
 
-static int cmdPkgInstall(void) {
+static int cmdPkgInstall(bool updateLock) {
   char* cwd = getCwd();
   if (!cwd) return 1;
   char* projectRoot = findProjectRoot(cwd);
@@ -1149,13 +1150,18 @@ static int cmdPkgInstall(void) {
 
   char* packagesDir = joinPaths(projectRoot, "packages");
   char* globalDir = resolveGlobalPackagesDir();
+  char* lockPath = joinPaths(projectRoot, ERKAO_LOCK_NAME);
+  bool hasLock = pathExists(lockPath);
   PackageDep* resolvedDeps = NULL;
   int resolvedCount = 0;
-  if (manifest.count > 0) {
-    resolvedDeps = (PackageDep*)calloc((size_t)manifest.count, sizeof(PackageDep));
-    if (!resolvedDeps) {
-      fprintf(stderr, "Out of memory.\n");
+
+  if (hasLock && !updateLock) {
+    PackageDep* lockDeps = NULL;
+    int lockCount = 0;
+    if (readLock(lockPath, &lockDeps, &lockCount) != 0) {
+      fprintf(stderr, "Failed to read lock file.\n");
       manifestFree(&manifest);
+      free(lockPath);
       free(packagesDir);
       free(globalDir);
       free(manifestPath);
@@ -1163,18 +1169,27 @@ static int cmdPkgInstall(void) {
       free(cwd);
       return 1;
     }
-  }
-
-  for (int i = 0; i < manifest.count; i++) {
-    PackageDep* dep = &manifest.deps[i];
-    char* resolvedVersion = NULL;
-    SemverRange range;
-    if (parseVersionRange(dep->version, &range)) {
-      resolvedVersion = selectBestRangeVersion(packagesDir, globalDir, dep->name, &range);
-      if (!resolvedVersion) {
-        fprintf(stderr, "Missing package %s@%s.\n", dep->name, dep->version);
-        freeDeps(resolvedDeps, resolvedCount);
+    if (!lockMatchesManifest(&manifest, lockDeps, lockCount)) {
+      fprintf(stderr, "Lockfile is out of date. Run `erkao pkg install --update`.\n");
+      freeDeps(lockDeps, lockCount);
+      manifestFree(&manifest);
+      free(lockPath);
+      free(packagesDir);
+      free(globalDir);
+      free(manifestPath);
+      free(projectRoot);
+      free(cwd);
+      return 1;
+    }
+    resolvedDeps = lockDeps;
+    resolvedCount = lockCount;
+  } else {
+    if (manifest.count > 0) {
+      resolvedDeps = (PackageDep*)calloc((size_t)manifest.count, sizeof(PackageDep));
+      if (!resolvedDeps) {
+        fprintf(stderr, "Out of memory.\n");
         manifestFree(&manifest);
+        free(lockPath);
         free(packagesDir);
         free(globalDir);
         free(manifestPath);
@@ -1182,16 +1197,40 @@ static int cmdPkgInstall(void) {
         free(cwd);
         return 1;
       }
-    } else {
-      resolvedVersion = copyCString(dep->version);
     }
 
-    resolvedDeps[i].name = copyCString(dep->name);
-    resolvedDeps[i].version = resolvedVersion;
-    resolvedCount++;
+    for (int i = 0; i < manifest.count; i++) {
+      PackageDep* dep = &manifest.deps[i];
+      char* resolvedVersion = NULL;
+      SemverRange range;
+      if (parseVersionRange(dep->version, &range)) {
+        resolvedVersion = selectBestRangeVersion(packagesDir, globalDir, dep->name, &range);
+        if (!resolvedVersion) {
+          fprintf(stderr, "Missing package %s@%s.\n", dep->name, dep->version);
+          freeDeps(resolvedDeps, resolvedCount);
+          manifestFree(&manifest);
+          free(lockPath);
+          free(packagesDir);
+          free(globalDir);
+          free(manifestPath);
+          free(projectRoot);
+          free(cwd);
+          return 1;
+        }
+      } else {
+        resolvedVersion = copyCString(dep->version);
+      }
 
+      resolvedDeps[i].name = copyCString(dep->name);
+      resolvedDeps[i].version = resolvedVersion;
+      resolvedCount++;
+    }
+  }
+
+  for (int i = 0; i < resolvedCount; i++) {
+    PackageDep* dep = &resolvedDeps[i];
     char* localRoot = joinPaths(packagesDir, dep->name);
-    char* localDir = joinPaths(localRoot, resolvedVersion);
+    char* localDir = joinPaths(localRoot, dep->version);
     free(localRoot);
     if (isDirectory(localDir)) {
       free(localDir);
@@ -1199,16 +1238,17 @@ static int cmdPkgInstall(void) {
     }
     if (globalDir) {
       char* globalRoot = joinPaths(globalDir, dep->name);
-      char* globalPkg = joinPaths(globalRoot, resolvedVersion);
+      char* globalPkg = joinPaths(globalRoot, dep->version);
       free(globalRoot);
       if (isDirectory(globalPkg)) {
         if (!copyDirRecursive(globalPkg, localDir)) {
           fprintf(stderr, "Failed to copy %s@%s from cache.\n",
-                  dep->name, resolvedVersion);
+                  dep->name, dep->version);
           free(globalPkg);
           free(localDir);
           freeDeps(resolvedDeps, resolvedCount);
           manifestFree(&manifest);
+          free(lockPath);
           free(packagesDir);
           free(globalDir);
           free(manifestPath);
@@ -1222,10 +1262,11 @@ static int cmdPkgInstall(void) {
       }
       free(globalPkg);
     }
-    fprintf(stderr, "Missing package %s@%s.\n", dep->name, resolvedVersion);
+    fprintf(stderr, "Missing package %s@%s.\n", dep->name, dep->version);
     free(localDir);
     freeDeps(resolvedDeps, resolvedCount);
     manifestFree(&manifest);
+    free(lockPath);
     free(packagesDir);
     free(globalDir);
     free(manifestPath);
@@ -1234,10 +1275,13 @@ static int cmdPkgInstall(void) {
     return 1;
   }
 
-  char* lockPath = joinPaths(projectRoot, ERKAO_LOCK_NAME);
-  writeLockFromDeps(lockPath, resolvedDeps, resolvedCount);
-  free(lockPath);
+  if (updateLock || !hasLock) {
+    if (!writeLockFromDeps(lockPath, resolvedDeps, resolvedCount)) {
+      fprintf(stderr, "Failed to write lock file.\n");
+    }
+  }
 
+  free(lockPath);
   freeDeps(resolvedDeps, resolvedCount);
   manifestFree(&manifest);
   free(packagesDir);
@@ -1314,9 +1358,18 @@ int runPackageCommand(const char* exe, int argc, const char** argv) {
   if (strcmp(sub, "add") == 0) {
     bool copyGlobal = false;
     const char* path = NULL;
+    const char* range = NULL;
     for (int i = 3; i < argc; i++) {
       if (strcmp(argv[i], "--global") == 0 || strcmp(argv[i], "-g") == 0) {
         copyGlobal = true;
+        continue;
+      }
+      if (strcmp(argv[i], "--range") == 0 || strcmp(argv[i], "-r") == 0) {
+        if (i + 1 >= argc) {
+          fprintf(stderr, "Missing version range after %s.\n", argv[i]);
+          return 64;
+        }
+        range = argv[++i];
         continue;
       }
       if (!path) {
@@ -1328,10 +1381,19 @@ int runPackageCommand(const char* exe, int argc, const char** argv) {
       fprintf(stderr, "Missing package path.\n");
       return 64;
     }
-    return cmdPkgAdd(path, copyGlobal);
+    return cmdPkgAdd(path, copyGlobal, range);
   }
   if (strcmp(sub, "install") == 0) {
-    return cmdPkgInstall();
+    bool updateLock = false;
+    for (int i = 3; i < argc; i++) {
+      if (strcmp(argv[i], "--update") == 0 || strcmp(argv[i], "-u") == 0) {
+        updateLock = true;
+      }
+    }
+    return cmdPkgInstall(updateLock);
+  }
+  if (strcmp(sub, "update") == 0) {
+    return cmdPkgInstall(true);
   }
   if (strcmp(sub, "list") == 0) {
     return cmdPkgList();

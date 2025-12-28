@@ -222,6 +222,7 @@ static int instructionLength(const Chunk* chunk, int offset) {
     case OP_CLOSURE:
     case OP_EXPORT:
     case OP_EXPORT_VALUE:
+    case OP_PRIVATE:
     case OP_JUMP:
     case OP_JUMP_IF_FALSE:
     case OP_LOOP:
@@ -594,6 +595,7 @@ static const KeywordEntry keywordEntries[] = {
   {TOKEN_MATCH, "match"},
   {TOKEN_NULL, "null"},
   {TOKEN_OR, "or"},
+  {TOKEN_PRIVATE, "private"},
   {TOKEN_RETURN, "return"},
   {TOKEN_TRY, "try"},
   {TOKEN_CATCH, "catch"},
@@ -669,6 +671,7 @@ static const char* tokenDescription(ErkaoTokenType type) {
     case TOKEN_MATCH: return "'match'";
     case TOKEN_NULL: return "'null'";
     case TOKEN_OR: return "'or'";
+    case TOKEN_PRIVATE: return "'private'";
     case TOKEN_RETURN: return "'return'";
     case TOKEN_TRY: return "'try'";
     case TOKEN_CATCH: return "'catch'";
@@ -976,6 +979,11 @@ static void emitExportName(Compiler* c, Token name) {
 static void emitExportValue(Compiler* c, uint16_t nameIdx, Token token) {
   emitByte(c, OP_EXPORT_VALUE, token);
   emitShort(c, nameIdx, token);
+}
+
+static void emitPrivateName(Compiler* c, int nameIdx, Token token) {
+  emitByte(c, OP_PRIVATE, token);
+  emitShort(c, (uint16_t)nameIdx, token);
 }
 
 static void emitGc(Compiler* c) {
@@ -3423,7 +3431,7 @@ static void expressionStatement(Compiler* c) {
   emitGc(c);
 }
 
-  static void varDeclaration(Compiler* c, bool isConst, bool isExport) {
+static void varDeclaration(Compiler* c, bool isConst, bool isExport, bool isPrivate) {
   Token name = consume(c, TOKEN_IDENTIFIER, "Expect variable name.");
   Type* declaredType = NULL;
   bool hasType = false;
@@ -3461,6 +3469,9 @@ static void expressionStatement(Compiler* c) {
       Type* inferred = hasInitializer ? valueType : typeUnknown();
       typeDefine(c, name, inferred, false);
     }
+  }
+  if (isPrivate) {
+    emitPrivateName(c, nameIdx, name);
   }
   if (isExport) {
     emitByte(c, OP_EXPORT, name);
@@ -3555,9 +3566,9 @@ static void forStatement(Compiler* c) {
 
   if (match(c, TOKEN_SEMICOLON)) {
   } else if (match(c, TOKEN_LET)) {
-    varDeclaration(c, false, false);
+    varDeclaration(c, false, false, false);
   } else if (match(c, TOKEN_CONST)) {
-    varDeclaration(c, true, false);
+    varDeclaration(c, true, false, false);
   } else {
     expression(c);
     typePop(c);
@@ -4153,7 +4164,7 @@ static void fromImportStatement(Compiler* c) {
 static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
                                     Type** outType, bool defineType);
 
-  static void functionDeclaration(Compiler* c, bool isExport) {
+static void functionDeclaration(Compiler* c, bool isExport, bool isPrivate) {
     Token name = consume(c, TOKEN_IDENTIFIER, "Expect function name.");
     Type* functionType = NULL;
     ObjFunction* function = compileFunction(c, name, false, &functionType, true);
@@ -4165,12 +4176,15 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
   int nameIdx = emitStringConstant(c, name);
   emitByte(c, OP_DEFINE_VAR, name);
   emitShort(c, (uint16_t)nameIdx, name);
+  if (isPrivate) {
+    emitPrivateName(c, nameIdx, name);
+  }
   if (isExport) {
     emitByte(c, OP_EXPORT, name);
     emitShort(c, (uint16_t)nameIdx, name);
   }
-    emitGc(c);
-  }
+  emitGc(c);
+}
 
   static void interfaceDeclaration(Compiler* c) {
     Token nameToken = consume(c, TOKEN_IDENTIFIER, "Expect interface name.");
@@ -4346,8 +4360,8 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
     }
   }
 
-  static void classDeclarationWithName(Compiler* c, Token name,
-                                       bool isExport, bool exportDefault) {
+static void classDeclarationWithName(Compiler* c, Token name,
+                                     bool isExport, bool exportDefault, bool isPrivate) {
     ObjString* className = stringFromToken(c->vm, name);
     int classTypeParamCount = 0;
     TypeParam* classTypeParams = parseTypeParams(c, &classTypeParamCount);
@@ -4436,6 +4450,9 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
     emitByte(c, OP_CLASS, name);
     emitShort(c, (uint16_t)nameConst, name);
     emitShort(c, (uint16_t)methodCount, name);
+    if (isPrivate) {
+      emitPrivateName(c, nameConst, name);
+    }
     if (isExport) {
       emitByte(c, OP_EXPORT, name);
       emitShort(c, (uint16_t)nameConst, name);
@@ -4477,12 +4494,12 @@ class_cleanup:
     if (!classOk) return;
   }
 
-  static void classDeclaration(Compiler* c, bool isExport) {
-    Token name = consume(c, TOKEN_IDENTIFIER, "Expect class name.");
-    classDeclarationWithName(c, name, isExport, false);
-  }
+static void classDeclaration(Compiler* c, bool isExport, bool isPrivate) {
+  Token name = consume(c, TOKEN_IDENTIFIER, "Expect class name.");
+  classDeclarationWithName(c, name, isExport, false, isPrivate);
+}
 
-static void enumDeclaration(Compiler* c, bool isExport) {
+static void enumDeclaration(Compiler* c, bool isExport, bool isPrivate) {
   Token name = consume(c, TOKEN_IDENTIFIER, "Expect enum name.");
   Token openBrace = consume(c, TOKEN_LEFT_BRACE, "Expect '{' before enum body.");
 
@@ -4612,6 +4629,9 @@ static void enumDeclaration(Compiler* c, bool isExport) {
   int nameIdx = emitStringConstant(c, name);
   emitByte(c, OP_DEFINE_VAR, name);
   emitShort(c, (uint16_t)nameIdx, name);
+  if (isPrivate) {
+    emitPrivateName(c, nameIdx, name);
+  }
   if (isExport) {
     emitByte(c, OP_EXPORT, name);
     emitShort(c, (uint16_t)nameIdx, name);
@@ -4697,7 +4717,7 @@ static void exportDeclaration(Compiler* c) {
     }
     if (match(c, TOKEN_CLASS)) {
       Token name = consume(c, TOKEN_IDENTIFIER, "Expect class name.");
-      classDeclarationWithName(c, name, false, allowExport);
+      classDeclarationWithName(c, name, false, allowExport, false);
       return;
     }
     expression(c);
@@ -4764,23 +4784,23 @@ static void exportDeclaration(Compiler* c) {
   }
 
   if (match(c, TOKEN_LET)) {
-    varDeclaration(c, false, allowExport);
+    varDeclaration(c, false, allowExport, false);
     return;
   }
   if (match(c, TOKEN_CONST)) {
-    varDeclaration(c, true, allowExport);
+    varDeclaration(c, true, allowExport, false);
     return;
   }
   if (match(c, TOKEN_FUN)) {
-    functionDeclaration(c, allowExport);
+    functionDeclaration(c, allowExport, false);
     return;
   }
   if (match(c, TOKEN_CLASS)) {
-    classDeclaration(c, allowExport);
+    classDeclaration(c, allowExport, false);
     return;
   }
     if (match(c, TOKEN_ENUM)) {
-      enumDeclaration(c, allowExport);
+      enumDeclaration(c, allowExport, false);
       return;
     }
     if (match(c, TOKEN_INTERFACE)) {
@@ -4795,21 +4815,63 @@ static void exportDeclaration(Compiler* c) {
   }
 }
 
+static void privateDeclaration(Compiler* c) {
+  Token keyword = previous(c);
+  bool allowPrivate = c->enclosing == NULL && c->scopeDepth == 0;
+  if (!allowPrivate) {
+    errorAt(c, keyword, "Private declarations must be at top level.");
+  }
+
+  if (match(c, TOKEN_EXPORT)) {
+    errorAt(c, keyword, "Private declarations cannot be exported.");
+    exportDeclaration(c);
+    return;
+  }
+  if (match(c, TOKEN_LET)) {
+    varDeclaration(c, false, false, allowPrivate);
+    return;
+  }
+  if (match(c, TOKEN_CONST)) {
+    varDeclaration(c, true, false, allowPrivate);
+    return;
+  }
+  if (match(c, TOKEN_FUN)) {
+    functionDeclaration(c, false, allowPrivate);
+    return;
+  }
+  if (match(c, TOKEN_CLASS)) {
+    classDeclaration(c, false, allowPrivate);
+    return;
+  }
+  if (match(c, TOKEN_ENUM)) {
+    enumDeclaration(c, false, allowPrivate);
+    return;
+  }
+  if (match(c, TOKEN_INTERFACE)) {
+    interfaceDeclaration(c);
+    return;
+  }
+
+  errorAtCurrent(c, "Expect declaration after 'private'.");
+}
+
 static void declaration(Compiler* c) {
-    if (match(c, TOKEN_EXPORT)) {
-      exportDeclaration(c);
-    } else if (match(c, TOKEN_CLASS)) {
-      classDeclaration(c, false);
-    } else if (match(c, TOKEN_FUN)) {
-      functionDeclaration(c, false);
-    } else if (match(c, TOKEN_INTERFACE)) {
-      interfaceDeclaration(c);
-    } else if (match(c, TOKEN_CONST)) {
-      varDeclaration(c, true, false);
+  if (match(c, TOKEN_PRIVATE)) {
+    privateDeclaration(c);
+  } else if (match(c, TOKEN_EXPORT)) {
+    exportDeclaration(c);
+  } else if (match(c, TOKEN_CLASS)) {
+    classDeclaration(c, false, false);
+  } else if (match(c, TOKEN_FUN)) {
+    functionDeclaration(c, false, false);
+  } else if (match(c, TOKEN_INTERFACE)) {
+    interfaceDeclaration(c);
+  } else if (match(c, TOKEN_CONST)) {
+    varDeclaration(c, true, false, false);
   } else if (match(c, TOKEN_LET)) {
-    varDeclaration(c, false, false);
+    varDeclaration(c, false, false, false);
   } else if (match(c, TOKEN_ENUM)) {
-    enumDeclaration(c, false);
+    enumDeclaration(c, false, false);
   } else if (match(c, TOKEN_IMPORT)) {
     importStatement(c);
   } else if (match(c, TOKEN_FROM)) {

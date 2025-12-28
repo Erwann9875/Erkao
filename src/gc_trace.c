@@ -272,6 +272,9 @@ void markRoots(VM* vm) {
     if (vm->frames[i].moduleAlias) {
       markObject(vm, (Obj*)vm->frames[i].moduleAlias);
     }
+    if (vm->frames[i].modulePrivate) {
+      markObject(vm, (Obj*)vm->frames[i].modulePrivate);
+    }
   }
 
   if (vm->compiler) {
@@ -310,6 +313,9 @@ void markYoungRoots(VM* vm) {
     }
     if (vm->frames[i].moduleAlias) {
       markYoungObject(vm, (Obj*)vm->frames[i].moduleAlias);
+    }
+    if (vm->frames[i].modulePrivate) {
+      markYoungObject(vm, (Obj*)vm->frames[i].modulePrivate);
     }
   }
 }

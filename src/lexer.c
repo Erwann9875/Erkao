@@ -256,6 +256,8 @@ static ErkaoTokenType identifierType(Scanner* scanner) {
       return checkKeyword(scanner, 1, 3, "ull", TOKEN_NULL);
     case 'o':
       return checkKeyword(scanner, 1, 1, "r", TOKEN_OR);
+    case 'p':
+      return checkKeyword(scanner, 1, 6, "rivate", TOKEN_PRIVATE);
     case 'r':
       return checkKeyword(scanner, 1, 5, "eturn", TOKEN_RETURN);
     case 's':
@@ -619,6 +621,7 @@ const char* tokenTypeName(ErkaoTokenType type) {
     case TOKEN_MATCH: return "MATCH";
     case TOKEN_NULL: return "NULL";
     case TOKEN_OR: return "OR";
+    case TOKEN_PRIVATE: return "PRIVATE";
     case TOKEN_RETURN: return "RETURN";
     case TOKEN_TRY: return "TRY";
     case TOKEN_CATCH: return "CATCH";

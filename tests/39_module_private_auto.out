@@ -1,0 +1,5 @@
+tests/39_module_private_auto.ek:2:11: RuntimeError at 'secret': Undefined property.
+  print(mod.secret);
+            ^~~~~~
+Stack trace (most recent call last):
+  #0 <script> (tests/39_module_private_auto.ek:2:11) -> 'secret'

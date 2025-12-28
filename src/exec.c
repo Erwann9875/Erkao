@@ -453,6 +453,7 @@ static bool beginModuleImport(VM* vm, CallFrame** frame, ObjString* pathString,
   moduleFrame->moduleKey = key;
   moduleFrame->moduleHasAlias = hasAlias;
   moduleFrame->modulePushResult = pushResult;
+  moduleFrame->modulePrivate = NULL;
 
   vm->env = moduleEnv;
   vm->currentProgram = moduleFunction->program;
@@ -562,6 +563,7 @@ static bool callFunction(VM* vm, ObjFunction* function, Value receiver,
   frame->moduleKey = NULL;
   frame->moduleHasAlias = false;
   frame->modulePushResult = false;
+  frame->modulePrivate = NULL;
 
   Env* env = newEnv(vm, function->closure);
   if (hasReceiver) {
@@ -578,6 +580,26 @@ static bool callFunction(VM* vm, ObjFunction* function, Value receiver,
   return true;
 }
 
+static bool moduleNameIsPrivate(ObjMap* privateMap, ObjString* name) {
+  if (!privateMap || !name) return false;
+  Value ignored;
+  return mapGet(privateMap, name, &ignored);
+}
+
+static ObjMap* buildPublicExports(VM* vm, ObjMap* source, ObjMap* privateMap) {
+  if (!source || !privateMap || mapCount(privateMap) == 0) {
+    return source;
+  }
+  ObjMap* filtered = newMap(vm);
+  for (int i = 0; i < source->capacity; i++) {
+    MapEntryValue* entry = &source->entries[i];
+    if (!entry->key) continue;
+    if (moduleNameIsPrivate(privateMap, entry->key)) continue;
+    mapSet(filtered, entry->key, entry->value);
+  }
+  return filtered;
+}
+
 static bool returnFromFrame(VM* vm, CallFrame** frame, Value result, int targetFrameCount) {
   CallFrame* finished = *frame;
   Env* finishedEnv = vm->env;
@@ -588,8 +610,9 @@ static bool returnFromFrame(VM* vm, CallFrame** frame, Value result, int targetF
   vm->currentProgram = finished->previousProgram;
   if (finished->isModule && finished->moduleInstance && finished->moduleKey) {
     if (finishedEnv && mapCount(finished->moduleInstance->fields) == 0) {
-      finished->moduleInstance->fields = finishedEnv->values;
-      gcWriteBarrier(vm, (Obj*)finished->moduleInstance, OBJ_VAL(finishedEnv->values));
+      ObjMap* exports = buildPublicExports(vm, finishedEnv->values, finished->modulePrivate);
+      finished->moduleInstance->fields = exports;
+      gcWriteBarrier(vm, (Obj*)finished->moduleInstance, OBJ_VAL(exports));
     }
     mapSet(vm->modules, finished->moduleKey, OBJ_VAL(finished->moduleInstance));
     if (finished->moduleHasAlias && finished->moduleAlias) {
@@ -1684,6 +1707,17 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
         mapSet(frame->moduleInstance->fields, name, value);
         break;
       }
+      case OP_PRIVATE: {
+        ObjString* name = (ObjString*)AS_OBJ(READ_CONSTANT());
+        if (!frame->isModule) {
+          break;
+        }
+        if (!frame->modulePrivate) {
+          frame->modulePrivate = newMap(vm);
+        }
+        mapSet(frame->modulePrivate, name, TRUE_VAL);
+        break;
+      }
       case OP_EXPORT_VALUE: {
         ObjString* name = (ObjString*)AS_OBJ(READ_CONSTANT());
         Value value = pop(vm);
@@ -1808,6 +1842,7 @@ static bool callScript(VM* vm, ObjFunction* function) {
   frame->moduleKey = NULL;
   frame->moduleHasAlias = false;
   frame->modulePushResult = false;
+  frame->modulePrivate = NULL;
 
   vm->currentProgram = function->program;
   return true;

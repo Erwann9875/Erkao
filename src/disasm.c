@@ -235,6 +235,8 @@ static int disassembleInstruction(const Chunk* chunk, int offset) {
       return simpleInstruction("OP_IMPORT_MODULE", chunk, offset);
     case OP_EXPORT:
       return constantInstruction("OP_EXPORT", chunk, offset);
+    case OP_PRIVATE:
+      return constantInstruction("OP_PRIVATE", chunk, offset);
     case OP_EXPORT_VALUE:
       return constantInstruction("OP_EXPORT_VALUE", chunk, offset);
     case OP_EXPORT_FROM:
