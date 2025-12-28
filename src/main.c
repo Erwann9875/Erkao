@@ -472,17 +472,21 @@ static bool isDebugFlag(const char* arg) {
   return isFlag(arg, "--bytecode", "-d") || isFlag(arg, "--disasm", NULL);
 }
 
+static bool isTraceFlag(const char* arg) {
+  return isFlag(arg, "--trace", NULL);
+}
+
 static void printHelp(const char* exe) {
   fprintf(stdout,
           "Usage:\n"
           "  %s [--help|-h] [--version|-v]\n"
           "  %s repl\n"
-          "  %s run [--bytecode|--disasm] <file> [-- args...]\n"
+          "  %s run [--bytecode|--disasm] [--trace] <file> [-- args...]\n"
           "  %s typecheck <file>\n"
           "  %s pkg <command>\n"
           "  %s fmt <file> [--check]\n"
           "  %s lint <file>\n"
-          "  %s [--bytecode|--disasm] <file> [args...]\n"
+          "  %s [--bytecode|--disasm] [--trace] <file> [args...]\n"
           "\n"
           "Commands:\n"
           "  run   Run a script file.\n"
@@ -497,6 +501,7 @@ static void printHelp(const char* exe) {
           "  -v, --version  Show the version.\n"
           "  --bytecode     Print bytecode before running.\n"
           "  --disasm       Alias for --bytecode.\n"
+          "  --trace        Print source locations as they execute.\n"
           "  --module-path  Add a module search path.\n"
           "  --check        Check formatting without writing changes.\n"
           "  --config       Tooling config file for fmt/lint.\n"
@@ -706,9 +711,15 @@ static int runWithArgs(VM* vm, const char* path, int argc, const char** argv) {
 static int runFileCommand(VM* vm, const char* exe, int argc, const char** argv, int startIndex) {
   int index = startIndex;
   bool debugBytecode = false;
+  bool debugTrace = vm->debugTrace;
   while (index < argc) {
     if (isDebugFlag(argv[index])) {
       debugBytecode = true;
+      index++;
+      continue;
+    }
+    if (isTraceFlag(argv[index])) {
+      debugTrace = true;
       index++;
       continue;
     }
@@ -731,6 +742,7 @@ static int runFileCommand(VM* vm, const char* exe, int argc, const char** argv, 
   }
 
   vm->debugBytecode = debugBytecode;
+  vm->debugTrace = debugTrace;
   const char* path = argv[index++];
   return runWithArgs(vm, path, argc - index, argv + index);
 }

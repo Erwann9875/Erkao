@@ -15,8 +15,9 @@ const {
 const { TextDocument } = require("vscode-languageserver-textdocument");
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 const cp = require("child_process");
-const { fileURLToPath } = require("url");
+const { fileURLToPath, pathToFileURL } = require("url");
 
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
@@ -26,7 +27,10 @@ let clientSupportsConfig = false;
 let settings = {
   diagnosticsMode: "change",
   debounceMs: 300,
-  typecheckExecutable: ""
+  typecheckExecutable: "",
+  formatExecutable: "",
+  formatConfigPath: "",
+  formatTimeoutMs: 5000
 };
 
 const KEYWORDS = [
@@ -46,10 +50,16 @@ const KEYWORDS = [
   "default",
   "break",
   "continue",
+  "try",
+  "catch",
+  "throw",
   "import",
   "from",
   "as",
+  "interface",
+  "implements",
   "export",
+  "private",
   "return",
   "true",
   "false",
@@ -75,6 +85,7 @@ const MODULES = [
   "fs",
   "path",
   "json",
+  "yaml",
   "math",
   "random",
   "str",
@@ -85,7 +96,8 @@ const MODULES = [
   "proc",
   "env",
   "plugin",
-  "gfx"
+  "gfx",
+  "di"
 ];
 
 const HOVER_DOCS = new Map([
@@ -100,6 +112,7 @@ const HOVER_DOCS = new Map([
   ["fs", "Stdlib module `fs` (filesystem helpers)."],
   ["path", "Stdlib module `path` (path helpers)."],
   ["json", "Stdlib module `json` (parse/stringify)."],
+  ["yaml", "Stdlib module `yaml` (parse/stringify)."],
   ["math", "Stdlib module `math` (math helpers/constants)."],
   ["random", "Stdlib module `random` (PRNG helpers)."],
   ["str", "Stdlib module `str` (string helpers)."],
@@ -110,10 +123,24 @@ const HOVER_DOCS = new Map([
   ["proc", "Stdlib module `proc` (run commands)."],
   ["env", "Stdlib module `env` (environment helpers)."],
   ["plugin", "Stdlib module `plugin` (native plugins)."],
-  ["gfx", "Stdlib module `gfx` (SDL2 graphics)."]
+  ["gfx", "Stdlib module `gfx` (SDL2 graphics)."],
+  ["di", "Stdlib module `di` (dependency injection)."]
 ]);
 
 const symbolCache = new Map();
+const workspaceFileCache = new Map();
+let workspaceFileList = null;
+let workspaceFileListTime = 0;
+const WORKSPACE_IGNORE_DIRS = new Set([
+  ".git",
+  ".github",
+  ".vscode",
+  "build",
+  "dist",
+  "node_modules",
+  "packages",
+  "vcpkg"
+]);
 
 function isIdentChar(ch) {
   return /[A-Za-z0-9_]/.test(ch);
@@ -168,6 +195,161 @@ function resolveErkaoExe() {
   return "erkao";
 }
 
+function resolveFormatExe() {
+  if (settings.formatExecutable) return settings.formatExecutable;
+  return resolveErkaoExe();
+}
+
+function canonicalPath(p) {
+  if (!p) return "";
+  const normalized = path.normalize(p);
+  if (process.platform === "win32") return normalized.toLowerCase();
+  return normalized;
+}
+
+function findWorkspaceRootForPath(filePath) {
+  const candidate = canonicalPath(filePath);
+  for (const root of workspaceRoots) {
+    const normalizedRoot = canonicalPath(root);
+    if (candidate.startsWith(normalizedRoot + path.sep) || candidate === normalizedRoot) {
+      return root;
+    }
+  }
+  return null;
+}
+
+function findToolingConfig(filePath) {
+  if (settings.formatConfigPath) {
+    const root = findWorkspaceRootForPath(filePath);
+    if (path.isAbsolute(settings.formatConfigPath)) return settings.formatConfigPath;
+    if (root) return path.join(root, settings.formatConfigPath);
+    return settings.formatConfigPath;
+  }
+
+  let dir = path.dirname(filePath);
+  const root = findWorkspaceRootForPath(filePath);
+  for (;;) {
+    const candidate = path.join(dir, "erkao.tooling");
+    if (fs.existsSync(candidate)) return candidate;
+    if (root && canonicalPath(dir) === canonicalPath(root)) break;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+function shouldIgnoreDir(name) {
+  if (!name) return true;
+  if (WORKSPACE_IGNORE_DIRS.has(name)) return true;
+  if (name.startsWith(".")) return true;
+  return false;
+}
+
+function collectWorkspaceFiles(root, out) {
+  const stack = [root];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    let entries = null;
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        if (shouldIgnoreDir(entry.name)) continue;
+        stack.push(fullPath);
+      } else if (entry.isFile() && fullPath.endsWith(".ek")) {
+        out.push(fullPath);
+      }
+    }
+  }
+}
+
+function getWorkspaceFileList() {
+  if (!workspaceRoots || workspaceRoots.length === 0) return [];
+  const now = Date.now();
+  if (workspaceFileList && now - workspaceFileListTime < 5000) {
+    return workspaceFileList;
+  }
+  const results = [];
+  for (const root of workspaceRoots) {
+    collectWorkspaceFiles(root, results);
+  }
+  workspaceFileList = results;
+  workspaceFileListTime = now;
+  return results;
+}
+
+function getOpenDocumentByPath(filePath) {
+  const canonical = canonicalPath(filePath);
+  for (const doc of documents.all()) {
+    if (!doc.uri.startsWith("file://")) continue;
+    const docPath = canonicalPath(fileURLToPath(doc.uri));
+    if (docPath === canonical) return doc;
+  }
+  return null;
+}
+
+function loadWorkspaceEntry(filePath) {
+  const canonical = canonicalPath(filePath);
+  let stat = null;
+  try {
+    stat = fs.statSync(filePath);
+  } catch {
+    return null;
+  }
+  const cached = workspaceFileCache.get(canonical);
+  if (cached && cached.mtimeMs === stat.mtimeMs) return cached;
+  let text = "";
+  try {
+    text = fs.readFileSync(filePath, "utf8");
+  } catch {
+    return null;
+  }
+  const uri = pathToFileURL(filePath).toString();
+  const doc = TextDocument.create(uri, "erkao", 0, text);
+  const parsed = parseSymbols(doc);
+  const entry = {
+    uri,
+    doc,
+    text,
+    symbols: parsed.symbols,
+    byName: parsed.byName,
+    mtimeMs: stat.mtimeMs
+  };
+  workspaceFileCache.set(canonical, entry);
+  return entry;
+}
+
+function getWorkspaceEntries() {
+  const entries = [];
+  const openPaths = new Set();
+  for (const doc of documents.all()) {
+    if (!doc.uri.startsWith("file://")) continue;
+    const docPath = fileURLToPath(doc.uri);
+    openPaths.add(canonicalPath(docPath));
+    const symbols = getSymbols(doc);
+    entries.push({
+      uri: doc.uri,
+      doc,
+      text: doc.getText(),
+      symbols: symbols.symbols,
+      byName: symbols.byName
+    });
+  }
+
+  const files = getWorkspaceFileList();
+  for (const filePath of files) {
+    if (openPaths.has(canonicalPath(filePath))) continue;
+    const entry = loadWorkspaceEntry(filePath);
+    if (entry) entries.push(entry);
+  }
+  return entries;
+}
+
 async function loadSettings() {
   if (!clientSupportsConfig) return;
   try {
@@ -182,6 +364,15 @@ async function loadSettings() {
       }
       if (typeof lspConfig.typecheckExecutable === "string") {
         settings.typecheckExecutable = lspConfig.typecheckExecutable;
+      }
+      if (typeof lspConfig.formatExecutable === "string") {
+        settings.formatExecutable = lspConfig.formatExecutable;
+      }
+      if (typeof lspConfig.formatConfigPath === "string") {
+        settings.formatConfigPath = lspConfig.formatConfigPath;
+      }
+      if (typeof lspConfig.formatTimeoutMs === "number") {
+        settings.formatTimeoutMs = lspConfig.formatTimeoutMs;
       }
     }
   } catch (err) {
@@ -251,6 +442,61 @@ function runTypecheck(doc) {
       connection.sendDiagnostics({ uri: doc.uri, diagnostics });
     }
   );
+}
+
+function execFileAsync(exe, args, options) {
+  return new Promise((resolve, reject) => {
+    cp.execFile(exe, args, options, (err, stdout, stderr) => {
+      if (err) {
+        err.stdout = stdout;
+        err.stderr = stderr;
+        reject(err);
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
+}
+
+async function formatDocument(doc) {
+  if (!doc || !doc.uri.startsWith("file://")) return [];
+  const filePath = fileURLToPath(doc.uri);
+  const exe = resolveFormatExe();
+  if (!exe) return [];
+
+  const original = doc.getText();
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "erkao-format-"));
+  const tmpFile = path.join(tmpDir, path.basename(filePath));
+  try {
+    fs.writeFileSync(tmpFile, original, "utf8");
+    const args = ["fmt"];
+    const configPath = findToolingConfig(filePath);
+    if (configPath) {
+      args.push("--config", configPath);
+    }
+    args.push(tmpFile);
+    const timeoutMs = typeof settings.formatTimeoutMs === "number"
+      ? settings.formatTimeoutMs
+      : 5000;
+    await execFileAsync(exe, args, {
+      cwd: path.dirname(filePath),
+      timeout: Math.max(100, timeoutMs),
+      windowsHide: true
+    });
+    const formatted = fs.readFileSync(tmpFile, "utf8");
+    if (formatted === original) return [];
+    const fullRange = Range.create(doc.positionAt(0), doc.positionAt(original.length));
+    return [TextEdit.replace(fullRange, formatted)];
+  } catch (err) {
+    const message = err && err.message ? err.message : String(err);
+    connection.window.showErrorMessage(`Erkao format failed: ${message}`);
+    return [];
+  } finally {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+    }
+  }
 }
 
 function skipWhitespace(text, index) {
@@ -556,6 +802,13 @@ function rangesToEdits(doc, ranges, newText) {
   });
 }
 
+function filterDeclarationRanges(doc, ranges, defRange) {
+  if (!defRange) return ranges;
+  const defStart = doc.offsetAt(defRange.start);
+  const defEnd = doc.offsetAt(defRange.end);
+  return ranges.filter((range) => range.start !== defStart || range.end !== defEnd);
+}
+
 function addSymbol(doc, symbols, byName, name, kind, nameIndex, detail) {
   const start = doc.positionAt(nameIndex);
   const end = doc.positionAt(nameIndex + name.length);
@@ -665,7 +918,8 @@ connection.onInitialize((params) => {
       definitionProvider: true,
       documentSymbolProvider: true,
       referencesProvider: true,
-      renameProvider: { prepareProvider: true }
+      renameProvider: { prepareProvider: true },
+      documentFormattingProvider: true
     }
   };
 });
@@ -756,6 +1010,18 @@ connection.onHover((params) => {
     };
   }
 
+  for (const entry of getWorkspaceEntries()) {
+    const other = entry.byName.get(wordInfo.word);
+    if (other && other.detail) {
+      return {
+        contents: {
+          kind: MarkupKind.Markdown,
+          value: `\`${other.detail}\``
+        }
+      };
+    }
+  }
+
   return null;
 });
 
@@ -765,10 +1031,16 @@ connection.onDefinition((params) => {
   const wordInfo = getWordInfo(doc, params.position);
   if (!wordInfo) return null;
 
-  const { byName } = getSymbols(doc);
-  const info = byName.get(wordInfo.word);
-  if (!info) return null;
-  return Location.create(doc.uri, info.range);
+  const results = [];
+  for (const entry of getWorkspaceEntries()) {
+    const info = entry.byName.get(wordInfo.word);
+    if (info) {
+      results.push(Location.create(entry.uri, info.range));
+    }
+  }
+  if (results.length === 0) return null;
+  if (results.length === 1) return results[0];
+  return results;
 });
 
 connection.onReferences((params) => {
@@ -778,24 +1050,18 @@ connection.onReferences((params) => {
   if (!wordInfo || KEYWORDS.includes(wordInfo.word)) return [];
 
   const results = [];
-  for (const openDoc of documents.all()) {
-    const ranges = findIdentifierOccurrences(openDoc.getText(), wordInfo.word);
-    const { byName } = getSymbols(openDoc);
-    const def = byName.get(wordInfo.word);
-    const includeDecl = params.context ? params.context.includeDeclaration : true;
-    if (!includeDecl && def) {
-      for (let i = ranges.length - 1; i >= 0; i--) {
-        const start = openDoc.positionAt(ranges[i].start);
-        const end = openDoc.positionAt(ranges[i].end);
-        if (Range.create(start, end).start.line === def.range.start.line &&
-            Range.create(start, end).start.character === def.range.start.character &&
-            Range.create(start, end).end.line === def.range.end.line &&
-            Range.create(start, end).end.character === def.range.end.character) {
-          ranges.splice(i, 1);
-        }
+  const includeDecl = params.context ? params.context.includeDeclaration : true;
+  for (const entry of getWorkspaceEntries()) {
+    let ranges = findIdentifierOccurrences(entry.text, wordInfo.word);
+    if (!includeDecl) {
+      const def = entry.byName.get(wordInfo.word);
+      if (def) {
+        ranges = filterDeclarationRanges(entry.doc, ranges, def.range);
       }
     }
-    results.push(...rangesToLocations(openDoc, ranges));
+    if (ranges.length > 0) {
+      results.push(...rangesToLocations(entry.doc, ranges));
+    }
   }
   return results;
 });
@@ -824,13 +1090,19 @@ connection.onRenameRequest((params) => {
   }
 
   const changes = {};
-  for (const openDoc of documents.all()) {
-    const ranges = findIdentifierOccurrences(openDoc.getText(), wordInfo.word);
+  for (const entry of getWorkspaceEntries()) {
+    const ranges = findIdentifierOccurrences(entry.text, wordInfo.word);
     if (ranges.length === 0) continue;
-    changes[openDoc.uri] = rangesToEdits(openDoc, ranges, params.newName);
+    changes[entry.uri] = rangesToEdits(entry.doc, ranges, params.newName);
   }
 
   return { changes };
+});
+
+connection.onDocumentFormatting(async (params) => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return [];
+  return formatDocument(doc);
 });
 
 connection.onDocumentSymbol((params) => {

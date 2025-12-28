@@ -116,6 +116,21 @@ static Token currentToken(CallFrame* frame) {
   return token;
 }
 
+static void debugTraceInstruction(VM* vm, CallFrame* frame, uint8_t instruction) {
+  if (!vm->debugTrace || !frame || !frame->function || !frame->function->chunk) return;
+  Token token = currentToken(frame);
+  if (token.line <= 0 || token.column <= 0) return;
+  if (token.line == vm->debugTraceLine && token.column == vm->debugTraceColumn) return;
+  vm->debugTraceLine = token.line;
+  vm->debugTraceColumn = token.column;
+  const char* path = "<repl>";
+  if (frame->function->program && frame->function->program->path) {
+    path = frame->function->program->path;
+  }
+  fprintf(stderr, "TRACE %s:%d:%d op=%u\n", path, token.line, token.column,
+          (unsigned)instruction);
+}
+
 static bool updateBestSuggestionFromMap(ObjMap* map, const char* target, int targetLen,
                                         ObjString** best, int* bestDist) {
   if (!map || !target || targetLen <= 0) return false;
@@ -867,6 +882,7 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
 
   for (;;) {
     uint8_t instruction = READ_BYTE();
+    debugTraceInstruction(vm, frame, instruction);
     vm->instructionCount++;
     if (vm->instructionBudget > 0 && vm->instructionCount > vm->instructionBudget) {
       runtimeError(vm, currentToken(frame), "Instruction budget exceeded.");
@@ -1715,7 +1731,7 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
         if (!frame->modulePrivate) {
           frame->modulePrivate = newMap(vm);
         }
-        mapSet(frame->modulePrivate, name, TRUE_VAL);
+        mapSet(frame->modulePrivate, name, BOOL_VAL(true));
         break;
       }
       case OP_EXPORT_VALUE: {

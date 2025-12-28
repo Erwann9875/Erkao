@@ -302,6 +302,9 @@ void vmInit(VM* vm) {
   vm->maxStackSlots = STACK_MAX;
   vm->hadError = false;
   vm->debugBytecode = false;
+  vm->debugTrace = envFlagEnabled("ERKAO_DEBUG_TRACE");
+  vm->debugTraceLine = -1;
+  vm->debugTraceColumn = -1;
   vm->typecheck = false;
   vm->modulePaths = NULL;
   vm->modulePathCount = 0;

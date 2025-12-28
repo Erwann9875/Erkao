@@ -58,6 +58,22 @@
           "type": "string",
           "default": "",
           "description": "Path to erkao executable used for typecheck diagnostics."
+        },
+        "erkao.lsp.formatExecutable": {
+          "type": "string",
+          "default": "",
+          "description": "Path to erkao executable used for formatting."
+        },
+        "erkao.lsp.formatConfigPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to erkao.tooling used by the formatter (absolute or workspace-relative)."
+        },
+        "erkao.lsp.formatTimeoutMs": {
+          "type": "number",
+          "default": 5000,
+          "minimum": 100,
+          "description": "Timeout in milliseconds for formatter execution."
         }
       }
     }

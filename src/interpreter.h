@@ -92,6 +92,9 @@ struct VM {
   int maxStackSlots;
   bool hadError;
   bool debugBytecode;
+  bool debugTrace;
+  int debugTraceLine;
+  int debugTraceColumn;
   bool typecheck;
   char** modulePaths;
   int modulePathCount;
