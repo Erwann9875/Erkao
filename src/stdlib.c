@@ -4414,6 +4414,7 @@ static Value nativeTimeSleep(VM* vm, int argc, Value* args) {
     return runtimeErrorValue(vm, "time.sleep failed.");
   }
 #endif
+  return NULL_VAL;
 }
 
 static bool timeGetTm(double seconds, bool utc, struct tm* out) {
