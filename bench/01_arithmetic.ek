@@ -1,0 +1,12 @@
+import "./bench_utils.ek" as bench;
+
+let start = bench.nowMs();
+
+let i = 0;
+let sum = 0;
+while (i < 2000000) {
+  sum = sum + i;
+  i = i + 1;
+}
+
+bench.report("arith", start);

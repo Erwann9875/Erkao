@@ -1,0 +1,21 @@
+import "./bench_utils.ek" as bench;
+
+let start = bench.nowMs();
+
+let map = {};
+let i = 0;
+while (i < 5000) {
+  let key = "k" + json.stringify(i);
+  map[key] = i;
+  i = i + 1;
+}
+
+let sum = 0;
+i = 0;
+while (i < 5000) {
+  let key = "k" + json.stringify(i);
+  sum = sum + map[key];
+  i = i + 1;
+}
+
+bench.report("map", start);

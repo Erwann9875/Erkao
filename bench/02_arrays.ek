@@ -1,0 +1,19 @@
+import "./bench_utils.ek" as bench;
+
+let start = bench.nowMs();
+
+let arr = [];
+let i = 0;
+while (i < 20000) {
+  push(arr, i);
+  i = i + 1;
+}
+
+let sum = 0;
+i = 0;
+while (i < len(arr)) {
+  sum = sum + arr[i];
+  i = i + 1;
+}
+
+bench.report("array", start);

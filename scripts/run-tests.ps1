@@ -1,6 +1,8 @@
 param(
   [string]$Exe = "",
-  [string]$TestsDir = "tests"
+  [string]$TestsDir = "tests",
+  [switch]$Update,
+  [switch]$WriteActual
 )
 
 $ErrorActionPreference = "Stop"
@@ -181,13 +183,16 @@ try {
     }
 
     $failed = 0
+    $updated = 0
 
     foreach ($test in $tests) {
       $expectedPath = [System.IO.Path]::ChangeExtension($test.FullName, ".out")
       if (-not (Test-Path -LiteralPath $expectedPath)) {
-        Write-Host "Missing expected output: $expectedPath"
-        $failed++
-        continue
+        if (-not $Update) {
+          Write-Host "Missing expected output: $expectedPath"
+          $failed++
+          continue
+        }
       }
 
       $relativeTest = Resolve-Path -LiteralPath $test.FullName -Relative
@@ -217,6 +222,23 @@ try {
       $output = $output -replace "`r`n", "`n"
       $output = $output.TrimEnd()
 
+      if ($Update) {
+        $expected = ""
+        if (Test-Path -LiteralPath $expectedPath) {
+          $expected = Get-Content -LiteralPath $expectedPath -Raw
+          $expected = $expected -replace "`r`n", "`n"
+          $expected = $expected.TrimEnd()
+        }
+        if ($output -ne $expected) {
+          [System.IO.File]::WriteAllText($expectedPath, $output)
+          Write-Host "UPDATED $($test.Name)"
+          $updated++
+        } else {
+          Write-Host "UNCHANGED $($test.Name)"
+        }
+        continue
+      }
+
       $expected = Get-Content -LiteralPath $expectedPath -Raw
       $expected = $expected -replace "`r`n", "`n"
       $expected = $expected.TrimEnd()
@@ -228,13 +250,19 @@ try {
         Write-Host $expected
         Write-Host "Actual:"
         Write-Host $output
+        if ($WriteActual) {
+          [System.IO.File]::WriteAllText("$expectedPath.actual", $output)
+        }
         $failed++
       } else {
         Write-Host "PASS $($test.Name)"
       }
     }
 
-    if ($failed -gt 0) {
+    if ($Update) {
+      Write-Host ""
+      Write-Host "Updated: $updated / $($tests.Count)"
+    } elseif ($failed -gt 0) {
       Write-Host ""
       Write-Host "Failed: $failed / $($tests.Count)"
       $exitCode = 1

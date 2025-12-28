@@ -1,0 +1,8 @@
+fun nowMs() {
+  return clock() * 1000;
+}
+
+fun report(name, startMs) {
+  let elapsed = nowMs() - startMs;
+  print(name + " " + json.stringify(elapsed));
+}

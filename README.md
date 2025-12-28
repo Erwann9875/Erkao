@@ -160,10 +160,23 @@ Overrides:
 
 ## Testing
 
-Run the golden tests from the repo root:
+Run the snapshot (golden) tests from the repo root:
 
 ```powershell
 ./scripts/run-tests.ps1
+```
+
+Update snapshots (golden outputs):
+
+```powershell
+./scripts/run-tests.ps1 -Update
+./scripts/update-tests.ps1
+```
+
+Save actual output files for diffs (`.out.actual`):
+
+```powershell
+./scripts/run-tests.ps1 -WriteActual
 ```
 
 Run the GC stress test with logging:
@@ -186,6 +199,15 @@ Lint tests and examples:
 
 Lint checks: trailing whitespace, tabs, indentation, long lines, and (when enabled)
 flow/lex errors.
+
+## Benchmarks
+
+Run the microbenchmarks from the repo root:
+
+```powershell
+./scripts/run-bench.ps1
+./scripts/run-bench.ps1 -Repeat 3
+```
 
 ## Language quick tour
 
