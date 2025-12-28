@@ -1464,6 +1464,12 @@ static Type* typeMakeNullable(TypeChecker* tc, Type* type) {
   if (type->kind == TYPE_UNKNOWN) return typeUnknown();
   if (type->kind == TYPE_NULL) return typeNull();
   if (type->nullable) return type;
+  if (!tc) return type;
+  if (type->kind == TYPE_NUMBER || type->kind == TYPE_STRING || type->kind == TYPE_BOOL) {
+    Type* copy = typeAlloc(tc, type->kind);
+    copy->nullable = true;
+    return copy;
+  }
   Type* copy = typeClone(tc, type);
   if (copy) copy->nullable = true;
   return copy;

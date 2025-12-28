@@ -6,8 +6,12 @@ class ConsoleGreeter implements Greeter {
   fun greet(name: string): string { return "Hello " + name; }
 }
 
+fun makeGreeter() {
+  return ConsoleGreeter();
+}
+
 let c = di.container();
-di.bind(c, "greeter", fun() { return ConsoleGreeter(); });
+di.bind(c, "greeter", makeGreeter);
 let g = di.resolve(c, "greeter");
 print(g.greet("Erkao"));
 
