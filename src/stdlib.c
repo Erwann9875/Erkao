@@ -3902,6 +3902,65 @@ static Value nativeStrSplit(VM* vm, int argc, Value* args) {
   return OBJ_VAL(array);
 }
 
+static Value nativeStrBuilder(VM* vm, int argc, Value* args) {
+  (void)argc;
+  (void)args;
+  return OBJ_VAL(newArray(vm));
+}
+
+static Value nativeStrAppend(VM* vm, int argc, Value* args) {
+  (void)argc;
+  if (!isObjType(args[0], OBJ_ARRAY) || !isObjType(args[1], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "str.append expects (builder, text).");
+  }
+  ObjArray* array = (ObjArray*)AS_OBJ(args[0]);
+  arrayWrite(array, args[1]);
+  return args[0];
+}
+
+static Value nativeStrBuild(VM* vm, int argc, Value* args) {
+  if (argc < 1) {
+    return runtimeErrorValue(vm, "str.build expects (builder, sep?).");
+  }
+  if (!isObjType(args[0], OBJ_ARRAY)) {
+    return runtimeErrorValue(vm, "str.build expects (builder, sep?).");
+  }
+  ObjArray* array = (ObjArray*)AS_OBJ(args[0]);
+
+  const char* sepChars = "";
+  int sepLength = 0;
+  if (argc >= 2) {
+    if (!isObjType(args[1], OBJ_STRING)) {
+      return runtimeErrorValue(vm, "str.build expects (builder, sep?).");
+    }
+    ObjString* sep = (ObjString*)AS_OBJ(args[1]);
+    sepChars = sep->chars;
+    sepLength = sep->length;
+  }
+
+  ByteBuffer buffer;
+  bufferInit(&buffer);
+
+  for (int i = 0; i < array->count; i++) {
+    if (!isObjType(array->items[i], OBJ_STRING)) {
+      bufferFree(&buffer);
+      return runtimeErrorValue(vm, "str.build expects an array of strings.");
+    }
+    ObjString* item = (ObjString*)AS_OBJ(array->items[i]);
+    if (i > 0 && sepLength > 0) {
+      bufferAppendN(&buffer, sepChars, (size_t)sepLength);
+    }
+    if (item->length > 0) {
+      bufferAppendN(&buffer, item->chars, (size_t)item->length);
+    }
+  }
+
+  ObjString* result = copyStringWithLength(vm, buffer.data ? buffer.data : "",
+                                           (int)buffer.length);
+  bufferFree(&buffer);
+  return OBJ_VAL(result);
+}
+
 static Value nativeStrJoin(VM* vm, int argc, Value* args) {
   (void)argc;
   if (!isObjType(args[0], OBJ_ARRAY) || !isObjType(args[1], OBJ_STRING)) {
@@ -4670,6 +4729,9 @@ void defineStdlib(VM* vm) {
   moduleAdd(vm, str, "contains", nativeStrContains, 2);
   moduleAdd(vm, str, "split", nativeStrSplit, 2);
   moduleAdd(vm, str, "join", nativeStrJoin, 2);
+  moduleAdd(vm, str, "builder", nativeStrBuilder, 0);
+  moduleAdd(vm, str, "append", nativeStrAppend, 2);
+  moduleAdd(vm, str, "build", nativeStrBuild, -1);
   moduleAdd(vm, str, "replace", nativeStrReplace, 3);
   moduleAdd(vm, str, "replaceAll", nativeStrReplaceAll, 3);
   moduleAdd(vm, str, "repeat", nativeStrRepeat, 2);

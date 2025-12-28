@@ -2,11 +2,12 @@ import "./bench_utils.ek" as bench;
 
 let start = bench.nowMs();
 
-let text = "";
+let builder = str.builder();
 let i = 0;
 while (i < 20000) {
-  text = text + "abc";
+  str.append(builder, "abc");
   i = i + 1;
 }
 
+let text = str.build(builder);
 bench.report("string", start);

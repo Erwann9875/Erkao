@@ -413,6 +413,9 @@ See `examples/packages_semver.ek` for a full example.
 - `str.contains(text, needle)`
 - `str.split(text, sep)`
 - `str.join(array, sep)`
+- `str.builder()`
+- `str.append(builder, text)`
+- `str.build(builder, sep?)`
 - `str.replace(text, needle, replacement)`
 - `str.replaceAll(text, needle, replacement)`
 - `str.repeat(text, count)`
