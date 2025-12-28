@@ -166,11 +166,30 @@ Run the snapshot (golden) tests from the repo root:
 ./scripts/run-tests.ps1
 ```
 
+```sh
+./scripts/run-tests.sh
+```
+
+OS-specific wrappers are also available:
+
+```powershell
+./scripts/windows/run-tests.ps1
+```
+
+```sh
+./scripts/unix/run-tests.sh
+```
+
 Update snapshots (golden outputs):
 
 ```powershell
 ./scripts/run-tests.ps1 -Update
 ./scripts/update-tests.ps1
+```
+
+```sh
+./scripts/run-tests.sh --update
+./scripts/update-tests.sh
 ```
 
 Save actual output files for diffs (`.out.actual`):
@@ -179,10 +198,22 @@ Save actual output files for diffs (`.out.actual`):
 ./scripts/run-tests.ps1 -WriteActual
 ```
 
+```sh
+./scripts/run-tests.sh --write-actual
+```
+
 Run the GC stress test with logging:
 
 ```powershell
 ./scripts/run-gc-stress.ps1
+```
+
+```sh
+./scripts/run-gc-stress.sh
+```
+
+```sh
+./scripts/unix/run-gc-stress.sh
 ```
 
 Format tests and examples:
@@ -191,10 +222,26 @@ Format tests and examples:
 ./scripts/format.ps1
 ```
 
+```sh
+./scripts/format.sh
+```
+
+```sh
+./scripts/unix/format.sh
+```
+
 Lint tests and examples:
 
 ```powershell
 ./scripts/lint.ps1
+```
+
+```sh
+./scripts/lint.sh
+```
+
+```sh
+./scripts/unix/lint.sh
 ```
 
 Lint checks: trailing whitespace, tabs, indentation, long lines, and (when enabled)
@@ -207,6 +254,15 @@ Run the microbenchmarks from the repo root:
 ```powershell
 ./scripts/run-bench.ps1
 ./scripts/run-bench.ps1 -Repeat 3
+```
+
+```sh
+./scripts/run-bench.sh
+./scripts/run-bench.sh --repeat 3
+```
+
+```sh
+./scripts/unix/run-bench.sh --repeat 3
 ```
 
 ## Language quick tour

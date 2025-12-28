@@ -52,8 +52,16 @@ jobs:
         shell: pwsh
         run: cmake --build build
 
-      - name: Run tests
+      - name: Run tests (Windows)
+        if: runner.os == 'Windows'
         shell: pwsh
         env:
           ERKAO_HTTP_TEST: "1"
         run: ./scripts/run-tests.ps1
+
+      - name: Run tests (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          ERKAO_HTTP_TEST: "1"
+        run: ./scripts/unix/run-tests.sh
