@@ -6,17 +6,13 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $scriptRoot "resolve-erkao.ps1")
 $isWin = $env:OS -eq "Windows_NT"
 if (-not $isWin -and $PSVersionTable.PSEdition -eq "Desktop") {
   $isWin = $true
 }
-if (-not $Exe) {
-  if ($isWin) {
-    $Exe = ".\\build\\Debug\\erkao.exe"
-  } else {
-    $Exe = "./build/erkao"
-  }
-}
+$Exe = Resolve-ErkaoExe -Exe $Exe
 $env:ERKAO_STACK_TRACE = "1"
 $httpTestEnabled = $true
 if ($env:ERKAO_HTTP_TEST) {

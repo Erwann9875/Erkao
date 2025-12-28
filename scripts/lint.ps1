@@ -4,17 +4,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-if (-not $Exe) {
-  $isWin = $env:OS -eq "Windows_NT"
-  if (-not $isWin -and $PSVersionTable.PSEdition -eq "Desktop") {
-    $isWin = $true
-  }
-  if ($isWin) {
-    $Exe = ".\\build\\Debug\\erkao.exe"
-  } else {
-    $Exe = "./build/erkao"
-  }
-}
+$scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $scriptRoot "resolve-erkao.ps1")
+$Exe = Resolve-ErkaoExe -Exe $Exe
 
 if (-not (Test-Path -LiteralPath $Exe)) {
   Write-Error "Executable not found: $Exe"

@@ -1,9 +1,12 @@
 param(
-  [string]$Exe = ".\\build\\Debug\\erkao.exe",
+  [string]$Exe = "",
   [string]$Script = "tests\\stress\\gc_deep.ek"
 )
 
 $ErrorActionPreference = "Stop"
+$scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $scriptRoot "resolve-erkao.ps1")
+$Exe = Resolve-ErkaoExe -Exe $Exe
 
 if (-not (Test-Path -LiteralPath $Exe)) {
   Write-Error "Executable not found: $Exe"
