@@ -679,10 +679,14 @@ static void appendMessage(char* buffer, size_t size, const char* format, ...) {
 static void noteAt(Compiler* c, Token token, const char* message) {
   if (!message || message[0] == '\0') return;
   if (token.line <= 0 || token.column <= 0) return;
+#ifdef ERKAO_FUZZING
+  (void)c;
+#else
   const char* path = c->path ? c->path : "<repl>";
   fprintf(stderr, "%s:%d:%d: Note: %s\n", path, token.line, token.column, message);
   printErrorContext(c->source, token.line, token.column,
                     token.length > 0 ? token.length : 1);
+#endif
 }
 
 static void synchronizeExpression(Compiler* c) {
@@ -779,6 +783,10 @@ static void errorAt(Compiler* c, Token token, const char* message) {
   if (c->panicMode) return;
   c->panicMode = true;
   c->hadError = true;
+#ifdef ERKAO_FUZZING
+  (void)token;
+  (void)message;
+#else
   const char* path = c->path ? c->path : "<repl>";
   fprintf(stderr, "%s:%d:%d: Error", path, token.line, token.column);
   if (token.type == TOKEN_EOF) {
@@ -789,6 +797,7 @@ static void errorAt(Compiler* c, Token token, const char* message) {
   fprintf(stderr, ": %s\n", message);
   printErrorContext(c->source, token.line, token.column,
                     token.length > 0 ? token.length : 1);
+#endif
 }
 
 static void errorAtCurrent(Compiler* c, const char* message) {
@@ -1801,6 +1810,9 @@ static void typeErrorAt(Compiler* c, Token token, const char* format, ...) {
   vsnprintf(message, sizeof(message), format, args);
   va_end(args);
   c->hadError = true;
+#ifdef ERKAO_FUZZING
+  (void)token;
+#else
   const char* path = c->path ? c->path : "<repl>";
   fprintf(stderr, "%s:%d:%d: Error", path, token.line, token.column);
   if (token.type == TOKEN_EOF) {
@@ -1811,6 +1823,7 @@ static void typeErrorAt(Compiler* c, Token token, const char* format, ...) {
   fprintf(stderr, ": %s\n", message);
   printErrorContext(c->source, token.line, token.column,
                     token.length > 0 ? token.length : 1);
+#endif
   if (c->typecheck) {
     c->typecheck->errorCount++;
   }

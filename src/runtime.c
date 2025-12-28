@@ -4,6 +4,12 @@
 
 #include <ctype.h>
 
+#ifdef ERKAO_FUZZING
+static void printStackTrace(VM* vm, const char* fallbackPath) {
+  (void)vm;
+  (void)fallbackPath;
+}
+#else
 static const char* frameFunctionName(const CallFrame* frame) {
   if (!frame || !frame->function) return "<unknown>";
   if (frame->function->name && frame->function->name->chars) {
@@ -60,6 +66,7 @@ static void printStackTrace(VM* vm, const char* fallbackPath) {
     }
   }
 }
+#endif
 
 static bool stackTraceEnabled(void) {
   const char* value = getenv("ERKAO_STACK_TRACE");
@@ -87,6 +94,10 @@ void runtimeError(VM* vm, Token token, const char* message) {
     displayPath = vm->currentProgram->path;
   }
 
+#ifdef ERKAO_FUZZING
+  (void)token;
+  (void)message;
+#else
   if (token.line > 0 && token.column > 0) {
     fprintf(stderr, "%s:%d:%d: RuntimeError", displayPath, token.line, token.column);
     if (token.length > 0) {
@@ -100,6 +111,7 @@ void runtimeError(VM* vm, Token token, const char* message) {
   } else {
     fprintf(stderr, "%s: RuntimeError: %s\n", displayPath, message);
   }
+#endif
   if (stackTraceEnabled()) {
     printStackTrace(vm, displayPath);
   }

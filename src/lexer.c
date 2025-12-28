@@ -518,10 +518,12 @@ TokenArray scanTokens(const char* source, const char* path, bool* hadError) {
   for (;;) {
     Token token = scanToken(&scanner);
     if (token.type == TOKEN_ERROR) {
+#ifndef ERKAO_FUZZING
       const char* displayPath = path ? path : "<repl>";
       fprintf(stderr, "%s:%d:%d: Error: %s\n",
               displayPath, token.line, token.column, token.start);
       printErrorContext(source, token.line, token.column, token.length);
+#endif
       *hadError = true;
       continue;
     }
