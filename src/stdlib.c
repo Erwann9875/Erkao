@@ -3662,7 +3662,6 @@ static Value nativeRandomSeed(VM* vm, int argc, Value* args) {
   gRandomState = (uint64_t)seed;
   gRandomSeeded = true;
   gRandomHasSpare = false;
-  return NULL_VAL;
 }
 
 static Value nativeRandomInt(VM* vm, int argc, Value* args) {
