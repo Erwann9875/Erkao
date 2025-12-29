@@ -2,7 +2,7 @@
 
 [![tests](https://github.com/Erwann9875/Erkao/actions/workflows/tests.yml/badge.svg)](https://github.com/Erwann9875/Erkao/actions/workflows/tests.yml)
 
-Erkao is a small, fun, dynamic language written in C. It starts as an AST interpreter with classes, functions, arrays, and maps. The goal is to keep the core tiny but expressive so you can grow it into a full Windows-first language later.
+Erkao is a small, fun, dynamic language written in C. It features a bytecode interpreter with classes, functions, arrays, and maps.
 
 ## Build
 
