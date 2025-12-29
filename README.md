@@ -314,7 +314,10 @@ print(greet(name));
 - Variables: `let x = 3;`
 - Constants: `const x = 3;`
 - Control flow: `if (...) { ... } else { ... }`, `while (...) { ... }`
-- Match: `match (value) { case 1: ... }` (alias of `switch`)
+- Pattern conditions: `if (match [a, b] = value if a < b) { ... }`, `while (match {x: v} = value) { ... }`
+- Switch: `switch (value) { case 1: ... }`
+- Match: `match (value) { case [a, b] if a < b: ... }` (patterns for enums/arrays/maps, `_` wildcard, `^x` pin)
+- Destructure: `let [a, b] = value;`, `fun sum([a, b]) { ... }`
 - Imports: `import "path/to/file.ek" as name;`, `import name from "path";`, `import * as name from "path";`
 - Functions: `fun name(a, b) { return a + b; }`
 - Type hints: `let total: number = 3;`, `fun greet(name: string): string { ... }`

@@ -153,6 +153,14 @@ static int disassembleInstruction(const Chunk* chunk, int offset) {
       return simpleInstruction("OP_SET_INDEX", chunk, offset);
     case OP_MATCH_ENUM:
       return matchEnumInstruction(chunk, offset);
+    case OP_IS_ARRAY:
+      return simpleInstruction("OP_IS_ARRAY", chunk, offset);
+    case OP_IS_MAP:
+      return simpleInstruction("OP_IS_MAP", chunk, offset);
+    case OP_LEN:
+      return simpleInstruction("OP_LEN", chunk, offset);
+    case OP_MAP_HAS:
+      return simpleInstruction("OP_MAP_HAS", chunk, offset);
     case OP_EQUAL:
       return simpleInstruction("OP_EQUAL", chunk, offset);
     case OP_GREATER:

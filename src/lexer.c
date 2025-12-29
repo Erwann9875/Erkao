@@ -520,6 +520,8 @@ static Token scanToken(Scanner* scanner) {
       return makeToken(scanner, TOKEN_STAR);
     case ':':
       return makeToken(scanner, TOKEN_COLON);
+    case '^':
+      return makeToken(scanner, TOKEN_CARET);
     case '!':
       return makeToken(scanner, match(scanner, '=') ? TOKEN_BANG_EQUAL : TOKEN_BANG);
     case '=':
@@ -591,6 +593,7 @@ const char* tokenTypeName(ErkaoTokenType type) {
     case TOKEN_SLASH: return "SLASH";
     case TOKEN_STAR: return "STAR";
     case TOKEN_COLON: return "COLON";
+    case TOKEN_CARET: return "CARET";
     case TOKEN_BANG: return "BANG";
     case TOKEN_BANG_EQUAL: return "BANG_EQUAL";
     case TOKEN_EQUAL: return "EQUAL";

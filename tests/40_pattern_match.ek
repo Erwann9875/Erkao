@@ -1,0 +1,42 @@
+let list = [1, 2];
+match (list) {
+  case [a, b]:
+    print("array", a, b);
+  default:
+    print("array", "no");
+}
+
+let user = { name: "Ada", age: 42 };
+match (user) {
+  case {name: n}:
+    print("name", n);
+  default:
+    print("name", "no");
+}
+
+let nested = { pos: [3, 4] };
+match (nested) {
+  case {pos: [x, y]}:
+    print("pos", x, y);
+}
+
+let repeat = [1, 1];
+match (repeat) {
+  case [x, x]:
+    print("repeat", x);
+  default:
+    print("repeat", "no");
+}
+
+let repeat2 = [1, 2];
+match (repeat2) {
+  case [x, x]:
+    print("repeat", x);
+  default:
+    print("repeat", "no");
+}
+
+match (user) {
+  case {name: _, age: age}:
+    print("age", age);
+}

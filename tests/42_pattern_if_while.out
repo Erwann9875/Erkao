@@ -1,0 +1,7 @@
+if 1 2
+if no
+if no
+while 1 2
+msg Pattern match failed at $[1].
+path $[1]
+value 3

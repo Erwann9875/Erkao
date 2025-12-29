@@ -1330,6 +1330,48 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
         push(vm, BOOL_VAL(enumValueMatches(vm, value, enumName, variantName)));
         break;
       }
+      case OP_IS_ARRAY: {
+        Value value = pop(vm);
+        push(vm, BOOL_VAL(isObjType(value, OBJ_ARRAY)));
+        break;
+      }
+      case OP_IS_MAP: {
+        Value value = pop(vm);
+        push(vm, BOOL_VAL(isObjType(value, OBJ_MAP)));
+        break;
+      }
+      case OP_LEN: {
+        Value value = pop(vm);
+        if (isObjType(value, OBJ_STRING)) {
+          ObjString* string = (ObjString*)AS_OBJ(value);
+          push(vm, NUMBER_VAL(string->length));
+          break;
+        }
+        if (isObjType(value, OBJ_ARRAY)) {
+          ObjArray* array = (ObjArray*)AS_OBJ(value);
+          push(vm, NUMBER_VAL(array->count));
+          break;
+        }
+        if (isObjType(value, OBJ_MAP)) {
+          ObjMap* map = (ObjMap*)AS_OBJ(value);
+          push(vm, NUMBER_VAL(mapCount(map)));
+          break;
+        }
+        runtimeError(vm, currentToken(frame), "len() expects a string, array, or map.");
+        return false;
+      }
+      case OP_MAP_HAS: {
+        Value key = pop(vm);
+        Value object = pop(vm);
+        if (isObjType(object, OBJ_MAP) && isString(key)) {
+          ObjMap* map = (ObjMap*)AS_OBJ(object);
+          Value ignored;
+          push(vm, BOOL_VAL(mapGet(map, asString(key), &ignored)));
+          break;
+        }
+        push(vm, BOOL_VAL(false));
+        break;
+      }
       case OP_EQUAL: {
         Value b = pop(vm);
         Value a = pop(vm);

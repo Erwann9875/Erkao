@@ -1,0 +1,43 @@
+let list = [1, 2];
+match (list) {
+  case [a, b] if a < b:
+    print("guard", a, b);
+  default:
+    print("guard", "no");
+}
+
+let x = 2;
+match ([2, 3]) {
+  case [^x, y]:
+    print("pin", y);
+  default:
+    print("pin", "no");
+}
+
+match ([1, 2]) {
+  case [^x, y]:
+    print("pin", y);
+  default:
+    print("pin", "no");
+}
+
+let [a, b] = [3, 4];
+print("let", a, b);
+
+const {name: n} = { name: "Ada" };
+print("const", n);
+
+fun sumPair([a, b]) {
+  return a + b;
+}
+print("fn", sumPair([5, 6]));
+
+fun greet({name: n}) {
+  return "hi " + n;
+}
+print("fn", greet({name: "Ada"}));
+
+fun expectFirst([^x, rest]) {
+  return rest;
+}
+print("fn", expectFirst([2, 9]));

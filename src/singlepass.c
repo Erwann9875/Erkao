@@ -230,6 +230,8 @@ static int instructionLength(const Chunk* chunk, int offset) {
     case OP_ARRAY:
     case OP_MAP:
       return 3;
+    case OP_MATCH_ENUM:
+      return 5;
     case OP_EXPORT_FROM: {
       if (offset + 3 > chunk->count) return 1;
       uint16_t count = (uint16_t)((chunk->code[offset + 1] << 8) | chunk->code[offset + 2]);
@@ -632,6 +634,7 @@ static const char* tokenDescription(ErkaoTokenType type) {
     case TOKEN_SLASH: return "'/'";
     case TOKEN_STAR: return "'*'";
     case TOKEN_COLON: return "':'";
+    case TOKEN_CARET: return "'^'";
     case TOKEN_BANG: return "'!'";
     case TOKEN_BANG_EQUAL: return "'!='";
     case TOKEN_EQUAL: return "'='";
@@ -1009,6 +1012,97 @@ static void freeJumpList(JumpList* list) {
   FREE_ARRAY(int, list->offsets, list->capacity);
   initJumpList(list);
 }
+
+typedef enum {
+  PATTERN_LITERAL,
+  PATTERN_BINDING,
+  PATTERN_PIN,
+  PATTERN_WILDCARD,
+  PATTERN_ARRAY,
+  PATTERN_MAP,
+  PATTERN_ENUM
+} PatternKind;
+
+typedef struct Pattern Pattern;
+
+typedef struct {
+  Pattern** items;
+  int count;
+  int capacity;
+} PatternList;
+
+typedef struct {
+  Token key;
+  bool keyIsString;
+  Pattern* value;
+} PatternMapEntry;
+
+typedef struct {
+  PatternMapEntry* entries;
+  int count;
+  int capacity;
+} PatternMap;
+
+typedef struct {
+  Token enumToken;
+  Token variantToken;
+  Pattern** args;
+  int argCount;
+  int argCapacity;
+} PatternEnum;
+
+struct Pattern {
+  PatternKind kind;
+  Token token;
+  union {
+    PatternList array;
+    PatternMap map;
+    PatternEnum enumPattern;
+  } as;
+};
+
+typedef enum {
+  PATH_INDEX,
+  PATH_KEY
+} PatternPathKind;
+
+typedef struct {
+  PatternPathKind kind;
+  int index;
+  Token key;
+  bool keyIsString;
+} PatternPathStep;
+
+typedef struct {
+  PatternPathStep* steps;
+  int count;
+  int capacity;
+} PatternPath;
+
+typedef struct {
+  Token name;
+  PatternPathStep* steps;
+  int stepCount;
+} PatternBinding;
+
+typedef struct {
+  PatternBinding* entries;
+  int count;
+  int capacity;
+} PatternBindingList;
+
+typedef struct {
+  int jump;
+  PatternPathStep* steps;
+  int stepCount;
+  Token token;
+} PatternFailure;
+
+typedef struct {
+  PatternFailure* entries;
+  int count;
+  int capacity;
+} PatternFailureList;
 
   typedef enum {
     TYPE_ANY,
@@ -1984,13 +2078,7 @@ static bool tokenMatches(Token token, const char* text) {
   return memcmp(token.start, text, (size_t)length) == 0;
 }
 
-static Token syntheticToken(const char* text) {
-  Token token;
-  memset(&token, 0, sizeof(Token));
-  token.start = text;
-  token.length = (int)strlen(text);
-  return token;
-}
+static Token syntheticToken(const char* text);
 
 static void typeDefineSynthetic(Compiler* c, const char* name, Type* type) {
   if (!typecheckEnabled(c)) return;
@@ -3348,6 +3436,848 @@ static void map(Compiler* c, bool canAssign) {
   }
 }
 
+static Token syntheticToken(const char* text) {
+  Token token;
+  memset(&token, 0, sizeof(Token));
+  token.start = text;
+  token.length = (int)strlen(text);
+  return token;
+}
+
+static bool tokenIsUnderscore(Token token) {
+  return token.length == 1 && token.start[0] == '_';
+}
+
+static bool tokensEqual(Token a, Token b) {
+  if (a.length != b.length) return false;
+  return memcmp(a.start, b.start, (size_t)a.length) == 0;
+}
+
+static Pattern* newPattern(PatternKind kind, Token token) {
+  Pattern* pattern = (Pattern*)malloc(sizeof(Pattern));
+  if (!pattern) {
+    fprintf(stderr, "Out of memory.\n");
+    exit(1);
+  }
+  memset(pattern, 0, sizeof(Pattern));
+  pattern->kind = kind;
+  pattern->token = token;
+  return pattern;
+}
+
+static void patternListAppend(PatternList* list, Pattern* item) {
+  if (list->capacity < list->count + 1) {
+    int oldCap = list->capacity;
+    list->capacity = GROW_CAPACITY(oldCap);
+    list->items = GROW_ARRAY(Pattern*, list->items, oldCap, list->capacity);
+  }
+  list->items[list->count++] = item;
+}
+
+static void patternMapAppend(PatternMap* map, Token key, bool keyIsString, Pattern* value) {
+  if (map->capacity < map->count + 1) {
+    int oldCap = map->capacity;
+    map->capacity = GROW_CAPACITY(oldCap);
+    map->entries = GROW_ARRAY(PatternMapEntry, map->entries, oldCap, map->capacity);
+  }
+  PatternMapEntry* entry = &map->entries[map->count++];
+  entry->key = key;
+  entry->keyIsString = keyIsString;
+  entry->value = value;
+}
+
+static void patternEnumAppend(PatternEnum* patternEnum, Pattern* arg) {
+  if (patternEnum->argCapacity < patternEnum->argCount + 1) {
+    int oldCap = patternEnum->argCapacity;
+    patternEnum->argCapacity = GROW_CAPACITY(oldCap);
+    patternEnum->args = GROW_ARRAY(Pattern*, patternEnum->args, oldCap,
+                                   patternEnum->argCapacity);
+  }
+  patternEnum->args[patternEnum->argCount++] = arg;
+}
+
+static void freePattern(Pattern* pattern) {
+  if (!pattern) return;
+  switch (pattern->kind) {
+    case PATTERN_ARRAY:
+      for (int i = 0; i < pattern->as.array.count; i++) {
+        freePattern(pattern->as.array.items[i]);
+      }
+      FREE_ARRAY(Pattern*, pattern->as.array.items, pattern->as.array.capacity);
+      break;
+    case PATTERN_MAP:
+      for (int i = 0; i < pattern->as.map.count; i++) {
+        freePattern(pattern->as.map.entries[i].value);
+      }
+      FREE_ARRAY(PatternMapEntry, pattern->as.map.entries, pattern->as.map.capacity);
+      break;
+    case PATTERN_ENUM:
+      for (int i = 0; i < pattern->as.enumPattern.argCount; i++) {
+        freePattern(pattern->as.enumPattern.args[i]);
+      }
+      FREE_ARRAY(Pattern*, pattern->as.enumPattern.args, pattern->as.enumPattern.argCapacity);
+      break;
+    default:
+      break;
+  }
+  free(pattern);
+}
+
+static void patternPathInit(PatternPath* path) {
+  path->steps = NULL;
+  path->count = 0;
+  path->capacity = 0;
+}
+
+static void patternPathPushIndex(PatternPath* path, int index) {
+  if (path->capacity < path->count + 1) {
+    int oldCap = path->capacity;
+    path->capacity = GROW_CAPACITY(oldCap);
+    path->steps = GROW_ARRAY(PatternPathStep, path->steps, oldCap, path->capacity);
+  }
+  PatternPathStep* step = &path->steps[path->count++];
+  step->kind = PATH_INDEX;
+  step->index = index;
+  memset(&step->key, 0, sizeof(Token));
+  step->keyIsString = false;
+}
+
+static void patternPathPushKey(PatternPath* path, Token key, bool keyIsString) {
+  if (path->capacity < path->count + 1) {
+    int oldCap = path->capacity;
+    path->capacity = GROW_CAPACITY(oldCap);
+    path->steps = GROW_ARRAY(PatternPathStep, path->steps, oldCap, path->capacity);
+  }
+  PatternPathStep* step = &path->steps[path->count++];
+  step->kind = PATH_KEY;
+  step->index = 0;
+  step->key = key;
+  step->keyIsString = keyIsString;
+}
+
+static void patternPathPop(PatternPath* path) {
+  if (path->count > 0) {
+    path->count--;
+  }
+}
+
+static void patternPathFree(PatternPath* path) {
+  FREE_ARRAY(PatternPathStep, path->steps, path->capacity);
+  patternPathInit(path);
+}
+
+static void patternBindingListInit(PatternBindingList* list) {
+  list->entries = NULL;
+  list->count = 0;
+  list->capacity = 0;
+}
+
+static void patternBindingListFree(PatternBindingList* list) {
+  for (int i = 0; i < list->count; i++) {
+    FREE_ARRAY(PatternPathStep, list->entries[i].steps, list->entries[i].stepCount);
+  }
+  FREE_ARRAY(PatternBinding, list->entries, list->capacity);
+  list->entries = NULL;
+  list->count = 0;
+  list->capacity = 0;
+}
+
+static PatternBinding* patternBindingFind(PatternBindingList* list, Token name) {
+  for (int i = 0; i < list->count; i++) {
+    if (tokensEqual(list->entries[i].name, name)) {
+      return &list->entries[i];
+    }
+  }
+  return NULL;
+}
+
+static void patternBindingAdd(PatternBindingList* list, Token name, PatternPath* path) {
+  if (list->capacity < list->count + 1) {
+    int oldCap = list->capacity;
+    list->capacity = GROW_CAPACITY(oldCap);
+    list->entries = GROW_ARRAY(PatternBinding, list->entries, oldCap, list->capacity);
+  }
+  PatternBinding* binding = &list->entries[list->count++];
+  binding->name = name;
+  binding->stepCount = path->count;
+  binding->steps = NULL;
+  if (path->count > 0) {
+    binding->steps = GROW_ARRAY(PatternPathStep, binding->steps, 0, path->count);
+    memcpy(binding->steps, path->steps, sizeof(PatternPathStep) * (size_t)path->count);
+  }
+}
+
+static void patternFailureListInit(PatternFailureList* list) {
+  list->entries = NULL;
+  list->count = 0;
+  list->capacity = 0;
+}
+
+static void patternFailureListFree(PatternFailureList* list) {
+  if (!list) return;
+  for (int i = 0; i < list->count; i++) {
+    FREE_ARRAY(PatternPathStep, list->entries[i].steps, list->entries[i].stepCount);
+  }
+  FREE_ARRAY(PatternFailure, list->entries, list->capacity);
+  list->entries = NULL;
+  list->count = 0;
+  list->capacity = 0;
+}
+
+static void patternFailureListAdd(PatternFailureList* list, PatternPath* path,
+                                  int jump, Token token) {
+  if (list->capacity < list->count + 1) {
+    int oldCap = list->capacity;
+    list->capacity = GROW_CAPACITY(oldCap);
+    list->entries = GROW_ARRAY(PatternFailure, list->entries, oldCap, list->capacity);
+  }
+  PatternFailure* failure = &list->entries[list->count++];
+  failure->jump = jump;
+  failure->token = token;
+  failure->stepCount = path->count;
+  failure->steps = NULL;
+  if (path->count > 0) {
+    failure->steps = GROW_ARRAY(PatternPathStep, failure->steps, 0, path->count);
+    memcpy(failure->steps, path->steps, sizeof(PatternPathStep) * (size_t)path->count);
+  }
+}
+
+static void patternPathBufferEnsure(char** buffer, size_t* capacity, size_t needed) {
+  if (*capacity >= needed) return;
+  size_t newCap = *capacity < 32 ? 32 : *capacity;
+  while (newCap < needed) {
+    newCap = newCap * 2;
+  }
+  char* next = (char*)realloc(*buffer, newCap);
+  if (!next) {
+    fprintf(stderr, "Out of memory.\n");
+    exit(1);
+  }
+  *buffer = next;
+  *capacity = newCap;
+}
+
+static void patternPathBufferAppend(char** buffer, size_t* length, size_t* capacity,
+                                    const char* text, size_t textLen) {
+  if (textLen == 0) return;
+  size_t needed = *length + textLen + 1;
+  patternPathBufferEnsure(buffer, capacity, needed);
+  memcpy(*buffer + *length, text, textLen);
+  *length += textLen;
+  (*buffer)[*length] = '\0';
+}
+
+static void patternPathBufferAppendChar(char** buffer, size_t* length, size_t* capacity,
+                                        char c) {
+  patternPathBufferEnsure(buffer, capacity, *length + 2);
+  (*buffer)[(*length)++] = c;
+  (*buffer)[*length] = '\0';
+}
+
+static void patternPathAppendEscaped(char** buffer, size_t* length, size_t* capacity,
+                                     const char* text, int textLen) {
+  for (int i = 0; i < textLen; i++) {
+    unsigned char c = (unsigned char)text[i];
+    if (c == '"' || c == '\\') {
+      patternPathBufferAppendChar(buffer, length, capacity, '\\');
+      patternPathBufferAppendChar(buffer, length, capacity, (char)c);
+      continue;
+    }
+    if (c == '\n') {
+      patternPathBufferAppend(buffer, length, capacity, "\\n", 2);
+      continue;
+    }
+    if (c == '\r') {
+      patternPathBufferAppend(buffer, length, capacity, "\\r", 2);
+      continue;
+    }
+    if (c == '\t') {
+      patternPathBufferAppend(buffer, length, capacity, "\\t", 2);
+      continue;
+    }
+    if (c < 32) {
+      char hex[5];
+      snprintf(hex, sizeof(hex), "\\x%02x", c);
+      patternPathBufferAppend(buffer, length, capacity, hex, 4);
+      continue;
+    }
+    patternPathBufferAppendChar(buffer, length, capacity, (char)c);
+  }
+}
+
+static ObjString* patternPathString(Compiler* c, PatternPathStep* steps, int stepCount) {
+  size_t length = 0;
+  size_t capacity = 0;
+  char* buffer = NULL;
+  patternPathBufferAppend(&buffer, &length, &capacity, "$", 1);
+  for (int i = 0; i < stepCount; i++) {
+    PatternPathStep step = steps[i];
+    if (step.kind == PATH_KEY) {
+      if (step.keyIsString) {
+        char* keyName = parseStringLiteral(step.key);
+        patternPathBufferAppend(&buffer, &length, &capacity, "[\"", 2);
+        patternPathAppendEscaped(&buffer, &length, &capacity, keyName,
+                                 (int)strlen(keyName));
+        patternPathBufferAppend(&buffer, &length, &capacity, "\"]", 2);
+        free(keyName);
+      } else {
+        patternPathBufferAppendChar(&buffer, &length, &capacity, '.');
+        patternPathBufferAppend(&buffer, &length, &capacity,
+                                step.key.start, (size_t)step.key.length);
+      }
+    } else {
+      char indexBuffer[32];
+      int indexLen = snprintf(indexBuffer, sizeof(indexBuffer), "[%d]", step.index);
+      if (indexLen < 0) indexLen = 0;
+      patternPathBufferAppend(&buffer, &length, &capacity, indexBuffer, (size_t)indexLen);
+    }
+  }
+  return takeStringWithLength(c->vm, buffer, (int)length);
+}
+
+static ObjString* patternFailureMessage(Compiler* c, ObjString* path) {
+  const char* prefix = "Pattern match failed at ";
+  const char* suffix = ".";
+  int prefixLen = (int)strlen(prefix);
+  int suffixLen = (int)strlen(suffix);
+  int total = prefixLen + path->length + suffixLen;
+  char* buffer = (char*)malloc((size_t)total + 1);
+  if (!buffer) {
+    fprintf(stderr, "Out of memory.\n");
+    exit(1);
+  }
+  memcpy(buffer, prefix, (size_t)prefixLen);
+  memcpy(buffer + prefixLen, path->chars, (size_t)path->length);
+  memcpy(buffer + prefixLen + path->length, suffix, (size_t)suffixLen);
+  buffer[total] = '\0';
+  return takeStringWithLength(c->vm, buffer, total);
+}
+
+static bool isEnumPatternStart(Compiler* c) {
+  if (!check(c, TOKEN_IDENTIFIER) || !checkNext(c, TOKEN_DOT)) return false;
+  int lookahead = c->current + 2;
+  if (lookahead >= c->tokens->count) return false;
+  Token variant = c->tokens->tokens[lookahead];
+  if (variant.type != TOKEN_IDENTIFIER) return false;
+  int afterIndex = lookahead + 1;
+  if (afterIndex >= c->tokens->count) return false;
+  ErkaoTokenType afterType = c->tokens->tokens[afterIndex].type;
+  return afterType == TOKEN_LEFT_PAREN ||
+         afterType == TOKEN_COLON ||
+         afterType == TOKEN_COMMA ||
+         afterType == TOKEN_RIGHT_PAREN ||
+         afterType == TOKEN_RIGHT_BRACE ||
+         afterType == TOKEN_RIGHT_BRACKET ||
+         afterType == TOKEN_EQUAL ||
+         afterType == TOKEN_IF ||
+         afterType == TOKEN_SEMICOLON;
+}
+
+static Pattern* parsePattern(Compiler* c);
+static Pattern* parseArrayPattern(Compiler* c);
+static Pattern* parseMapPattern(Compiler* c);
+static Pattern* parseEnumPattern(Compiler* c);
+
+static Pattern* parsePattern(Compiler* c) {
+  if (isEnumPatternStart(c)) {
+    return parseEnumPattern(c);
+  }
+  if (match(c, TOKEN_LEFT_BRACKET)) {
+    return parseArrayPattern(c);
+  }
+  if (match(c, TOKEN_LEFT_BRACE)) {
+    return parseMapPattern(c);
+  }
+  if (match(c, TOKEN_CARET)) {
+    Token name = consume(c, TOKEN_IDENTIFIER, "Expect name after '^'.");
+    if (tokenIsUnderscore(name)) {
+      errorAt(c, name, "Cannot pin '_'.");
+    }
+    return newPattern(PATTERN_PIN, name);
+  }
+  if (match(c, TOKEN_NUMBER) || match(c, TOKEN_STRING) ||
+      match(c, TOKEN_TRUE) || match(c, TOKEN_FALSE) || match(c, TOKEN_NULL)) {
+    return newPattern(PATTERN_LITERAL, previous(c));
+  }
+  if (match(c, TOKEN_IDENTIFIER)) {
+    Token name = previous(c);
+    if (tokenIsUnderscore(name)) {
+      return newPattern(PATTERN_WILDCARD, name);
+    }
+    return newPattern(PATTERN_BINDING, name);
+  }
+  errorAtCurrent(c, "Expect pattern.");
+  return newPattern(PATTERN_WILDCARD, previous(c));
+}
+
+static Pattern* parseArrayPattern(Compiler* c) {
+  Token open = previous(c);
+  Pattern* pattern = newPattern(PATTERN_ARRAY, open);
+  if (!check(c, TOKEN_RIGHT_BRACKET)) {
+    do {
+      Pattern* item = parsePattern(c);
+      patternListAppend(&pattern->as.array, item);
+    } while (match(c, TOKEN_COMMA));
+  }
+  consumeClosing(c, TOKEN_RIGHT_BRACKET, "Expect ']' after array pattern.", open);
+  return pattern;
+}
+
+static Pattern* parseMapPattern(Compiler* c) {
+  Token open = previous(c);
+  Pattern* pattern = newPattern(PATTERN_MAP, open);
+  if (!check(c, TOKEN_RIGHT_BRACE)) {
+    do {
+      Token key;
+      bool keyIsString = false;
+      if (match(c, TOKEN_IDENTIFIER)) {
+        key = previous(c);
+      } else if (match(c, TOKEN_STRING)) {
+        key = previous(c);
+        keyIsString = true;
+      } else {
+        errorAtCurrent(c, "Map pattern keys must be identifiers or strings.");
+        break;
+      }
+      consume(c, TOKEN_COLON, "Expect ':' after map key.");
+      Pattern* value = parsePattern(c);
+      patternMapAppend(&pattern->as.map, key, keyIsString, value);
+    } while (match(c, TOKEN_COMMA));
+  }
+  consumeClosing(c, TOKEN_RIGHT_BRACE, "Expect '}' after map pattern.", open);
+  return pattern;
+}
+
+static Pattern* parseEnumPattern(Compiler* c) {
+  Token enumToken = consume(c, TOKEN_IDENTIFIER, "Expect enum name.");
+  consume(c, TOKEN_DOT, "Expect '.' in enum pattern.");
+  Token variantToken = consume(c, TOKEN_IDENTIFIER, "Expect enum variant name.");
+  Pattern* pattern = newPattern(PATTERN_ENUM, enumToken);
+  pattern->as.enumPattern.enumToken = enumToken;
+  pattern->as.enumPattern.variantToken = variantToken;
+  if (match(c, TOKEN_LEFT_PAREN)) {
+    Token open = previous(c);
+    if (!check(c, TOKEN_RIGHT_PAREN)) {
+      do {
+        Pattern* arg = parsePattern(c);
+        patternEnumAppend(&pattern->as.enumPattern, arg);
+      } while (match(c, TOKEN_COMMA));
+    }
+    consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after enum pattern.", open);
+  }
+  return pattern;
+}
+
+static void emitPatternKeyConstant(Compiler* c, Token key, bool keyIsString, Token token) {
+  if (keyIsString) {
+    char* keyName = parseStringLiteral(key);
+    ObjString* keyStr = takeStringWithLength(c->vm, keyName, (int)strlen(keyName));
+    emitConstant(c, OBJ_VAL(keyStr), token);
+  } else {
+    ObjString* keyStr = stringFromToken(c->vm, key);
+    emitConstant(c, OBJ_VAL(keyStr), token);
+  }
+}
+
+static void emitPatternValueSteps(Compiler* c, int switchValue,
+                                  PatternPathStep* steps, int stepCount,
+                                  Token token) {
+  emitGetVarConstant(c, switchValue);
+  for (int i = 0; i < stepCount; i++) {
+    PatternPathStep step = steps[i];
+    if (step.kind == PATH_KEY) {
+      emitPatternKeyConstant(c, step.key, step.keyIsString, token);
+      emitByte(c, OP_GET_INDEX, token);
+    } else {
+      emitConstant(c, NUMBER_VAL((double)step.index), token);
+      emitByte(c, OP_GET_INDEX, token);
+    }
+  }
+}
+
+static void emitPatternValue(Compiler* c, int switchValue, PatternPath* path, Token token) {
+  emitPatternValueSteps(c, switchValue, path->steps, path->count, token);
+}
+
+static void emitPatternLiteral(Compiler* c, Pattern* pattern) {
+  Token token = pattern->token;
+  switch (token.type) {
+    case TOKEN_NUMBER: {
+      double value = parseNumberToken(token);
+      emitConstant(c, NUMBER_VAL(value), token);
+      break;
+    }
+    case TOKEN_STRING: {
+      char* value = parseStringLiteral(token);
+      ObjString* str = takeStringWithLength(c->vm, value, (int)strlen(value));
+      emitConstant(c, OBJ_VAL(str), token);
+      break;
+    }
+    case TOKEN_TRUE:
+      emitByte(c, OP_TRUE, token);
+      break;
+    case TOKEN_FALSE:
+      emitByte(c, OP_FALSE, token);
+      break;
+    case TOKEN_NULL:
+      emitByte(c, OP_NULL, token);
+      break;
+    default:
+      emitByte(c, OP_NULL, token);
+      break;
+  }
+}
+
+static void emitPatternCheckJump(Compiler* c, JumpList* failJumps, Token token) {
+  int jump = emitJump(c, OP_JUMP_IF_FALSE, token);
+  writeJumpList(failJumps, jump);
+  emitByte(c, OP_POP, noToken());
+}
+
+static void emitPatternCheckJumpDetailed(Compiler* c, PatternFailureList* failures,
+                                         PatternPath* path, Token token) {
+  int jump = emitJump(c, OP_JUMP_IF_FALSE, token);
+  patternFailureListAdd(failures, path, jump, token);
+  emitByte(c, OP_POP, noToken());
+}
+
+static bool patternPinnedDefined(Compiler* c, Token name) {
+  if (!typecheckEnabled(c)) return true;
+  ObjString* nameStr = stringFromToken(c->vm, name);
+  return typeLookupEntry(c->typecheck, nameStr) != NULL;
+}
+
+static void emitPatternChecks(Compiler* c, int switchValue, Pattern* pattern,
+                              PatternPath* path, JumpList* failJumps,
+                              PatternBindingList* bindings) {
+  if (!pattern) return;
+  switch (pattern->kind) {
+    case PATTERN_WILDCARD:
+      return;
+    case PATTERN_BINDING: {
+      if (tokenIsUnderscore(pattern->token)) return;
+      PatternBinding* existing = patternBindingFind(bindings, pattern->token);
+      if (!existing) {
+        patternBindingAdd(bindings, pattern->token, path);
+        return;
+      }
+      emitPatternValueSteps(c, switchValue, existing->steps, existing->stepCount, pattern->token);
+      emitPatternValue(c, switchValue, path, pattern->token);
+      emitByte(c, OP_EQUAL, pattern->token);
+      emitPatternCheckJump(c, failJumps, pattern->token);
+      return;
+    }
+    case PATTERN_PIN: {
+      if (!patternPinnedDefined(c, pattern->token)) {
+        errorAt(c, pattern->token, "Pinned variable must be defined.");
+        return;
+      }
+      emitPatternValue(c, switchValue, path, pattern->token);
+      int nameIdx = emitStringConstant(c, pattern->token);
+      emitByte(c, OP_GET_VAR, pattern->token);
+      emitShort(c, (uint16_t)nameIdx, pattern->token);
+      emitByte(c, OP_EQUAL, pattern->token);
+      emitPatternCheckJump(c, failJumps, pattern->token);
+      return;
+    }
+    case PATTERN_LITERAL:
+      emitPatternValue(c, switchValue, path, pattern->token);
+      emitPatternLiteral(c, pattern);
+      emitByte(c, OP_EQUAL, pattern->token);
+      emitPatternCheckJump(c, failJumps, pattern->token);
+      return;
+    case PATTERN_ARRAY: {
+      emitPatternValue(c, switchValue, path, pattern->token);
+      emitByte(c, OP_IS_ARRAY, pattern->token);
+      emitPatternCheckJump(c, failJumps, pattern->token);
+
+      emitPatternValue(c, switchValue, path, pattern->token);
+      emitByte(c, OP_LEN, pattern->token);
+      emitConstant(c, NUMBER_VAL((double)pattern->as.array.count), pattern->token);
+      emitByte(c, OP_EQUAL, pattern->token);
+      emitPatternCheckJump(c, failJumps, pattern->token);
+
+      for (int i = 0; i < pattern->as.array.count; i++) {
+        patternPathPushIndex(path, i);
+        emitPatternChecks(c, switchValue, pattern->as.array.items[i], path,
+                          failJumps, bindings);
+        patternPathPop(path);
+      }
+      return;
+    }
+    case PATTERN_MAP: {
+      emitPatternValue(c, switchValue, path, pattern->token);
+      emitByte(c, OP_IS_MAP, pattern->token);
+      emitPatternCheckJump(c, failJumps, pattern->token);
+
+      for (int i = 0; i < pattern->as.map.count; i++) {
+        PatternMapEntry* entry = &pattern->as.map.entries[i];
+        emitPatternValue(c, switchValue, path, entry->key);
+        emitPatternKeyConstant(c, entry->key, entry->keyIsString, entry->key);
+        emitByte(c, OP_MAP_HAS, entry->key);
+        emitPatternCheckJump(c, failJumps, entry->key);
+
+        patternPathPushKey(path, entry->key, entry->keyIsString);
+        emitPatternChecks(c, switchValue, entry->value, path, failJumps, bindings);
+        patternPathPop(path);
+      }
+      return;
+    }
+    case PATTERN_ENUM: {
+      EnumInfo* info = findEnumInfo(c, pattern->as.enumPattern.enumToken);
+      if (!info) {
+        errorAt(c, pattern->as.enumPattern.enumToken, "Unknown enum in match pattern.");
+      } else if (!info->isAdt) {
+        errorAt(c, pattern->as.enumPattern.enumToken, "Enum does not support payload patterns.");
+      }
+      EnumVariantInfo* variantInfo = info ?
+          findEnumVariant(info, pattern->as.enumPattern.variantToken) : NULL;
+      if (!variantInfo && info) {
+        errorAt(c, pattern->as.enumPattern.variantToken, "Unknown enum variant.");
+      } else if (variantInfo && variantInfo->arity != pattern->as.enumPattern.argCount) {
+        char patternMessage[96];
+        snprintf(patternMessage, sizeof(patternMessage),
+                 "Pattern expects %d bindings but got %d.",
+                 variantInfo->arity, pattern->as.enumPattern.argCount);
+        errorAt(c, pattern->as.enumPattern.variantToken, patternMessage);
+      }
+
+      emitPatternValue(c, switchValue, path, pattern->token);
+      int enumIdx = emitStringConstant(c, pattern->as.enumPattern.enumToken);
+      int variantIdx = emitStringConstant(c, pattern->as.enumPattern.variantToken);
+      emitByte(c, OP_MATCH_ENUM, pattern->token);
+      emitShort(c, (uint16_t)enumIdx, pattern->token);
+      emitShort(c, (uint16_t)variantIdx, pattern->token);
+      emitPatternCheckJump(c, failJumps, pattern->token);
+
+      Token valuesToken = syntheticToken("_values");
+      for (int i = 0; i < pattern->as.enumPattern.argCount; i++) {
+        patternPathPushKey(path, valuesToken, false);
+        patternPathPushIndex(path, i);
+        emitPatternChecks(c, switchValue, pattern->as.enumPattern.args[i], path,
+                          failJumps, bindings);
+        patternPathPop(path);
+        patternPathPop(path);
+      }
+      return;
+    }
+    default:
+      return;
+  }
+}
+
+static void emitPatternChecksDetailed(Compiler* c, int switchValue, Pattern* pattern,
+                                      PatternPath* path, PatternFailureList* failures,
+                                      PatternBindingList* bindings) {
+  if (!pattern) return;
+  switch (pattern->kind) {
+    case PATTERN_WILDCARD:
+      return;
+    case PATTERN_BINDING: {
+      if (tokenIsUnderscore(pattern->token)) return;
+      PatternBinding* existing = patternBindingFind(bindings, pattern->token);
+      if (!existing) {
+        patternBindingAdd(bindings, pattern->token, path);
+        return;
+      }
+      emitPatternValueSteps(c, switchValue, existing->steps, existing->stepCount, pattern->token);
+      emitPatternValue(c, switchValue, path, pattern->token);
+      emitByte(c, OP_EQUAL, pattern->token);
+      emitPatternCheckJumpDetailed(c, failures, path, pattern->token);
+      return;
+    }
+    case PATTERN_PIN: {
+      if (!patternPinnedDefined(c, pattern->token)) {
+        errorAt(c, pattern->token, "Pinned variable must be defined.");
+        return;
+      }
+      emitPatternValue(c, switchValue, path, pattern->token);
+      int nameIdx = emitStringConstant(c, pattern->token);
+      emitByte(c, OP_GET_VAR, pattern->token);
+      emitShort(c, (uint16_t)nameIdx, pattern->token);
+      emitByte(c, OP_EQUAL, pattern->token);
+      emitPatternCheckJumpDetailed(c, failures, path, pattern->token);
+      return;
+    }
+    case PATTERN_LITERAL:
+      emitPatternValue(c, switchValue, path, pattern->token);
+      emitPatternLiteral(c, pattern);
+      emitByte(c, OP_EQUAL, pattern->token);
+      emitPatternCheckJumpDetailed(c, failures, path, pattern->token);
+      return;
+    case PATTERN_ARRAY: {
+      emitPatternValue(c, switchValue, path, pattern->token);
+      emitByte(c, OP_IS_ARRAY, pattern->token);
+      emitPatternCheckJumpDetailed(c, failures, path, pattern->token);
+
+      emitPatternValue(c, switchValue, path, pattern->token);
+      emitByte(c, OP_LEN, pattern->token);
+      emitConstant(c, NUMBER_VAL((double)pattern->as.array.count), pattern->token);
+      emitByte(c, OP_EQUAL, pattern->token);
+      emitPatternCheckJumpDetailed(c, failures, path, pattern->token);
+
+      for (int i = 0; i < pattern->as.array.count; i++) {
+        patternPathPushIndex(path, i);
+        emitPatternChecksDetailed(c, switchValue, pattern->as.array.items[i], path,
+                                  failures, bindings);
+        patternPathPop(path);
+      }
+      return;
+    }
+    case PATTERN_MAP: {
+      emitPatternValue(c, switchValue, path, pattern->token);
+      emitByte(c, OP_IS_MAP, pattern->token);
+      emitPatternCheckJumpDetailed(c, failures, path, pattern->token);
+
+      for (int i = 0; i < pattern->as.map.count; i++) {
+        PatternMapEntry* entry = &pattern->as.map.entries[i];
+        emitPatternValue(c, switchValue, path, entry->key);
+        emitPatternKeyConstant(c, entry->key, entry->keyIsString, entry->key);
+        emitByte(c, OP_MAP_HAS, entry->key);
+        patternPathPushKey(path, entry->key, entry->keyIsString);
+        emitPatternCheckJumpDetailed(c, failures, path, entry->key);
+        patternPathPop(path);
+
+        patternPathPushKey(path, entry->key, entry->keyIsString);
+        emitPatternChecksDetailed(c, switchValue, entry->value, path, failures, bindings);
+        patternPathPop(path);
+      }
+      return;
+    }
+    case PATTERN_ENUM: {
+      EnumInfo* info = findEnumInfo(c, pattern->as.enumPattern.enumToken);
+      if (!info) {
+        errorAt(c, pattern->as.enumPattern.enumToken, "Unknown enum in match pattern.");
+      } else if (!info->isAdt) {
+        errorAt(c, pattern->as.enumPattern.enumToken, "Enum does not support payload patterns.");
+      }
+      EnumVariantInfo* variantInfo = info ?
+          findEnumVariant(info, pattern->as.enumPattern.variantToken) : NULL;
+      if (!variantInfo && info) {
+        errorAt(c, pattern->as.enumPattern.variantToken, "Unknown enum variant.");
+      } else if (variantInfo && variantInfo->arity != pattern->as.enumPattern.argCount) {
+        char patternMessage[96];
+        snprintf(patternMessage, sizeof(patternMessage),
+                 "Pattern expects %d bindings but got %d.",
+                 variantInfo->arity, pattern->as.enumPattern.argCount);
+        errorAt(c, pattern->as.enumPattern.variantToken, patternMessage);
+      }
+
+      emitPatternValue(c, switchValue, path, pattern->token);
+      int enumIdx = emitStringConstant(c, pattern->as.enumPattern.enumToken);
+      int variantIdx = emitStringConstant(c, pattern->as.enumPattern.variantToken);
+      emitByte(c, OP_MATCH_ENUM, pattern->token);
+      emitShort(c, (uint16_t)enumIdx, pattern->token);
+      emitShort(c, (uint16_t)variantIdx, pattern->token);
+      emitPatternCheckJumpDetailed(c, failures, path, pattern->token);
+
+      Token valuesToken = syntheticToken("_values");
+      for (int i = 0; i < pattern->as.enumPattern.argCount; i++) {
+        patternPathPushKey(path, valuesToken, false);
+        patternPathPushIndex(path, i);
+        emitPatternChecksDetailed(c, switchValue, pattern->as.enumPattern.args[i], path,
+                                  failures, bindings);
+        patternPathPop(path);
+        patternPathPop(path);
+      }
+      return;
+    }
+    default:
+      return;
+  }
+}
+
+static void emitPatternMatchValue(Compiler* c, int switchValue, Pattern* pattern,
+                                  PatternBindingList* bindings) {
+  JumpList failJumps;
+  initJumpList(&failJumps);
+  PatternPath path;
+  patternPathInit(&path);
+  emitPatternChecks(c, switchValue, pattern, &path, &failJumps, bindings);
+  patternPathFree(&path);
+
+  if (failJumps.count == 0) {
+    emitByte(c, OP_TRUE, pattern ? pattern->token : noToken());
+    freeJumpList(&failJumps);
+    return;
+  }
+
+  emitByte(c, OP_TRUE, pattern ? pattern->token : noToken());
+  int endJump = emitJump(c, OP_JUMP, pattern ? pattern->token : noToken());
+  int failTarget = c->chunk->count;
+  patchJumpList(c, &failJumps, failTarget, pattern ? pattern->token : noToken());
+  emitByte(c, OP_POP, noToken());
+  emitByte(c, OP_FALSE, pattern ? pattern->token : noToken());
+  patchJump(c, endJump, pattern ? pattern->token : noToken());
+  freeJumpList(&failJumps);
+}
+
+static void emitPatternFailureThrow(Compiler* c, int switchValue, PatternFailure* failure) {
+  Token token = failure->token;
+  emitByte(c, OP_POP, noToken());
+
+  ObjString* pathStr = patternPathString(c, failure->steps, failure->stepCount);
+  ObjString* messageStr = patternFailureMessage(c, pathStr);
+
+  emitByte(c, OP_MAP, token);
+  emitShort(c, 3, token);
+
+  ObjString* messageKey = copyStringWithLength(c->vm, "message", 7);
+  emitConstant(c, OBJ_VAL(messageKey), token);
+  emitConstant(c, OBJ_VAL(messageStr), token);
+  emitByte(c, OP_MAP_SET, token);
+
+  ObjString* pathKey = copyStringWithLength(c->vm, "path", 4);
+  emitConstant(c, OBJ_VAL(pathKey), token);
+  emitConstant(c, OBJ_VAL(pathStr), token);
+  emitByte(c, OP_MAP_SET, token);
+
+  ObjString* valueKey = copyStringWithLength(c->vm, "value", 5);
+  emitConstant(c, OBJ_VAL(valueKey), token);
+  emitPatternValueSteps(c, switchValue, failure->steps, failure->stepCount, token);
+  emitByte(c, OP_MAP_SET, token);
+
+  emitByte(c, OP_THROW, token);
+}
+
+static void emitPatternMatchOrThrow(Compiler* c, int switchValue, Pattern* pattern,
+                                    PatternBindingList* bindings) {
+  PatternFailureList failures;
+  patternFailureListInit(&failures);
+  PatternPath path;
+  patternPathInit(&path);
+  emitPatternChecksDetailed(c, switchValue, pattern, &path, &failures, bindings);
+  patternPathFree(&path);
+
+  if (failures.count == 0) {
+    patternFailureListFree(&failures);
+    return;
+  }
+
+  int endJump = emitJump(c, OP_JUMP, pattern ? pattern->token : noToken());
+  for (int i = 0; i < failures.count; i++) {
+    PatternFailure* failure = &failures.entries[i];
+    patchJump(c, failure->jump, failure->token);
+    emitPatternFailureThrow(c, switchValue, failure);
+  }
+  patchJump(c, endJump, pattern ? pattern->token : noToken());
+  patternFailureListFree(&failures);
+}
+
+static void emitPatternBindings(Compiler* c, int switchValue, PatternBindingList* bindings,
+                                uint8_t defineOp) {
+  for (int i = 0; i < bindings->count; i++) {
+    PatternBinding* binding = &bindings->entries[i];
+    emitPatternValueSteps(c, switchValue, binding->steps, binding->stepCount, binding->name);
+    int nameIdx = emitStringConstant(c, binding->name);
+    emitByte(c, defineOp, binding->name);
+    emitShort(c, (uint16_t)nameIdx, binding->name);
+    if (typecheckEnabled(c)) {
+      typeDefine(c, binding->name, typeAny(), true);
+    }
+  }
+}
+
 static ParseRule rules[TOKEN_EOF + 1];
 static bool rulesInitialized = false;
 
@@ -3432,51 +4362,99 @@ static void expressionStatement(Compiler* c) {
 }
 
 static void varDeclaration(Compiler* c, bool isConst, bool isExport, bool isPrivate) {
-  Token name = consume(c, TOKEN_IDENTIFIER, "Expect variable name.");
-  Type* declaredType = NULL;
-  bool hasType = false;
-  if (match(c, TOKEN_COLON)) {
-    declaredType = parseType(c);
-    hasType = true;
-  }
-  bool hasInitializer = match(c, TOKEN_EQUAL);
-  Type* valueType = typeUnknown();
-  if (hasInitializer) {
-    expression(c);
-    valueType = typePop(c);
-  } else {
-    if (isConst) {
-      errorAt(c, name, "Const declarations require an initializer.");
+  Pattern* pattern = parsePattern(c);
+  if (pattern->kind == PATTERN_BINDING) {
+    Token name = pattern->token;
+    freePattern(pattern);
+    pattern = NULL;
+
+    Type* declaredType = NULL;
+    bool hasType = false;
+    if (match(c, TOKEN_COLON)) {
+      declaredType = parseType(c);
+      hasType = true;
     }
+    bool hasInitializer = match(c, TOKEN_EQUAL);
+    Type* valueType = typeUnknown();
+    if (hasInitializer) {
+      expression(c);
+      valueType = typePop(c);
+    } else {
+      if (isConst) {
+        errorAt(c, name, "Const declarations require an initializer.");
+      }
+      emitByte(c, OP_NULL, noToken());
+      valueType = typeNull();
+    }
+    consume(c, TOKEN_SEMICOLON, "Expect ';' after variable declaration.");
+    int nameIdx = emitStringConstant(c, name);
+    emitByte(c, isConst ? OP_DEFINE_CONST : OP_DEFINE_VAR, name);
+    emitShort(c, (uint16_t)nameIdx, name);
+    if (typecheckEnabled(c)) {
+      if (hasType) {
+        if (hasInitializer && !typeAssignable(declaredType, valueType)) {
+          char expected[64];
+          char got[64];
+          typeToString(declaredType, expected, sizeof(expected));
+          typeToString(valueType, got, sizeof(got));
+          typeErrorAt(c, name, "Type mismatch. Expected %s but got %s.", expected, got);
+        }
+        typeDefine(c, name, declaredType, true);
+      } else {
+        Type* inferred = hasInitializer ? valueType : typeUnknown();
+        typeDefine(c, name, inferred, false);
+      }
+    }
+    if (isPrivate) {
+      emitPrivateName(c, nameIdx, name);
+    }
+    if (isExport) {
+      emitByte(c, OP_EXPORT, name);
+      emitShort(c, (uint16_t)nameIdx, name);
+    }
+    emitGc(c);
+    return;
+  }
+
+  if (match(c, TOKEN_COLON)) {
+    errorAt(c, previous(c), "Type annotations require a single identifier.");
+    parseType(c);
+  }
+
+  if (!match(c, TOKEN_EQUAL)) {
+    errorAt(c, pattern->token, "Pattern declarations require an initializer.");
     emitByte(c, OP_NULL, noToken());
-    valueType = typeNull();
+  } else {
+    expression(c);
+    typePop(c);
   }
   consume(c, TOKEN_SEMICOLON, "Expect ';' after variable declaration.");
-  int nameIdx = emitStringConstant(c, name);
-  emitByte(c, isConst ? OP_DEFINE_CONST : OP_DEFINE_VAR, name);
-  emitShort(c, (uint16_t)nameIdx, name);
-  if (typecheckEnabled(c)) {
-    if (hasType) {
-      if (hasInitializer && !typeAssignable(declaredType, valueType)) {
-        char expected[64];
-        char got[64];
-        typeToString(declaredType, expected, sizeof(expected));
-        typeToString(valueType, got, sizeof(got));
-        typeErrorAt(c, name, "Type mismatch. Expected %s but got %s.", expected, got);
+
+  int matchValue = emitTempNameConstant(c, "match");
+  emitDefineVarConstant(c, matchValue);
+
+  PatternBindingList bindings;
+  patternBindingListInit(&bindings);
+  emitPatternMatchOrThrow(c, matchValue, pattern, &bindings);
+  emitPatternBindings(c, matchValue, &bindings,
+                      isConst ? OP_DEFINE_CONST : OP_DEFINE_VAR);
+
+  if (isPrivate || isExport) {
+    for (int i = 0; i < bindings.count; i++) {
+      Token bind = bindings.entries[i].name;
+      int nameIdx = emitStringConstant(c, bind);
+      if (isPrivate) {
+        emitPrivateName(c, nameIdx, bind);
       }
-      typeDefine(c, name, declaredType, true);
-    } else {
-      Type* inferred = hasInitializer ? valueType : typeUnknown();
-      typeDefine(c, name, inferred, false);
+      if (isExport) {
+        emitByte(c, OP_EXPORT, bind);
+        emitShort(c, (uint16_t)nameIdx, bind);
+      }
     }
   }
-  if (isPrivate) {
-    emitPrivateName(c, nameIdx, name);
-  }
-  if (isExport) {
-    emitByte(c, OP_EXPORT, name);
-    emitShort(c, (uint16_t)nameIdx, name);
-  }
+
+  patternBindingListFree(&bindings);
+  freePattern(pattern);
   emitGc(c);
 }
 
@@ -3502,6 +4480,80 @@ static void blockStatement(Compiler* c) {
 static void ifStatement(Compiler* c) {
   Token keyword = previous(c);
   Token openParen = consume(c, TOKEN_LEFT_PAREN, "Expect '(' after 'if'.");
+  if (match(c, TOKEN_MATCH)) {
+    Pattern* pattern = parsePattern(c);
+    consume(c, TOKEN_EQUAL, "Expect '=' after match pattern.");
+    expression(c);
+    typePop(c);
+    int matchValue = emitTempNameConstant(c, "match");
+    emitDefineVarConstant(c, matchValue);
+
+    bool hasGuard = match(c, TOKEN_IF);
+    PatternBindingList bindings;
+    patternBindingListInit(&bindings);
+    emitPatternMatchValue(c, matchValue, pattern, &bindings);
+    int thenJump = emitJump(c, OP_JUMP_IF_FALSE, keyword);
+    emitByte(c, OP_POP, noToken());
+
+    emitByte(c, OP_BEGIN_SCOPE, noToken());
+    c->scopeDepth++;
+    typeCheckerEnterScope(c);
+    emitPatternBindings(c, matchValue, &bindings, OP_DEFINE_VAR);
+
+    int guardJump = -1;
+    if (hasGuard) {
+      expression(c);
+      Type* guardType = typePop(c);
+      if (typecheckEnabled(c) && guardType &&
+          guardType->kind != TYPE_BOOL &&
+          guardType->kind != TYPE_ANY &&
+          guardType->kind != TYPE_UNKNOWN) {
+        typeErrorAt(c, previous(c), "Guard expects bool.");
+      }
+      guardJump = emitJump(c, OP_JUMP_IF_FALSE, keyword);
+      emitByte(c, OP_POP, noToken());
+    }
+
+    consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after if condition.", openParen);
+    statement(c);
+
+    emitByte(c, OP_END_SCOPE, noToken());
+    c->scopeDepth--;
+    typeCheckerExitScope(c);
+    emitGc(c);
+
+    bool hasElse = match(c, TOKEN_ELSE);
+    int elseJump = -1;
+    if (hasElse) {
+      elseJump = emitJump(c, OP_JUMP, keyword);
+    }
+
+    int guardToElse = -1;
+    if (guardJump != -1) {
+      patchJump(c, guardJump, keyword);
+      emitByte(c, OP_POP, noToken());
+      emitByte(c, OP_END_SCOPE, noToken());
+      emitGc(c);
+      guardToElse = emitJump(c, OP_JUMP, keyword);
+    }
+
+    patchJump(c, thenJump, keyword);
+    emitByte(c, OP_POP, noToken());
+    if (guardToElse != -1) {
+      patchJump(c, guardToElse, keyword);
+    }
+
+    patternBindingListFree(&bindings);
+    freePattern(pattern);
+
+    if (hasElse) {
+      statement(c);
+      patchJump(c, elseJump, keyword);
+    }
+    emitGc(c);
+    return;
+  }
+
   expression(c);
   typePop(c);
   consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after if condition.", openParen);
@@ -3527,6 +4579,86 @@ static void whileStatement(Compiler* c) {
   Token keyword = previous(c);
   int loopStart = c->chunk->count;
   Token openParen = consume(c, TOKEN_LEFT_PAREN, "Expect '(' after 'while'.");
+  if (match(c, TOKEN_MATCH)) {
+    Pattern* pattern = parsePattern(c);
+    consume(c, TOKEN_EQUAL, "Expect '=' after match pattern.");
+    expression(c);
+    typePop(c);
+    int matchValue = emitTempNameConstant(c, "match");
+    emitDefineVarConstant(c, matchValue);
+
+    bool hasGuard = match(c, TOKEN_IF);
+    PatternBindingList bindings;
+    patternBindingListInit(&bindings);
+    emitPatternMatchValue(c, matchValue, pattern, &bindings);
+    int exitJump = emitJump(c, OP_JUMP_IF_FALSE, keyword);
+    emitByte(c, OP_POP, noToken());
+
+    int loopScopeDepth = c->scopeDepth;
+    emitByte(c, OP_BEGIN_SCOPE, noToken());
+    c->scopeDepth++;
+    typeCheckerEnterScope(c);
+    emitPatternBindings(c, matchValue, &bindings, OP_DEFINE_VAR);
+
+    int guardJump = -1;
+    if (hasGuard) {
+      expression(c);
+      Type* guardType = typePop(c);
+      if (typecheckEnabled(c) && guardType &&
+          guardType->kind != TYPE_BOOL &&
+          guardType->kind != TYPE_ANY &&
+          guardType->kind != TYPE_UNKNOWN) {
+        typeErrorAt(c, previous(c), "Guard expects bool.");
+      }
+      guardJump = emitJump(c, OP_JUMP_IF_FALSE, keyword);
+      emitByte(c, OP_POP, noToken());
+    }
+
+    consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after condition.", openParen);
+
+    BreakContext loop;
+    loop.type = BREAK_LOOP;
+    loop.enclosing = c->breakContext;
+    loop.scopeDepth = loopScopeDepth;
+    initJumpList(&loop.breaks);
+    initJumpList(&loop.continues);
+    c->breakContext = &loop;
+
+    statement(c);
+    emitByte(c, OP_END_SCOPE, noToken());
+    c->scopeDepth--;
+    typeCheckerExitScope(c);
+    int continueTarget = c->chunk->count;
+    emitGc(c);
+    emitLoop(c, loopStart, keyword);
+    c->breakContext = loop.enclosing;
+
+    int guardToExit = -1;
+    if (guardJump != -1) {
+      patchJump(c, guardJump, keyword);
+      emitByte(c, OP_POP, noToken());
+      emitByte(c, OP_END_SCOPE, noToken());
+      emitGc(c);
+      guardToExit = emitJump(c, OP_JUMP, keyword);
+    }
+
+    patchJump(c, exitJump, keyword);
+    emitByte(c, OP_POP, noToken());
+    emitGc(c);
+    int loopEnd = c->chunk->count;
+    if (guardToExit != -1) {
+      patchJump(c, guardToExit, keyword);
+    }
+    patchJumpList(c, &loop.breaks, loopEnd, keyword);
+    patchJumpList(c, &loop.continues, continueTarget, keyword);
+    freeJumpList(&loop.breaks);
+    freeJumpList(&loop.continues);
+
+    patternBindingListFree(&bindings);
+    freePattern(pattern);
+    return;
+  }
+
   expression(c);
   typePop(c);
   consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after condition.", openParen);
@@ -3790,7 +4922,7 @@ static void switchStatement(Compiler* c) {
   EnumInfo* matchEnum = NULL;
   bool* variantUsed = NULL;
   int variantUsedCount = 0;
-  bool sawPattern = false;
+  bool sawEnumPattern = false;
   bool hasDefault = false;
 
   while (!check(c, TOKEN_RIGHT_BRACE) && !isAtEnd(c)) {
@@ -3799,119 +4931,75 @@ static void switchStatement(Compiler* c) {
         patchJump(c, previousJump, keyword);
         emitByte(c, OP_POP, noToken());
       }
-      emitGetVarConstant(c, switchValue);
-      bool isPattern = false;
-      Token enumToken;
-      Token variantToken;
-      int bindCount = 0;
-      Token bindTokens[ERK_MAX_ARGS];
-      memset(&enumToken, 0, sizeof(Token));
-      memset(&variantToken, 0, sizeof(Token));
-      if (isMatch && check(c, TOKEN_IDENTIFIER) && checkNext(c, TOKEN_DOT)) {
-        int lookahead = c->current + 2;
-        if (lookahead < c->tokens->count) {
-          Token variantLook = c->tokens->tokens[lookahead];
-          if (variantLook.type == TOKEN_IDENTIFIER) {
-            int afterIndex = lookahead + 1;
-            if (afterIndex < c->tokens->count) {
-              ErkaoTokenType afterType = c->tokens->tokens[afterIndex].type;
-              if (afterType == TOKEN_LEFT_PAREN || afterType == TOKEN_COLON) {
-                isPattern = true;
+      int guardJump = -1;
+      bool guardScope = false;
+      if (isMatch) {
+        Pattern* pattern = parsePattern(c);
+        bool hasGuard = false;
+        PatternBindingList bindings;
+        patternBindingListInit(&bindings);
+        if (match(c, TOKEN_IF)) {
+          hasGuard = true;
+        }
+
+        if (pattern && pattern->kind == PATTERN_ENUM) {
+          EnumInfo* info = findEnumInfo(c, pattern->as.enumPattern.enumToken);
+          if (info && info->isAdt) {
+            if (!matchEnum) {
+              matchEnum = info;
+              variantUsedCount = info->variantCount;
+              if (variantUsedCount > 0) {
+                variantUsed = (bool*)calloc((size_t)variantUsedCount, sizeof(bool));
+                if (!variantUsed) {
+                  fprintf(stderr, "Out of memory.\n");
+                  exit(1);
+                }
+              }
+            } else if (matchEnum != info) {
+              errorAt(c, pattern->as.enumPattern.enumToken,
+                      "Match patterns must use a single enum.");
+            }
+
+            EnumVariantInfo* variantInfo =
+                findEnumVariant(info, pattern->as.enumPattern.variantToken);
+            if (variantInfo && variantInfo->arity == pattern->as.enumPattern.argCount) {
+              int variantIndex = enumVariantIndex(matchEnum,
+                                                  pattern->as.enumPattern.variantToken);
+              if (variantIndex >= 0 && variantIndex < variantUsedCount) {
+                variantUsed[variantIndex] = true;
               }
             }
+            sawEnumPattern = true;
           }
         }
-      }
 
-      if (isPattern) {
-        enumToken = advance(c);
-        advance(c);
-        variantToken = consume(c, TOKEN_IDENTIFIER, "Expect enum variant name.");
-        EnumInfo* info = findEnumInfo(c, enumToken);
-        if (!info) {
-          errorAt(c, enumToken, "Unknown enum in match pattern.");
-        } else if (!info->isAdt) {
-          errorAt(c, enumToken, "Enum does not support payload patterns.");
-        }
-        if (!matchEnum && info) {
-          matchEnum = info;
-          variantUsedCount = info->variantCount;
-          if (variantUsedCount > 0) {
-            variantUsed = (bool*)calloc((size_t)variantUsedCount, sizeof(bool));
-            if (!variantUsed) {
-              fprintf(stderr, "Out of memory.\n");
-              exit(1);
-            }
-          }
-        } else if (info && matchEnum && info != matchEnum) {
-          errorAt(c, enumToken, "Match patterns must use a single enum.");
-        }
-
-        Token patternParen;
-        memset(&patternParen, 0, sizeof(Token));
-        if (match(c, TOKEN_LEFT_PAREN)) {
-          patternParen = previous(c);
-          if (!check(c, TOKEN_RIGHT_PAREN)) {
-            do {
-              if (bindCount >= ERK_MAX_ARGS) {
-                errorAtCurrent(c, "Too many pattern bindings.");
-              }
-              bindTokens[bindCount++] =
-                  consume(c, TOKEN_IDENTIFIER, "Expect binding name.");
-            } while (match(c, TOKEN_COMMA));
-          }
-          consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after match pattern.", patternParen);
-        }
-
-        EnumVariantInfo* variantInfo = info ? findEnumVariant(info, variantToken) : NULL;
-        if (!variantInfo && info) {
-          errorAt(c, variantToken, "Unknown enum variant.");
-        } else if (variantInfo && variantInfo->arity != bindCount) {
-          char patternMessage[96];
-          snprintf(patternMessage, sizeof(patternMessage),
-                   "Pattern expects %d bindings but got %d.",
-                   variantInfo->arity, bindCount);
-          errorAt(c, variantToken, patternMessage);
-        }
-
-        consume(c, TOKEN_COLON, "Expect ':' after case value.");
-        int enumIdx = emitStringConstant(c, enumToken);
-        int variantIdx = emitStringConstant(c, variantToken);
-        emitByte(c, OP_MATCH_ENUM, keyword);
-        emitShort(c, (uint16_t)enumIdx, keyword);
-        emitShort(c, (uint16_t)variantIdx, keyword);
+        emitPatternMatchValue(c, switchValue, pattern, &bindings);
         previousJump = emitJump(c, OP_JUMP_IF_FALSE, keyword);
         emitByte(c, OP_POP, noToken());
-
-        if (variantUsed && variantInfo) {
-          int variantIndex = enumVariantIndex(matchEnum, variantToken);
-          if (variantIndex >= 0 && variantIndex < variantUsedCount) {
-            variantUsed[variantIndex] = true;
-          }
+        if (hasGuard) {
+          emitByte(c, OP_BEGIN_SCOPE, noToken());
+          c->scopeDepth++;
+          typeCheckerEnterScope(c);
+          guardScope = true;
         }
-        sawPattern = true;
-
-        if (bindCount > 0) {
-          ObjString* valuesKey = copyStringWithLength(c->vm, "_values", 7);
-          for (int i = 0; i < bindCount; i++) {
-            Token bind = bindTokens[i];
-            if (bind.length == 1 && bind.start[0] == '_') {
-              continue;
-            }
-            emitGetVarConstant(c, switchValue);
-            emitConstant(c, OBJ_VAL(valuesKey), bind);
-            emitByte(c, OP_GET_INDEX, bind);
-            emitConstant(c, NUMBER_VAL((double)i), bind);
-            emitByte(c, OP_GET_INDEX, bind);
-            int nameIdx = emitStringConstant(c, bind);
-            emitByte(c, OP_DEFINE_VAR, bind);
-            emitShort(c, (uint16_t)nameIdx, bind);
-            if (typecheckEnabled(c)) {
-              typeDefine(c, bind, typeAny(), true);
-            }
+        emitPatternBindings(c, switchValue, &bindings, OP_DEFINE_VAR);
+        if (hasGuard) {
+          expression(c);
+          Type* guardType = typePop(c);
+          if (typecheckEnabled(c) && guardType &&
+              guardType->kind != TYPE_BOOL &&
+              guardType->kind != TYPE_ANY &&
+              guardType->kind != TYPE_UNKNOWN) {
+            typeErrorAt(c, previous(c), "Guard expects bool.");
           }
+          guardJump = emitJump(c, OP_JUMP_IF_FALSE, keyword);
+          emitByte(c, OP_POP, noToken());
         }
+        consume(c, TOKEN_COLON, "Expect ':' after case pattern.");
+        patternBindingListFree(&bindings);
+        freePattern(pattern);
       } else {
+        emitGetVarConstant(c, switchValue);
         expression(c);
         Type* caseType = typePop(c);
         if (switchType && !typeIsAny(switchType) && !typeAssignable(switchType, caseType)) {
@@ -3931,8 +5019,22 @@ static void switchStatement(Compiler* c) {
              !check(c, TOKEN_RIGHT_BRACE) && !isAtEnd(c)) {
         declaration(c);
       }
+      if (guardScope) {
+        emitByte(c, OP_END_SCOPE, noToken());
+        c->scopeDepth--;
+        typeCheckerExitScope(c);
+        emitGc(c);
+      }
       int endJump = emitJump(c, OP_JUMP, keyword);
       writeJumpList(&endJumps, endJump);
+      if (guardJump != -1) {
+        patchJump(c, guardJump, keyword);
+        emitByte(c, OP_POP, noToken());
+        if (guardScope) {
+          emitByte(c, OP_END_SCOPE, noToken());
+          emitGc(c);
+        }
+      }
     } else if (match(c, TOKEN_DEFAULT)) {
       hasDefault = true;
       if (previousJump != -1) {
@@ -3952,7 +5054,7 @@ static void switchStatement(Compiler* c) {
     }
   }
 
-  if (isMatch && sawPattern && matchEnum && !hasDefault) {
+  if (isMatch && sawEnumPattern && matchEnum && !hasDefault) {
     bool missing = false;
     for (int i = 0; i < variantUsedCount; i++) {
       if (!variantUsed[i]) {
@@ -4928,13 +6030,13 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
 
   if (!check(c, TOKEN_RIGHT_PAREN)) {
     do {
-      if (!check(c, TOKEN_IDENTIFIER)) {
-        errorAtCurrent(c, "Expect parameter name.");
-        break;
-      }
-      advance(c);
+      Pattern* paramPattern = parsePattern(c);
+      bool allowType = paramPattern->kind == PATTERN_BINDING;
       arity++;
       if (match(c, TOKEN_COLON)) {
+        if (!allowType) {
+          errorAt(c, previous(c), "Type annotations require a single identifier.");
+        }
         parseType(c);
       }
       if (match(c, TOKEN_EQUAL)) {
@@ -4950,6 +6052,7 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
           advance(c);
         }
       }
+      freePattern(paramPattern);
     } while (match(c, TOKEN_COMMA));
   }
   consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after parameters.", openParen);
@@ -4961,6 +6064,8 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
   Token* paramTokens = NULL;
   Type** paramTypes = NULL;
   bool* paramHasType = NULL;
+  Pattern** paramPatterns = NULL;
+  char** paramNameStorage = NULL;
   int* defaultStarts = NULL;
   int* defaultEnds = NULL;
   if (arity > 0) {
@@ -4968,10 +6073,12 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
     paramTokens = (Token*)malloc(sizeof(Token) * (size_t)arity);
     paramTypes = (Type**)malloc(sizeof(Type*) * (size_t)arity);
     paramHasType = (bool*)malloc(sizeof(bool) * (size_t)arity);
+    paramPatterns = (Pattern**)malloc(sizeof(Pattern*) * (size_t)arity);
+    paramNameStorage = (char**)malloc(sizeof(char*) * (size_t)arity);
     defaultStarts = (int*)malloc(sizeof(int) * (size_t)arity);
     defaultEnds = (int*)malloc(sizeof(int) * (size_t)arity);
     if (!params || !paramTokens || !paramTypes || !paramHasType ||
-        !defaultStarts || !defaultEnds) {
+        !paramPatterns || !paramNameStorage || !defaultStarts || !defaultEnds) {
       fprintf(stderr, "Out of memory.\n");
       exit(1);
     }
@@ -4980,6 +6087,8 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
       defaultEnds[i] = -1;
       paramTypes[i] = typeUnknown();
       paramHasType[i] = false;
+      paramPatterns[i] = NULL;
+      paramNameStorage[i] = NULL;
     }
   }
 
@@ -4988,12 +6097,39 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
   if (!check(c, TOKEN_RIGHT_PAREN)) {
     do {
       if (paramIdx >= arity) break;
-      Token paramName = consume(c, TOKEN_IDENTIFIER, "Expect parameter name.");
+      Pattern* paramPattern = parsePattern(c);
+      bool allowType = paramPattern->kind == PATTERN_BINDING;
+      Token paramName = paramPattern->token;
+      if (paramPattern->kind == PATTERN_BINDING) {
+        freePattern(paramPattern);
+        paramPattern = NULL;
+      } else {
+        char buffer[64];
+        int length = snprintf(buffer, sizeof(buffer), "__arg%d", paramIdx);
+        if (length < 0) length = 0;
+        if (length >= (int)sizeof(buffer)) length = (int)sizeof(buffer) - 1;
+        char* nameCopy = (char*)malloc((size_t)length + 1);
+        if (!nameCopy) {
+          fprintf(stderr, "Out of memory.\n");
+          exit(1);
+        }
+        memcpy(nameCopy, buffer, (size_t)length);
+        nameCopy[length] = '\0';
+        paramNameStorage[paramIdx] = nameCopy;
+        paramName.start = nameCopy;
+        paramName.length = length;
+        paramPatterns[paramIdx] = paramPattern;
+      }
       params[paramIdx] = stringFromToken(c->vm, paramName);
       paramTokens[paramIdx] = paramName;
       if (match(c, TOKEN_COLON)) {
-        paramTypes[paramIdx] = parseType(c);
-        paramHasType[paramIdx] = true;
+        if (!allowType) {
+          errorAt(c, previous(c), "Type annotations require a single identifier.");
+          parseType(c);
+        } else {
+          paramTypes[paramIdx] = parseType(c);
+          paramHasType[paramIdx] = true;
+        }
       }
       if (match(c, TOKEN_EQUAL)) {
         if (!sawDefault) minArity = paramIdx;
@@ -5127,6 +6263,21 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
     emitGc(&fnCompiler);
   }
 
+  if (paramPatterns) {
+    for (int i = 0; i < arity; i++) {
+      Pattern* pattern = paramPatterns[i];
+      if (!pattern) continue;
+      PatternBindingList bindings;
+      patternBindingListInit(&bindings);
+      int paramNameIdx = emitStringConstant(&fnCompiler, paramTokens[i]);
+      emitPatternMatchOrThrow(&fnCompiler, paramNameIdx, pattern, &bindings);
+      emitPatternBindings(&fnCompiler, paramNameIdx, &bindings, OP_DEFINE_VAR);
+      patternBindingListFree(&bindings);
+      freePattern(pattern);
+      paramPatterns[i] = NULL;
+    }
+  }
+
   fnCompiler.current = bodyStart;
   while (!check(&fnCompiler, TOKEN_RIGHT_BRACE) && !isAtEnd(&fnCompiler)) {
     declaration(&fnCompiler);
@@ -5138,6 +6289,20 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
 
   c->current = fnCompiler.current;
 
+  if (paramPatterns) {
+    for (int i = 0; i < arity; i++) {
+      if (paramPatterns[i]) {
+        freePattern(paramPatterns[i]);
+      }
+    }
+    free(paramPatterns);
+  }
+  if (paramNameStorage) {
+    for (int i = 0; i < arity; i++) {
+      free(paramNameStorage[i]);
+    }
+    free(paramNameStorage);
+  }
   free(paramTokens);
   free(paramTypes);
   free(paramHasType);
