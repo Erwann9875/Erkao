@@ -1,0 +1,151 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install deps (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev libsdl2-mixer-dev patchelf
+
+      - name: Install deps (macOS)
+        if: runner.os == 'macOS'
+        run: brew install curl sdl2 sdl2_image sdl2_ttf sdl2_mixer
+
+      - name: Install SDL2 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          .\vcpkg\bootstrap-vcpkg.bat
+          .\vcpkg\vcpkg.exe install sdl2:x64-windows sdl2-image:x64-windows sdl2-ttf:x64-windows sdl2-mixer:x64-windows
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}\vcpkg\scripts\buildsystems\vcpkg.cmake
+
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Configure (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$(brew --prefix curl);$(brew --prefix sdl2);$(brew --prefix sdl2_image);$(brew --prefix sdl2_ttf);$(brew --prefix sdl2_mixer)"
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: cmake --build build --config Release
+
+      - name: Build (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: cmake --build build
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $exePath = "build\\Release\\erkao.exe"
+          if (-not (Test-Path $exePath)) {
+            $exePath = "build\\erkao.exe"
+          }
+          Copy-Item $exePath dist\erkao.exe
+          $applocal = "${{ github.workspace }}\\vcpkg\\scripts\\buildsystems\\msbuild\\applocal.ps1"
+          if (Test-Path $applocal) {
+            & $applocal -targetBinary (Resolve-Path dist\erkao.exe) -installedDir "${{ github.workspace }}\\vcpkg\\installed\\x64-windows"
+          }
+          Compress-Archive -Path dist\* -DestinationPath dist\erkao-windows-x64.zip -Force
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p dist/lib
+          cp build/erkao dist/erkao
+          chmod +x dist/erkao
+          ldd build/erkao | awk '/libSDL2/ {print $3}' | sort -u | while read -r lib; do
+            if [ -n "$lib" ] && [ -f "$lib" ]; then
+              cp -L "$lib" dist/lib/
+            fi
+          done
+          patchelf --set-rpath '$ORIGIN/lib' dist/erkao
+          tar -czf dist/erkao-linux-x64.tar.gz -C dist erkao lib
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          mkdir -p dist/lib
+          cp build/erkao dist/erkao
+          chmod +x dist/erkao
+          libs=$(otool -L build/erkao | awk '/libSDL2/ {print $1}' | sort -u)
+          for lib in $libs; do
+            base=$(basename "$lib")
+            if [ -f "$lib" ]; then
+              cp -L "$lib" "dist/lib/$base"
+              install_name_tool -id "@rpath/$base" "dist/lib/$base"
+            fi
+          done
+          install_name_tool -add_rpath "@executable_path/lib" dist/erkao
+          for lib in $libs; do
+            base=$(basename "$lib")
+            install_name_tool -change "$lib" "@rpath/$base" dist/erkao
+          done
+          for lib in $libs; do
+            base=$(basename "$lib")
+            for dep in $libs; do
+              depbase=$(basename "$dep")
+              if [ "$base" != "$depbase" ]; then
+                install_name_tool -change "$dep" "@rpath/$depbase" "dist/lib/$base" || true
+              fi
+            done
+          done
+          tar -czf dist/erkao-macos-x64.tar.gz -C dist erkao lib
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: erkao-${{ runner.os }}
+          path: dist/erkao-*
+          if-no-files-found: error
+
+  release:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Create release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          shopt -s globstar
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" dist/**/erkao-* --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" dist/**/erkao-* --generate-notes
+          fi
