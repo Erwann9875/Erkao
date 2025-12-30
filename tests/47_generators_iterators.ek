@@ -1,0 +1,39 @@
+fun gen() {
+  yield 1;
+  yield 2;
+}
+print("yield", gen());
+
+fun genReturn() {
+  yield 3;
+  return 99;
+}
+print("yield_return", genReturn());
+
+let sum = 0;
+foreach (n in 1..4) {
+  sum = sum + n;
+}
+print("range", sum);
+
+let seq = {
+  iter: fun() {
+    let state = { i: 0 };
+    return {
+      next: fun() {
+        if (state["i"] >= 3) {
+          return { done: true };
+        }
+        let v = state["i"];
+        state["i"] = state["i"] + 1;
+        return { done: false, value: v, key: v };
+      }
+    };
+  }
+};
+
+let values = [];
+foreach (v in seq) {
+  push(values, v);
+}
+print("iter", values);

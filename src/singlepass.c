@@ -595,6 +595,7 @@ static const KeywordEntry keywordEntries[] = {
   {TOKEN_INTERFACE, "interface"},
   {TOKEN_LET, "let"},
   {TOKEN_MATCH, "match"},
+  {TOKEN_TYPE, "type"},
   {TOKEN_NULL, "null"},
   {TOKEN_OR, "or"},
   {TOKEN_PRIVATE, "private"},
@@ -605,6 +606,7 @@ static const KeywordEntry keywordEntries[] = {
   {TOKEN_SWITCH, "switch"},
   {TOKEN_THIS, "this"},
   {TOKEN_TRUE, "true"},
+  {TOKEN_YIELD, "yield"},
   {TOKEN_WHILE, "while"},
   {TOKEN_ERROR, NULL}
 };
@@ -626,6 +628,8 @@ static const char* tokenDescription(ErkaoTokenType type) {
     case TOKEN_RIGHT_BRACKET: return "']'";
     case TOKEN_COMMA: return "','";
     case TOKEN_DOT: return "'.'";
+    case TOKEN_DOT_DOT: return "'..'";
+    case TOKEN_ELLIPSIS: return "'...'";
     case TOKEN_QUESTION: return "'?'";
     case TOKEN_QUESTION_DOT: return "'?.'";
     case TOKEN_MINUS: return "'-'";
@@ -635,6 +639,7 @@ static const char* tokenDescription(ErkaoTokenType type) {
     case TOKEN_STAR: return "'*'";
     case TOKEN_COLON: return "':'";
     case TOKEN_CARET: return "'^'";
+    case TOKEN_PIPE: return "'|'";
     case TOKEN_BANG: return "'!'";
     case TOKEN_BANG_EQUAL: return "'!='";
     case TOKEN_EQUAL: return "'='";
@@ -672,6 +677,7 @@ static const char* tokenDescription(ErkaoTokenType type) {
     case TOKEN_INTERFACE: return "'interface'";
     case TOKEN_LET: return "'let'";
     case TOKEN_MATCH: return "'match'";
+    case TOKEN_TYPE: return "'type'";
     case TOKEN_NULL: return "'null'";
     case TOKEN_OR: return "'or'";
     case TOKEN_PRIVATE: return "'private'";
@@ -682,6 +688,7 @@ static const char* tokenDescription(ErkaoTokenType type) {
     case TOKEN_SWITCH: return "'switch'";
     case TOKEN_THIS: return "'this'";
     case TOKEN_TRUE: return "'true'";
+    case TOKEN_YIELD: return "'yield'";
     case TOKEN_WHILE: return "'while'";
     case TOKEN_EOF: return "end of file";
     case TOKEN_ERROR: return "invalid token";
@@ -872,9 +879,10 @@ static void synchronize(Compiler* c) {
     switch (peek(c).type) {
       case TOKEN_CLASS: case TOKEN_FUN: case TOKEN_LET: case TOKEN_CONST:
       case TOKEN_ENUM: case TOKEN_EXPORT: case TOKEN_IMPORT: case TOKEN_FROM:
+      case TOKEN_TYPE:
       case TOKEN_IF: case TOKEN_WHILE: case TOKEN_FOR: case TOKEN_FOREACH:
       case TOKEN_SWITCH: case TOKEN_MATCH: case TOKEN_RETURN:
-      case TOKEN_TRY: case TOKEN_THROW: case TOKEN_CATCH:
+      case TOKEN_TRY: case TOKEN_THROW: case TOKEN_CATCH: case TOKEN_YIELD:
       case TOKEN_BREAK: case TOKEN_CONTINUE:
         return;
       default:
@@ -1029,6 +1037,8 @@ typedef struct {
   Pattern** items;
   int count;
   int capacity;
+  bool hasRest;
+  Token restName;
 } PatternList;
 
 typedef struct {
@@ -1041,6 +1051,8 @@ typedef struct {
   PatternMapEntry* entries;
   int count;
   int capacity;
+  bool hasRest;
+  Token restName;
 } PatternMap;
 
 typedef struct {
@@ -1079,10 +1091,25 @@ typedef struct {
   int capacity;
 } PatternPath;
 
+typedef enum {
+  PATTERN_BIND_PATH,
+  PATTERN_BIND_ARRAY_REST,
+  PATTERN_BIND_MAP_REST
+} PatternBindingKind;
+
+typedef struct {
+  Token key;
+  bool keyIsString;
+} PatternRestKey;
+
 typedef struct {
   Token name;
   PatternPathStep* steps;
   int stepCount;
+  PatternBindingKind kind;
+  int restIndex;
+  PatternRestKey* restKeys;
+  int restKeyCount;
 } PatternBinding;
 
 typedef struct {
@@ -1115,6 +1142,7 @@ typedef struct {
     TYPE_MAP,
     TYPE_NAMED,
     TYPE_GENERIC,
+    TYPE_UNION,
     TYPE_FUNCTION
   } TypeKind;
 
@@ -1136,6 +1164,8 @@ typedef struct {
     int typeParamCount;
     struct Type** typeArgs;
     int typeArgCount;
+    struct Type** unionTypes;
+    int unionCount;
     bool nullable;
   } Type;
 
@@ -1145,6 +1175,12 @@ typedef struct {
     bool explicitType;
     int depth;
   } TypeEntry;
+
+  typedef struct {
+    ObjString* name;
+    Type* type;
+    int depth;
+  } TypeAlias;
 
   typedef struct {
     ObjString* name;
@@ -1197,6 +1233,9 @@ typedef struct {
     TypeEntry* entries;
     int count;
     int capacity;
+    TypeAlias* aliases;
+    int aliasCount;
+    int aliasCapacity;
     Type** stack;
     int stackCount;
     int stackCapacity;
@@ -1210,23 +1249,24 @@ typedef struct {
   };
 
   static Type TYPE_ANY_VALUE = { TYPE_ANY, NULL, NULL, NULL, NULL, NULL, 0, NULL,
-                                 NULL, 0, NULL, 0, false };
+                                 NULL, 0, NULL, 0, NULL, 0, false };
   static Type TYPE_UNKNOWN_VALUE = { TYPE_UNKNOWN, NULL, NULL, NULL, NULL, NULL, 0, NULL,
-                                     NULL, 0, NULL, 0, false };
+                                     NULL, 0, NULL, 0, NULL, 0, false };
   static Type TYPE_NUMBER_VALUE = { TYPE_NUMBER, NULL, NULL, NULL, NULL, NULL, 0, NULL,
-                                    NULL, 0, NULL, 0, false };
+                                    NULL, 0, NULL, 0, NULL, 0, false };
   static Type TYPE_STRING_VALUE = { TYPE_STRING, NULL, NULL, NULL, NULL, NULL, 0, NULL,
-                                    NULL, 0, NULL, 0, false };
+                                    NULL, 0, NULL, 0, NULL, 0, false };
   static Type TYPE_BOOL_VALUE = { TYPE_BOOL, NULL, NULL, NULL, NULL, NULL, 0, NULL,
-                                  NULL, 0, NULL, 0, false };
+                                  NULL, 0, NULL, 0, NULL, 0, false };
   static Type TYPE_NULL_VALUE = { TYPE_NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL,
-                                  NULL, 0, NULL, 0, false };
+                                  NULL, 0, NULL, 0, NULL, 0, false };
   static TypeRegistry* gTypeRegistry = NULL;
 
 static Type* typeNamed(TypeChecker* tc, ObjString* name);
 static Type* typeGeneric(TypeChecker* tc, ObjString* name);
 static Type* typeArray(TypeChecker* tc, Type* elem);
 static Type* typeMap(TypeChecker* tc, Type* key, Type* value);
+static Type* typeUnion(TypeChecker* tc, Type* a, Type* b);
 static Type* typeFunction(TypeChecker* tc, Type** params, int paramCount, Type* returnType);
 static TypeParam* parseTypeParams(Compiler* c, int* outCount);
 static void typeToString(Type* type, char* buffer, size_t size);
@@ -1273,6 +1313,9 @@ static Type* typeAlloc(TypeChecker* tc, TypeKind kind) {
     tc->entries = NULL;
     tc->count = 0;
     tc->capacity = 0;
+    tc->aliases = NULL;
+    tc->aliasCount = 0;
+    tc->aliasCapacity = 0;
     tc->stack = NULL;
     tc->stackCount = 0;
     tc->stackCapacity = 0;
@@ -1298,11 +1341,15 @@ static Type* typeAlloc(TypeChecker* tc, TypeKind kind) {
         if (tc->allocated[i]->typeParams) {
           free(tc->allocated[i]->typeParams);
         }
+        if (tc->allocated[i]->unionTypes) {
+          free(tc->allocated[i]->unionTypes);
+        }
         free(tc->allocated[i]);
       }
     }
     FREE_ARRAY(Type*, tc->allocated, tc->allocatedCapacity);
     FREE_ARRAY(TypeEntry, tc->entries, tc->capacity);
+    FREE_ARRAY(TypeAlias, tc->aliases, tc->aliasCapacity);
     FREE_ARRAY(Type*, tc->stack, tc->stackCapacity);
     FREE_ARRAY(TypeParam, tc->typeParams, tc->typeParamCapacity);
     tc->allocated = NULL;
@@ -1311,6 +1358,9 @@ static Type* typeAlloc(TypeChecker* tc, TypeKind kind) {
     tc->entries = NULL;
     tc->count = 0;
     tc->capacity = 0;
+    tc->aliases = NULL;
+    tc->aliasCount = 0;
+    tc->aliasCapacity = 0;
     tc->stack = NULL;
     tc->stackCount = 0;
     tc->stackCapacity = 0;
@@ -1507,7 +1557,15 @@ static bool typeIsAny(Type* type) {
 
 static bool typeIsNullable(Type* type) {
   if (!type) return false;
-  return type->kind == TYPE_NULL || type->nullable;
+  if (type->kind == TYPE_NULL) return true;
+  if (type->kind == TYPE_UNION) {
+    if (type->nullable) return true;
+    for (int i = 0; i < type->unionCount; i++) {
+      if (typeIsNullable(type->unionTypes[i])) return true;
+    }
+    return false;
+  }
+  return type->nullable;
 }
 
 static Type* typeClone(TypeChecker* tc, Type* src) {
@@ -1573,6 +1631,22 @@ static Type* typeClone(TypeChecker* tc, Type* src) {
       type->nullable = src->nullable;
       return type;
     }
+    case TYPE_UNION: {
+      Type* type = typeAlloc(tc, TYPE_UNION);
+      type->unionCount = src->unionCount;
+      type->nullable = src->nullable;
+      if (src->unionCount > 0 && src->unionTypes) {
+        type->unionTypes = (Type**)malloc(sizeof(Type*) * (size_t)src->unionCount);
+        if (!type->unionTypes) {
+          fprintf(stderr, "Out of memory.\n");
+          exit(1);
+        }
+        for (int i = 0; i < src->unionCount; i++) {
+          type->unionTypes[i] = typeClone(tc, src->unionTypes[i]);
+        }
+      }
+      return type;
+    }
       case TYPE_FUNCTION: {
         Type* type = typeAlloc(tc, TYPE_FUNCTION);
         type->paramCount = src->paramCount;
@@ -1610,6 +1684,12 @@ static Type* typeMakeNullable(TypeChecker* tc, Type* type) {
   if (type->kind == TYPE_ANY) return typeAny();
   if (type->kind == TYPE_UNKNOWN) return typeUnknown();
   if (type->kind == TYPE_NULL) return typeNull();
+  if (type->kind == TYPE_UNION) {
+    if (typeIsNullable(type)) return type;
+    Type* copy = typeClone(tc, type);
+    if (copy) copy->nullable = true;
+    return copy;
+  }
   if (type->nullable) return type;
   if (!tc) return type;
   if (type->kind == TYPE_NUMBER || type->kind == TYPE_STRING || type->kind == TYPE_BOOL) {
@@ -1656,6 +1736,20 @@ static bool typeEquals(Type* a, Type* b) {
       return typeEquals(a->elem, b->elem);
     case TYPE_MAP:
       return typeEquals(a->key, b->key) && typeEquals(a->value, b->value);
+    case TYPE_UNION:
+      if (a->nullable != b->nullable) return false;
+      if (a->unionCount != b->unionCount) return false;
+      for (int i = 0; i < a->unionCount; i++) {
+        bool found = false;
+        for (int j = 0; j < b->unionCount; j++) {
+          if (typeEquals(a->unionTypes[i], b->unionTypes[j])) {
+            found = true;
+            break;
+          }
+        }
+        if (!found) return false;
+      }
+      return true;
     case TYPE_FUNCTION:
       if (a->paramCount != b->paramCount) return false;
       for (int i = 0; i < a->paramCount; i++) {
@@ -1670,8 +1764,26 @@ static bool typeEquals(Type* a, Type* b) {
     if (typeIsAny(dst) || typeIsAny(src)) return true;
     if (!dst || !src) return true;
     if (dst->kind == TYPE_NULL) return src->kind == TYPE_NULL;
-    if (src->kind == TYPE_NULL) return dst->nullable;
+    if (src->kind == TYPE_NULL) return typeIsNullable(dst);
     if (typeIsNullable(src) && !typeIsNullable(dst)) return false;
+    if (dst->kind == TYPE_UNION) {
+      if (src->kind == TYPE_UNION) {
+        for (int i = 0; i < src->unionCount; i++) {
+          if (!typeAssignable(dst, src->unionTypes[i])) return false;
+        }
+        return true;
+      }
+      for (int i = 0; i < dst->unionCount; i++) {
+        if (typeAssignable(dst->unionTypes[i], src)) return true;
+      }
+      return false;
+    }
+    if (src->kind == TYPE_UNION) {
+      for (int i = 0; i < src->unionCount; i++) {
+        if (!typeAssignable(dst, src->unionTypes[i])) return false;
+      }
+      return true;
+    }
     if (dst->kind == TYPE_NAMED && src->kind == TYPE_NAMED) {
       if (typeNamesEqual(dst->name, src->name)) {
         if (dst->typeArgCount == 0 || src->typeArgCount == 0) return true;
@@ -1704,6 +1816,8 @@ static bool typeEquals(Type* a, Type* b) {
         return typeAssignable(dst->elem, src->elem);
       case TYPE_MAP:
         return typeAssignable(dst->key, src->key) && typeAssignable(dst->value, src->value);
+      case TYPE_UNION:
+        return false;
       case TYPE_FUNCTION:
       if (dst->paramCount != src->paramCount) return false;
       for (int i = 0; i < dst->paramCount; i++) {
@@ -1752,6 +1866,22 @@ static bool typeEquals(Type* a, Type* b) {
         return true;
       }
       return typeAssignable(binding->bound, actual);
+    }
+    if (pattern->kind == TYPE_UNION) {
+      for (int i = 0; i < pattern->unionCount; i++) {
+        if (typeUnify(c, pattern->unionTypes[i], actual, bindings, bindingCount, token)) {
+          return true;
+        }
+      }
+      return false;
+    }
+    if (actual->kind == TYPE_UNION) {
+      for (int i = 0; i < actual->unionCount; i++) {
+        if (!typeUnify(c, pattern, actual->unionTypes[i], bindings, bindingCount, token)) {
+          return false;
+        }
+      }
+      return true;
     }
     if (pattern->kind == TYPE_ARRAY) {
       if (actual->kind != TYPE_ARRAY && !typeIsAny(actual)) return false;
@@ -1802,6 +1932,22 @@ static bool typeEquals(Type* a, Type* b) {
       TypeBinding* binding = typeBindingFind(bindings, bindingCount, type->name);
       if (binding && binding->bound) return binding->bound;
       return typeAny();
+    }
+    if (type->kind == TYPE_UNION) {
+      Type* result = typeAlloc(tc, TYPE_UNION);
+      result->unionCount = type->unionCount;
+      result->nullable = type->nullable;
+      if (type->unionCount > 0 && type->unionTypes) {
+        result->unionTypes = (Type**)malloc(sizeof(Type*) * (size_t)type->unionCount);
+        if (!result->unionTypes) {
+          fprintf(stderr, "Out of memory.\n");
+          exit(1);
+        }
+        for (int i = 0; i < type->unionCount; i++) {
+          result->unionTypes[i] = typeSubstitute(tc, type->unionTypes[i], bindings, bindingCount);
+        }
+      }
+      return result;
     }
     if (type->kind == TYPE_ARRAY) {
       Type* elem = typeSubstitute(tc, type->elem, bindings, bindingCount);
@@ -1932,6 +2078,19 @@ static void typeToString(Type* type, char* buffer, size_t size) {
       }
       return;
     }
+    case TYPE_UNION: {
+      size_t used = 0;
+      for (int i = 0; i < type->unionCount && used < size; i++) {
+        char part[64];
+        typeToString(type->unionTypes[i], part, sizeof(part));
+        used += (size_t)snprintf(buffer + used, size - used, "%s%s",
+                                 i > 0 ? " | " : "", part);
+      }
+      if (type->nullable && used < size) {
+        (void)snprintf(buffer + used, size - used, "?");
+      }
+      return;
+    }
     case TYPE_FUNCTION:
       snprintf(buffer, size, type->nullable ? "fun?" : "fun");
       return;
@@ -1979,6 +2138,9 @@ static void typeCheckerExitScope(Compiler* c) {
   while (tc->count > 0 && tc->entries[tc->count - 1].depth > targetDepth) {
     tc->count--;
   }
+  while (tc->aliasCount > 0 && tc->aliases[tc->aliasCount - 1].depth > targetDepth) {
+    tc->aliasCount--;
+  }
   tc->scopeDepth = targetDepth;
 }
 
@@ -2000,6 +2162,38 @@ static void typeDefine(Compiler* c, Token name, Type* type, bool explicitType) {
   tc->entries[tc->count].explicitType = explicitType;
   tc->entries[tc->count].depth = c->scopeDepth;
   tc->count++;
+}
+
+static TypeAlias* typeAliasLookup(TypeChecker* tc, ObjString* name) {
+  if (!tc || !name) return NULL;
+  for (int i = tc->aliasCount - 1; i >= 0; i--) {
+    if (tc->aliases[i].name == name) {
+      return &tc->aliases[i];
+    }
+  }
+  if (tc->enclosing) {
+    return typeAliasLookup(tc->enclosing, name);
+  }
+  return NULL;
+}
+
+static void typeAliasDefine(Compiler* c, Token name, Type* type) {
+  if (!typecheckEnabled(c)) return;
+  TypeChecker* tc = c->typecheck;
+  if (tc->aliasCount >= tc->aliasCapacity) {
+    int oldCap = tc->aliasCapacity;
+    tc->aliasCapacity = GROW_CAPACITY(oldCap);
+    tc->aliases = GROW_ARRAY(TypeAlias, tc->aliases, oldCap, tc->aliasCapacity);
+    if (!tc->aliases) {
+      fprintf(stderr, "Out of memory.\n");
+      exit(1);
+    }
+  }
+  ObjString* nameStr = stringFromToken(c->vm, name);
+  tc->aliases[tc->aliasCount].name = nameStr;
+  tc->aliases[tc->aliasCount].type = type ? type : typeAny();
+  tc->aliases[tc->aliasCount].depth = c->scopeDepth;
+  tc->aliasCount++;
 }
 
 static TypeEntry* typeLookupEntry(TypeChecker* tc, ObjString* name) {
@@ -2332,6 +2526,26 @@ static void typeDefineStdlib(Compiler* c) {
                                                  typeMap(tc, typeString(), typeAny())));
     typeDefineSynthetic(c, "values", typeFunctionN(tc, 1, typeArray(tc, typeAny()),
                                                    typeMap(tc, typeString(), typeAny())));
+    {
+      Type* any = typeAny();
+      Type* number = typeNumber();
+      Type* string = typeString();
+      Type* arrayAny = typeArray(tc, any);
+      Type* arrayString = typeArray(tc, string);
+      Type* mapStringAny = typeMap(tc, string, any);
+      Type* rangeType = typeNamed(tc, copyString(c->vm, "range"));
+      typeDefineSynthetic(c, "range", typeFunctionN(tc, 2, rangeType, number, number));
+      typeDefineSynthetic(c, "iter", typeFunctionN(tc, 1, any, any));
+      typeDefineSynthetic(c, "next", typeFunctionN(tc, 1, mapStringAny, any));
+      typeDefineSynthetic(c, "arrayRest", typeFunctionN(tc, 2, arrayAny, arrayAny, number));
+      typeDefineSynthetic(c, "mapRest", typeFunctionN(tc, 2, mapStringAny, mapStringAny, arrayString));
+      typeDefineSynthetic(c, "spawn", typeFunctionN(tc, -1, mapStringAny));
+      typeDefineSynthetic(c, "await", typeFunctionN(tc, 1, any, mapStringAny));
+      typeDefineSynthetic(c, "channel", typeFunctionN(tc, 0, mapStringAny));
+      typeDefineSynthetic(c, "send", typeFunctionN(tc, 2, typeNull(), mapStringAny, any));
+      typeDefineSynthetic(c, "recv", typeFunctionN(tc, 1, any, mapStringAny));
+      typeDefineSynthetic(c, "sleep", typeFunctionN(tc, 1, typeNull(), number));
+    }
     typeDefineSynthetic(c, "Option", typeNamed(tc, copyString(c->vm, "Option")));
     typeDefineSynthetic(c, "Result", typeNamed(tc, copyString(c->vm, "Result")));
 
@@ -2420,6 +2634,72 @@ static Type* typeMap(TypeChecker* tc, Type* key, Type* value) {
   return type;
 }
 
+static bool typeListContains(Type** list, int count, Type* candidate) {
+  for (int i = 0; i < count; i++) {
+    if (typeEquals(list[i], candidate)) return true;
+  }
+  return false;
+}
+
+static void typeListAdd(TypeChecker* tc, Type*** list, int* count, int* capacity, Type* candidate) {
+  if (!candidate) return;
+  if (typeListContains(*list, *count, candidate)) return;
+  if (*capacity < *count + 1) {
+    int oldCap = *capacity;
+    *capacity = GROW_CAPACITY(oldCap);
+    *list = GROW_ARRAY(Type*, *list, oldCap, *capacity);
+    if (!*list) {
+      fprintf(stderr, "Out of memory.\n");
+      exit(1);
+    }
+  }
+  (*list)[*count] = typeClone(tc, candidate);
+  (*count)++;
+}
+
+static void typeUnionCollect(TypeChecker* tc, Type* type, Type*** list,
+                             int* count, int* capacity, bool* nullable) {
+  if (!type) return;
+  if (type->kind == TYPE_UNION) {
+    if (type->nullable) *nullable = true;
+    for (int i = 0; i < type->unionCount; i++) {
+      typeListAdd(tc, list, count, capacity, type->unionTypes[i]);
+    }
+    return;
+  }
+  typeListAdd(tc, list, count, capacity, type);
+}
+
+static Type* typeUnion(TypeChecker* tc, Type* a, Type* b) {
+  if (!tc) return typeAny();
+  if (!a) return b ? typeClone(tc, b) : typeAny();
+  if (!b) return typeClone(tc, a);
+  if (typeIsAny(a) || typeIsAny(b)) return typeAny();
+  if (typeEquals(a, b)) return typeClone(tc, a);
+
+  Type** members = NULL;
+  int count = 0;
+  int capacity = 0;
+  bool nullable = false;
+  typeUnionCollect(tc, a, &members, &count, &capacity, &nullable);
+  typeUnionCollect(tc, b, &members, &count, &capacity, &nullable);
+
+  if (count == 0) {
+    FREE_ARRAY(Type*, members, capacity);
+    return typeAny();
+  }
+  if (count == 1 && !nullable) {
+    Type* only = members[0];
+    FREE_ARRAY(Type*, members, capacity);
+    return only;
+  }
+  Type* type = typeAlloc(tc, TYPE_UNION);
+  type->unionTypes = members;
+  type->unionCount = count;
+  type->nullable = nullable;
+  return type;
+}
+
 static Type* typeFunction(TypeChecker* tc, Type** params, int paramCount, Type* returnType) {
   Type* type = typeAlloc(tc, TYPE_FUNCTION);
   type->paramCount = paramCount;
@@ -2438,6 +2718,7 @@ static Type* typeFunction(TypeChecker* tc, Type** params, int paramCount, Type* 
 }
 
 static Type* parseType(Compiler* c);
+static Type* parseTypePrimary(Compiler* c);
 static Type* typeLookupStdlibMember(Compiler* c, Type* objectType, Token name);
 static void typeDefineStdlib(Compiler* c);
 
@@ -2482,6 +2763,10 @@ static Type* typeFromToken(Compiler* c, Token token) {
   if (tokenMatches(token, "array")) return typeArray(c->typecheck, typeAny());
   if (tokenMatches(token, "map")) return typeMap(c->typecheck, typeString(), typeAny());
   ObjString* name = stringFromToken(c->vm, token);
+  TypeAlias* alias = typeAliasLookup(c->typecheck, name);
+  if (alias && alias->type) {
+    return typeClone(c->typecheck, alias->type);
+  }
   return typeNamed(c->typecheck, name);
 }
 
@@ -2548,7 +2833,7 @@ static Type* parseTypeArguments(Compiler* c, Type* base, Token typeToken) {
   return base;
 }
 
-static Type* parseType(Compiler* c) {
+static Type* parseTypePrimary(Compiler* c) {
   if (!check(c, TOKEN_IDENTIFIER) && !check(c, TOKEN_NULL)) {
     errorAtCurrent(c, "Expect type name.");
     return typeAny();
@@ -2565,6 +2850,15 @@ static Type* parseType(Compiler* c) {
   return base;
 }
 
+static Type* parseType(Compiler* c) {
+  Type* type = parseTypePrimary(c);
+  while (match(c, TOKEN_PIPE)) {
+    Type* next = parseTypePrimary(c);
+    type = typeUnion(c->typecheck, type, next);
+  }
+  return type;
+}
+
 static Type* typeMerge(TypeChecker* tc, Type* current, Type* next) {
   if (!current) return next;
   if (!next) return current;
@@ -2576,6 +2870,9 @@ static Type* typeMerge(TypeChecker* tc, Type* current, Type* next) {
   }
   if (next->kind == TYPE_NULL) {
     return typeMakeNullable(tc, current);
+  }
+  if (current->kind == TYPE_UNION || next->kind == TYPE_UNION) {
+    return typeUnion(tc, current, next);
   }
   if (current->kind == next->kind) {
     if (typeEquals(current, next)) return current;
@@ -2615,7 +2912,7 @@ static Type* typeMerge(TypeChecker* tc, Type* current, Type* next) {
     }
   }
   if (typeIsAny(current) || typeIsAny(next)) return typeAny();
-  return typeAny();
+  return typeUnion(tc, current, next);
 }
 
 static bool typeEnsureNonNull(Compiler* c, Token token, Type* type, const char* message) {
@@ -2629,6 +2926,7 @@ static bool typeEnsureNonNull(Compiler* c, Token token, Type* type, const char* 
 }
 
 static Type* typeUnaryResult(Compiler* c, Token op, Type* right) {
+  if (right && right->kind == TYPE_UNION) return typeAny();
   if (op.type == TOKEN_MINUS) {
     typeEnsureNonNull(c, op, right, "Unary '-' expects a non-null number.");
     if (!typeIsAny(right) && right->kind != TYPE_NUMBER) {
@@ -2643,7 +2941,20 @@ static Type* typeUnaryResult(Compiler* c, Token op, Type* right) {
 }
 
 static Type* typeBinaryResult(Compiler* c, Token op, Type* left, Type* right) {
+  if ((left && left->kind == TYPE_UNION) || (right && right->kind == TYPE_UNION)) {
+    return typeAny();
+  }
   switch (op.type) {
+    case TOKEN_DOT_DOT:
+      typeEnsureNonNull(c, op, left, "Range expects non-null numbers.");
+      typeEnsureNonNull(c, op, right, "Range expects non-null numbers.");
+      if (!typeIsAny(left) && left->kind != TYPE_NUMBER) {
+        typeErrorAt(c, op, "Range expects numbers.");
+      }
+      if (!typeIsAny(right) && right->kind != TYPE_NUMBER) {
+        typeErrorAt(c, op, "Range expects numbers.");
+      }
+      return typeNamed(c->typecheck, copyString(c->vm, "range"));
     case TOKEN_PLUS:
       typeEnsureNonNull(c, op, left, "Operator '+' expects non-null operands.");
       typeEnsureNonNull(c, op, right, "Operator '+' expects non-null operands.");
@@ -2694,6 +3005,7 @@ static Type* typeLogicalResult(Type* left, Type* right) {
 static Type* typeIndexResult(Compiler* c, Token op, Type* objectType, Type* indexType) {
   if (typeIsAny(objectType)) return typeAny();
   if (objectType->kind == TYPE_NULL) return typeNull();
+  if (objectType->kind == TYPE_UNION) return typeAny();
   if (objectType->kind == TYPE_ARRAY) {
     if (!typeIsAny(indexType) && indexType->kind != TYPE_NUMBER) {
       typeErrorAt(c, op, "Array index expects a number.");
@@ -2712,6 +3024,7 @@ static Type* typeIndexResult(Compiler* c, Token op, Type* objectType, Type* inde
 static void typeCheckIndexAssign(Compiler* c, Token op, Type* objectType, Type* indexType,
                                  Type* valueType) {
   if (typeIsAny(objectType)) return;
+  if (objectType->kind == TYPE_UNION) return;
   if (!typeEnsureNonNull(c, op, objectType,
                          "Cannot index nullable value. Use '?.['.")) {
     return;
@@ -2967,6 +3280,7 @@ static void expression(Compiler* c);
 static void declaration(Compiler* c);
 static void statement(Compiler* c);
 static void block(Compiler* c, Token open);
+static void matchExpression(Compiler* c, bool canAssign);
 
 typedef enum {
   PREC_NONE,
@@ -2975,6 +3289,7 @@ typedef enum {
   PREC_AND,
   PREC_EQUALITY,
   PREC_COMPARISON,
+  PREC_RANGE,
   PREC_TERM,
   PREC_FACTOR,
   PREC_UNARY,
@@ -3059,10 +3374,224 @@ static void literal(Compiler* c, bool canAssign) {
   }
 }
 
+static void matchExpression(Compiler* c, bool canAssign) {
+  (void)canAssign;
+  Token keyword = previous(c);
+  Token openParen = consume(c, TOKEN_LEFT_PAREN, "Expect '(' after 'match'.");
+  expression(c);
+  Type* matchType = typePop(c);
+  bool hasMatchVar = c->lastExprWasVar;
+  Token matchVar = c->lastExprVar;
+  consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after match value.", openParen);
+  Token openBrace = consume(c, TOKEN_LEFT_BRACE, "Expect '{' after match value.");
+
+  int matchValue = emitTempNameConstant(c, "match");
+  emitDefineVarConstant(c, matchValue);
+  int resultName = emitTempNameConstant(c, "match_result");
+  emitByte(c, OP_NULL, noToken());
+  emitDefineVarConstant(c, resultName);
+
+  JumpList endJumps;
+  initJumpList(&endJumps);
+  int previousJump = -1;
+  bool hasDefault = false;
+  bool hasCatchAll = false;
+  EnumInfo* matchEnum = NULL;
+  bool* variantUsed = NULL;
+  int variantUsedCount = 0;
+  bool sawEnumPattern = false;
+  ConstValue* literalUsed = NULL;
+  int literalUsedCount = 0;
+  int literalUsedCapacity = 0;
+  Type* resultType = typeUnknown();
+
+  while (!check(c, TOKEN_RIGHT_BRACE) && !isAtEnd(c)) {
+    if (match(c, TOKEN_CASE)) {
+      if (previousJump != -1) {
+        patchJump(c, previousJump, keyword);
+        emitByte(c, OP_POP, noToken());
+      }
+      Pattern* pattern = parsePattern(c);
+      bool hasGuard = match(c, TOKEN_IF);
+      PatternBindingList bindings;
+      patternBindingListInit(&bindings);
+
+      if (hasCatchAll || hasDefault) {
+        errorAt(c, pattern->token, "Unreachable case.");
+      }
+      if (!hasGuard) {
+        if (patternIsCatchAll(pattern)) {
+          hasCatchAll = true;
+        }
+        ConstValue literalValue;
+        if (patternConstValue(pattern, &literalValue)) {
+          if (constValueListContains(literalUsed, literalUsedCount, &literalValue)) {
+            errorAt(c, pattern->token, "Unreachable case.");
+            constValueFree(&literalValue);
+          } else {
+            constValueListAdd(&literalUsed, &literalUsedCount,
+                              &literalUsedCapacity, &literalValue);
+          }
+        }
+      }
+
+      if (pattern && pattern->kind == PATTERN_ENUM) {
+        EnumInfo* info = findEnumInfo(c, pattern->as.enumPattern.enumToken);
+        if (info && info->isAdt) {
+          if (!matchEnum) {
+            matchEnum = info;
+            variantUsedCount = info->variantCount;
+            if (variantUsedCount > 0) {
+              variantUsed = (bool*)calloc((size_t)variantUsedCount, sizeof(bool));
+              if (!variantUsed) {
+                fprintf(stderr, "Out of memory.\n");
+                exit(1);
+              }
+            }
+          } else if (matchEnum != info) {
+            errorAt(c, pattern->as.enumPattern.enumToken,
+                    "Match patterns must use a single enum.");
+          }
+
+          EnumVariantInfo* variantInfo =
+              findEnumVariant(info, pattern->as.enumPattern.variantToken);
+          if (variantInfo && variantInfo->arity == pattern->as.enumPattern.argCount) {
+            int variantIndex = enumVariantIndex(matchEnum,
+                                                pattern->as.enumPattern.variantToken);
+            if (variantIndex >= 0 && variantIndex < variantUsedCount) {
+              if (variantUsed && variantUsed[variantIndex]) {
+                errorAt(c, pattern->as.enumPattern.variantToken, "Unreachable case.");
+              }
+              if (!hasGuard && variantUsed) {
+                variantUsed[variantIndex] = true;
+              }
+            }
+          }
+          sawEnumPattern = true;
+        }
+      }
+
+      emitPatternMatchValue(c, matchValue, pattern, &bindings);
+      previousJump = emitJump(c, OP_JUMP_IF_FALSE, keyword);
+      emitByte(c, OP_POP, noToken());
+
+      emitByte(c, OP_BEGIN_SCOPE, noToken());
+      c->scopeDepth++;
+      typeCheckerEnterScope(c);
+      emitPatternBindings(c, matchValue, &bindings, OP_DEFINE_VAR, matchType);
+      if (typecheckEnabled(c) && hasMatchVar &&
+          !patternBindingFind(&bindings, matchVar)) {
+        Type* narrowed = typeNarrowByPattern(c, matchType, pattern);
+        typeDefine(c, matchVar, narrowed ? narrowed : typeAny(), true);
+      }
+
+      int guardJump = -1;
+      if (hasGuard) {
+        expression(c);
+        Type* guardType = typePop(c);
+        if (typecheckEnabled(c) && guardType &&
+            guardType->kind != TYPE_BOOL &&
+            guardType->kind != TYPE_ANY &&
+            guardType->kind != TYPE_UNKNOWN) {
+          typeErrorAt(c, previous(c), "Guard expects bool.");
+        }
+        guardJump = emitJump(c, OP_JUMP_IF_FALSE, keyword);
+        emitByte(c, OP_POP, noToken());
+      }
+
+      consume(c, TOKEN_COLON, "Expect ':' after case pattern.");
+      expression(c);
+      Type* caseType = typePop(c);
+      resultType = typeMerge(c->typecheck, resultType, caseType);
+      emitSetVarConstant(c, resultName);
+      emitByte(c, OP_POP, noToken());
+      if (match(c, TOKEN_SEMICOLON)) {
+      }
+
+      emitByte(c, OP_END_SCOPE, noToken());
+      c->scopeDepth--;
+      typeCheckerExitScope(c);
+      emitGc(c);
+
+      int endJump = emitJump(c, OP_JUMP, keyword);
+      writeJumpList(&endJumps, endJump);
+
+      if (guardJump != -1) {
+        patchJump(c, guardJump, keyword);
+        emitByte(c, OP_POP, noToken());
+        emitByte(c, OP_END_SCOPE, noToken());
+        emitGc(c);
+      }
+
+      patternBindingListFree(&bindings);
+      freePattern(pattern);
+    } else if (match(c, TOKEN_DEFAULT)) {
+      if (hasCatchAll || hasDefault) {
+        errorAt(c, previous(c), "Unreachable default.");
+      }
+      hasDefault = true;
+      if (previousJump != -1) {
+        patchJump(c, previousJump, keyword);
+        emitByte(c, OP_POP, noToken());
+        previousJump = -1;
+      }
+      consume(c, TOKEN_COLON, "Expect ':' after default.");
+      expression(c);
+      Type* caseType = typePop(c);
+      resultType = typeMerge(c->typecheck, resultType, caseType);
+      emitSetVarConstant(c, resultName);
+      emitByte(c, OP_POP, noToken());
+      if (match(c, TOKEN_SEMICOLON)) {
+      }
+      int endJump = emitJump(c, OP_JUMP, keyword);
+      writeJumpList(&endJumps, endJump);
+    } else {
+      errorAtCurrent(c, "Expect 'case' or 'default' in match.");
+      synchronize(c);
+      break;
+    }
+  }
+
+  if (sawEnumPattern && matchEnum && !hasDefault && !hasCatchAll) {
+    bool missing = false;
+    for (int i = 0; i < variantUsedCount; i++) {
+      if (!variantUsed[i]) {
+        missing = true;
+        break;
+      }
+    }
+    if (missing) {
+      errorAt(c, keyword, "Non-exhaustive match. Add missing enum cases or 'default'.");
+    }
+  }
+
+  if (previousJump != -1) {
+    patchJump(c, previousJump, keyword);
+    emitByte(c, OP_POP, noToken());
+  }
+
+  consumeClosing(c, TOKEN_RIGHT_BRACE, "Expect '}' after match cases.", openBrace);
+
+  int matchEnd = c->chunk->count;
+  patchJumpList(c, &endJumps, matchEnd, keyword);
+  freeJumpList(&endJumps);
+  free(variantUsed);
+  constValueListFree(literalUsed, literalUsedCount, literalUsedCapacity);
+
+  emitGetVarConstant(c, resultName);
+  if (typecheckEnabled(c)) {
+    if (!resultType) resultType = typeAny();
+    typePush(c, resultType);
+  } else {
+    typePush(c, typeAny());
+  }
+}
+
 static void variable(Compiler* c, bool canAssign) {
   Token name = previous(c);
   int nameIdx = emitStringConstant(c, name);
   if (canAssign && match(c, TOKEN_EQUAL)) {
+    c->lastExprWasVar = false;
     expression(c);
     Type* valueType = typePop(c);
     typeAssign(c, name, valueType);
@@ -3073,6 +3602,8 @@ static void variable(Compiler* c, bool canAssign) {
     emitByte(c, OP_GET_VAR, name);
     emitShort(c, (uint16_t)nameIdx, name);
     typePush(c, typeLookup(c, name));
+    c->lastExprWasVar = true;
+    c->lastExprVar = name;
   }
 }
 
@@ -3108,6 +3639,7 @@ static void unary(Compiler* c, bool canAssign) {
 static void binary(Compiler* c, bool canAssign) {
   (void)canAssign;
   c->pendingOptionalCall = false;
+  c->lastExprWasVar = false;
   Token op = previous(c);
   ParseRule* rule = getRule(op.type);
   parsePrecedence(c, (Precedence)(rule->precedence + 1));
@@ -3115,6 +3647,19 @@ static void binary(Compiler* c, bool canAssign) {
   Type* left = typePop(c);
   typePush(c, typeBinaryResult(c, op, left, right));
   switch (op.type) {
+    case TOKEN_DOT_DOT: {
+      int rightTemp = emitTempNameConstant(c, "range_r");
+      emitDefineVarConstant(c, rightTemp);
+      int leftTemp = emitTempNameConstant(c, "range_l");
+      emitDefineVarConstant(c, leftTemp);
+      int rangeFn = emitStringConstantFromChars(c, "range", 5);
+      emitGetVarConstant(c, rangeFn);
+      emitGetVarConstant(c, leftTemp);
+      emitGetVarConstant(c, rightTemp);
+      emitByte(c, OP_CALL, op);
+      emitByte(c, 2, op);
+      break;
+    }
     case TOKEN_PLUS: emitByte(c, OP_ADD, op); break;
     case TOKEN_MINUS: emitByte(c, OP_SUBTRACT, op); break;
     case TOKEN_STAR: emitByte(c, OP_MULTIPLY, op); break;
@@ -3159,6 +3704,7 @@ static void orExpr(Compiler* c, bool canAssign) {
 
 static void call(Compiler* c, bool canAssign) {
   (void)canAssign;
+  c->lastExprWasVar = false;
   Token paren = previous(c);
   bool optionalCall = c->pendingOptionalCall;
   c->pendingOptionalCall = false;
@@ -3239,6 +3785,7 @@ static void call(Compiler* c, bool canAssign) {
 
 static void dot(Compiler* c, bool canAssign) {
   c->pendingOptionalCall = false;
+  c->lastExprWasVar = false;
   Token name = consume(c, TOKEN_IDENTIFIER, "Expect property name after '.'.");
   int nameIdx = emitStringConstant(c, name);
   Type* objectType = typePop(c);
@@ -3310,6 +3857,7 @@ static void dot(Compiler* c, bool canAssign) {
 
 static void optionalDot(Compiler* c, bool canAssign) {
   (void)canAssign;
+  c->lastExprWasVar = false;
   if (check(c, TOKEN_LEFT_PAREN)) {
     c->pendingOptionalCall = true;
     return;
@@ -3343,6 +3891,7 @@ static void tryUnwrap(Compiler* c, bool canAssign) {
   (void)canAssign;
   Token op = previous(c);
   c->pendingOptionalCall = false;
+  c->lastExprWasVar = false;
   typePop(c);
   typePush(c, typeAny());
   emitByte(c, OP_TRY_UNWRAP, op);
@@ -3350,6 +3899,7 @@ static void tryUnwrap(Compiler* c, bool canAssign) {
 
 static void index_(Compiler* c, bool canAssign) {
   c->pendingOptionalCall = false;
+  c->lastExprWasVar = false;
   Token bracket = previous(c);
   expression(c);
   Type* indexType = typePop(c);
@@ -3575,6 +4125,7 @@ static void patternBindingListInit(PatternBindingList* list) {
 static void patternBindingListFree(PatternBindingList* list) {
   for (int i = 0; i < list->count; i++) {
     FREE_ARRAY(PatternPathStep, list->entries[i].steps, list->entries[i].stepCount);
+    FREE_ARRAY(PatternRestKey, list->entries[i].restKeys, list->entries[i].restKeyCount);
   }
   FREE_ARRAY(PatternBinding, list->entries, list->capacity);
   list->entries = NULL;
@@ -3601,9 +4152,63 @@ static void patternBindingAdd(PatternBindingList* list, Token name, PatternPath*
   binding->name = name;
   binding->stepCount = path->count;
   binding->steps = NULL;
+  binding->kind = PATTERN_BIND_PATH;
+  binding->restIndex = 0;
+  binding->restKeys = NULL;
+  binding->restKeyCount = 0;
   if (path->count > 0) {
     binding->steps = GROW_ARRAY(PatternPathStep, binding->steps, 0, path->count);
     memcpy(binding->steps, path->steps, sizeof(PatternPathStep) * (size_t)path->count);
+  }
+}
+
+static void patternBindingAddArrayRest(PatternBindingList* list, Token name,
+                                       PatternPath* path, int restIndex) {
+  if (list->capacity < list->count + 1) {
+    int oldCap = list->capacity;
+    list->capacity = GROW_CAPACITY(oldCap);
+    list->entries = GROW_ARRAY(PatternBinding, list->entries, oldCap, list->capacity);
+  }
+  PatternBinding* binding = &list->entries[list->count++];
+  binding->name = name;
+  binding->stepCount = path->count;
+  binding->steps = NULL;
+  binding->kind = PATTERN_BIND_ARRAY_REST;
+  binding->restIndex = restIndex;
+  binding->restKeys = NULL;
+  binding->restKeyCount = 0;
+  if (path->count > 0) {
+    binding->steps = GROW_ARRAY(PatternPathStep, binding->steps, 0, path->count);
+    memcpy(binding->steps, path->steps, sizeof(PatternPathStep) * (size_t)path->count);
+  }
+}
+
+static void patternBindingAddMapRest(PatternBindingList* list, Token name,
+                                     PatternPath* path, PatternMapEntry* entries,
+                                     int entryCount) {
+  if (list->capacity < list->count + 1) {
+    int oldCap = list->capacity;
+    list->capacity = GROW_CAPACITY(oldCap);
+    list->entries = GROW_ARRAY(PatternBinding, list->entries, oldCap, list->capacity);
+  }
+  PatternBinding* binding = &list->entries[list->count++];
+  binding->name = name;
+  binding->stepCount = path->count;
+  binding->steps = NULL;
+  binding->kind = PATTERN_BIND_MAP_REST;
+  binding->restIndex = 0;
+  binding->restKeys = NULL;
+  binding->restKeyCount = entryCount;
+  if (path->count > 0) {
+    binding->steps = GROW_ARRAY(PatternPathStep, binding->steps, 0, path->count);
+    memcpy(binding->steps, path->steps, sizeof(PatternPathStep) * (size_t)path->count);
+  }
+  if (entryCount > 0) {
+    binding->restKeys = GROW_ARRAY(PatternRestKey, binding->restKeys, 0, entryCount);
+    for (int i = 0; i < entryCount; i++) {
+      binding->restKeys[i].key = entries[i].key;
+      binding->restKeys[i].keyIsString = entries[i].keyIsString;
+    }
   }
 }
 
@@ -3815,6 +4420,19 @@ static Pattern* parseArrayPattern(Compiler* c) {
   Pattern* pattern = newPattern(PATTERN_ARRAY, open);
   if (!check(c, TOKEN_RIGHT_BRACKET)) {
     do {
+      if (match(c, TOKEN_ELLIPSIS)) {
+        Token restName = consume(c, TOKEN_IDENTIFIER, "Expect rest binding name after '...'.");
+        if (pattern->as.array.hasRest) {
+          errorAt(c, restName, "Array pattern can only have one rest binding.");
+        } else {
+          pattern->as.array.hasRest = true;
+          pattern->as.array.restName = restName;
+        }
+        if (match(c, TOKEN_COMMA) && !check(c, TOKEN_RIGHT_BRACKET)) {
+          errorAtCurrent(c, "Array rest pattern must be last.");
+        }
+        break;
+      }
       Pattern* item = parsePattern(c);
       patternListAppend(&pattern->as.array, item);
     } while (match(c, TOKEN_COMMA));
@@ -3828,6 +4446,19 @@ static Pattern* parseMapPattern(Compiler* c) {
   Pattern* pattern = newPattern(PATTERN_MAP, open);
   if (!check(c, TOKEN_RIGHT_BRACE)) {
     do {
+      if (match(c, TOKEN_DOT_DOT)) {
+        Token restName = consume(c, TOKEN_IDENTIFIER, "Expect rest binding name after '..'.");
+        if (pattern->as.map.hasRest) {
+          errorAt(c, restName, "Map pattern can only have one rest binding.");
+        } else {
+          pattern->as.map.hasRest = true;
+          pattern->as.map.restName = restName;
+        }
+        if (match(c, TOKEN_COMMA) && !check(c, TOKEN_RIGHT_BRACE)) {
+          errorAtCurrent(c, "Map rest pattern must be last.");
+        }
+        break;
+      }
       Token key;
       bool keyIsString = false;
       if (match(c, TOKEN_IDENTIFIER)) {
@@ -3839,8 +4470,17 @@ static Pattern* parseMapPattern(Compiler* c) {
         errorAtCurrent(c, "Map pattern keys must be identifiers or strings.");
         break;
       }
-      consume(c, TOKEN_COLON, "Expect ':' after map key.");
-      Pattern* value = parsePattern(c);
+      Pattern* value = NULL;
+      if (match(c, TOKEN_COLON)) {
+        value = parsePattern(c);
+      } else {
+        if (keyIsString) {
+          errorAt(c, key, "String map keys require ':' and a value pattern.");
+          value = newPattern(PATTERN_WILDCARD, key);
+        } else {
+          value = newPattern(PATTERN_BINDING, key);
+        }
+      }
       patternMapAppend(&pattern->as.map, key, keyIsString, value);
     } while (match(c, TOKEN_COMMA));
   }
@@ -3947,6 +4587,140 @@ static bool patternPinnedDefined(Compiler* c, Token name) {
   return typeLookupEntry(c->typecheck, nameStr) != NULL;
 }
 
+static bool patternIsCatchAll(Pattern* pattern) {
+  if (!pattern) return false;
+  return pattern->kind == PATTERN_BINDING || pattern->kind == PATTERN_WILDCARD;
+}
+
+static bool patternConstValue(Pattern* pattern, ConstValue* out) {
+  if (!pattern || pattern->kind != PATTERN_LITERAL) return false;
+  Token token = pattern->token;
+  out->ownsString = false;
+  switch (token.type) {
+    case TOKEN_NUMBER:
+      out->type = CONST_NUMBER;
+      out->as.number = parseNumberToken(token);
+      return true;
+    case TOKEN_STRING: {
+      char* value = parseStringLiteral(token);
+      out->type = CONST_STRING;
+      out->as.string.chars = value;
+      out->as.string.length = (int)strlen(value);
+      out->ownsString = true;
+      return true;
+    }
+    case TOKEN_TRUE:
+      out->type = CONST_BOOL;
+      out->as.boolean = true;
+      return true;
+    case TOKEN_FALSE:
+      out->type = CONST_BOOL;
+      out->as.boolean = false;
+      return true;
+    case TOKEN_NULL:
+      out->type = CONST_NULL;
+      return true;
+    default:
+      break;
+  }
+  return false;
+}
+
+static bool constValueListContains(ConstValue* values, int count, ConstValue* value) {
+  for (int i = 0; i < count; i++) {
+    if (constValueEquals(&values[i], value)) return true;
+  }
+  return false;
+}
+
+static void constValueListAdd(ConstValue** values, int* count, int* capacity,
+                              ConstValue* value) {
+  if (*capacity < *count + 1) {
+    int oldCap = *capacity;
+    *capacity = GROW_CAPACITY(oldCap);
+    *values = GROW_ARRAY(ConstValue, *values, oldCap, *capacity);
+    if (!*values) {
+      fprintf(stderr, "Out of memory.\n");
+      exit(1);
+    }
+  }
+  (*values)[*count] = *value;
+  (*count)++;
+  value->ownsString = false;
+}
+
+static void constValueListFree(ConstValue* values, int count, int capacity) {
+  for (int i = 0; i < count; i++) {
+    constValueFree(&values[i]);
+  }
+  FREE_ARRAY(ConstValue, values, capacity);
+}
+
+static Type* typeFromPattern(Compiler* c, Pattern* pattern) {
+  if (!pattern || !typecheckEnabled(c)) return typeAny();
+  switch (pattern->kind) {
+    case PATTERN_LITERAL: {
+      Token token = pattern->token;
+      switch (token.type) {
+        case TOKEN_NUMBER:
+          return typeNumber();
+        case TOKEN_STRING:
+          return typeString();
+        case TOKEN_TRUE:
+        case TOKEN_FALSE:
+          return typeBool();
+        case TOKEN_NULL:
+          return typeNull();
+        default:
+          return typeAny();
+      }
+    }
+    case PATTERN_ARRAY:
+      return typeArray(c->typecheck, typeAny());
+    case PATTERN_MAP:
+      return typeMap(c->typecheck, typeString(), typeAny());
+    case PATTERN_ENUM:
+      return typeNamed(c->typecheck,
+                       stringFromToken(c->vm, pattern->as.enumPattern.enumToken));
+    case PATTERN_PIN:
+      return typeLookup(c, pattern->token);
+    case PATTERN_BINDING:
+    case PATTERN_WILDCARD:
+    default:
+      return typeAny();
+  }
+}
+
+static Type* typeIntersect(TypeChecker* tc, Type* left, Type* right) {
+  if (!tc || !left || !right) return typeAny();
+  if (typeIsAny(left)) return right;
+  if (typeIsAny(right)) return left;
+  if (typeEquals(left, right)) return left;
+  if (left->kind == TYPE_UNION) {
+    Type* merged = NULL;
+    for (int i = 0; i < left->unionCount; i++) {
+      Type* candidate = typeIntersect(tc, left->unionTypes[i], right);
+      if (!candidate) continue;
+      merged = typeMerge(tc, merged, candidate);
+    }
+    return merged;
+  }
+  if (right->kind == TYPE_UNION) {
+    return typeIntersect(tc, right, left);
+  }
+  if (typeAssignable(left, right)) return right;
+  if (typeAssignable(right, left)) return left;
+  return NULL;
+}
+
+static Type* typeNarrowByPattern(Compiler* c, Type* valueType, Pattern* pattern) {
+  if (!typecheckEnabled(c) || !valueType) return valueType;
+  Type* patternType = typeFromPattern(c, pattern);
+  if (!patternType || typeIsAny(patternType)) return valueType;
+  Type* narrowed = typeIntersect(c->typecheck, valueType, patternType);
+  return narrowed ? narrowed : valueType;
+}
+
 static void emitPatternChecks(Compiler* c, int switchValue, Pattern* pattern,
                               PatternPath* path, JumpList* failJumps,
                               PatternBindingList* bindings) {
@@ -3994,7 +4768,7 @@ static void emitPatternChecks(Compiler* c, int switchValue, Pattern* pattern,
       emitPatternValue(c, switchValue, path, pattern->token);
       emitByte(c, OP_LEN, pattern->token);
       emitConstant(c, NUMBER_VAL((double)pattern->as.array.count), pattern->token);
-      emitByte(c, OP_EQUAL, pattern->token);
+      emitByte(c, pattern->as.array.hasRest ? OP_GREATER_EQUAL : OP_EQUAL, pattern->token);
       emitPatternCheckJump(c, failJumps, pattern->token);
 
       for (int i = 0; i < pattern->as.array.count; i++) {
@@ -4002,6 +4776,14 @@ static void emitPatternChecks(Compiler* c, int switchValue, Pattern* pattern,
         emitPatternChecks(c, switchValue, pattern->as.array.items[i], path,
                           failJumps, bindings);
         patternPathPop(path);
+      }
+      if (pattern->as.array.hasRest && !tokenIsUnderscore(pattern->as.array.restName)) {
+        if (patternBindingFind(bindings, pattern->as.array.restName)) {
+          errorAt(c, pattern->as.array.restName, "Duplicate pattern binding.");
+        } else {
+          patternBindingAddArrayRest(bindings, pattern->as.array.restName, path,
+                                     pattern->as.array.count);
+        }
       }
       return;
     }
@@ -4020,6 +4802,14 @@ static void emitPatternChecks(Compiler* c, int switchValue, Pattern* pattern,
         patternPathPushKey(path, entry->key, entry->keyIsString);
         emitPatternChecks(c, switchValue, entry->value, path, failJumps, bindings);
         patternPathPop(path);
+      }
+      if (pattern->as.map.hasRest && !tokenIsUnderscore(pattern->as.map.restName)) {
+        if (patternBindingFind(bindings, pattern->as.map.restName)) {
+          errorAt(c, pattern->as.map.restName, "Duplicate pattern binding.");
+        } else {
+          patternBindingAddMapRest(bindings, pattern->as.map.restName, path,
+                                   pattern->as.map.entries, pattern->as.map.count);
+        }
       }
       return;
     }
@@ -4113,7 +4903,7 @@ static void emitPatternChecksDetailed(Compiler* c, int switchValue, Pattern* pat
       emitPatternValue(c, switchValue, path, pattern->token);
       emitByte(c, OP_LEN, pattern->token);
       emitConstant(c, NUMBER_VAL((double)pattern->as.array.count), pattern->token);
-      emitByte(c, OP_EQUAL, pattern->token);
+      emitByte(c, pattern->as.array.hasRest ? OP_GREATER_EQUAL : OP_EQUAL, pattern->token);
       emitPatternCheckJumpDetailed(c, failures, path, pattern->token);
 
       for (int i = 0; i < pattern->as.array.count; i++) {
@@ -4121,6 +4911,14 @@ static void emitPatternChecksDetailed(Compiler* c, int switchValue, Pattern* pat
         emitPatternChecksDetailed(c, switchValue, pattern->as.array.items[i], path,
                                   failures, bindings);
         patternPathPop(path);
+      }
+      if (pattern->as.array.hasRest && !tokenIsUnderscore(pattern->as.array.restName)) {
+        if (patternBindingFind(bindings, pattern->as.array.restName)) {
+          errorAt(c, pattern->as.array.restName, "Duplicate pattern binding.");
+        } else {
+          patternBindingAddArrayRest(bindings, pattern->as.array.restName, path,
+                                     pattern->as.array.count);
+        }
       }
       return;
     }
@@ -4141,6 +4939,14 @@ static void emitPatternChecksDetailed(Compiler* c, int switchValue, Pattern* pat
         patternPathPushKey(path, entry->key, entry->keyIsString);
         emitPatternChecksDetailed(c, switchValue, entry->value, path, failures, bindings);
         patternPathPop(path);
+      }
+      if (pattern->as.map.hasRest && !tokenIsUnderscore(pattern->as.map.restName)) {
+        if (patternBindingFind(bindings, pattern->as.map.restName)) {
+          errorAt(c, pattern->as.map.restName, "Duplicate pattern binding.");
+        } else {
+          patternBindingAddMapRest(bindings, pattern->as.map.restName, path,
+                                   pattern->as.map.entries, pattern->as.map.count);
+        }
       }
       return;
     }
@@ -4264,16 +5070,153 @@ static void emitPatternMatchOrThrow(Compiler* c, int switchValue, Pattern* patte
   patternFailureListFree(&failures);
 }
 
+static Type* typeForPatternPath(TypeChecker* tc, Type* root,
+                                PatternPathStep* steps, int stepCount) {
+  if (!tc) return typeAny();
+  if (!root) return typeAny();
+  if (root->kind == TYPE_UNION) {
+    Type* merged = NULL;
+    for (int i = 0; i < root->unionCount; i++) {
+      Type* candidate = typeForPatternPath(tc, root->unionTypes[i], steps, stepCount);
+      if (!candidate) continue;
+      merged = typeMerge(tc, merged, candidate);
+    }
+    return merged ? merged : typeAny();
+  }
+  if (typeIsAny(root)) return typeAny();
+  Type* current = root;
+  for (int i = 0; i < stepCount; i++) {
+    if (!current || typeIsAny(current)) return typeAny();
+    PatternPathStep step = steps[i];
+    if (step.kind == PATH_INDEX) {
+      if (current->kind != TYPE_ARRAY) return NULL;
+      current = current->elem ? current->elem : typeAny();
+      continue;
+    }
+    if (step.kind == PATH_KEY) {
+      if (current->kind != TYPE_MAP) return NULL;
+      current = current->value ? current->value : typeAny();
+      continue;
+    }
+  }
+  return current ? current : typeAny();
+}
+
+static Type* typeForArrayRest(TypeChecker* tc, Type* root, PatternBinding* binding) {
+  Type* container = typeForPatternPath(tc, root, binding->steps, binding->stepCount);
+  if (!container) return typeArray(tc, typeAny());
+  if (container->kind == TYPE_UNION) {
+    Type* elemType = NULL;
+    for (int i = 0; i < container->unionCount; i++) {
+      Type* member = container->unionTypes[i];
+      if (member && member->kind == TYPE_ARRAY) {
+        elemType = typeMerge(tc, elemType, member->elem ? member->elem : typeAny());
+      }
+    }
+    if (!elemType) elemType = typeAny();
+    return typeArray(tc, elemType);
+  }
+  if (typeIsAny(container) || container->kind != TYPE_ARRAY) {
+    return typeArray(tc, typeAny());
+  }
+  return typeArray(tc, container->elem ? container->elem : typeAny());
+}
+
+static Type* typeForMapRest(TypeChecker* tc, Type* root, PatternBinding* binding) {
+  Type* container = typeForPatternPath(tc, root, binding->steps, binding->stepCount);
+  if (!container) return typeMap(tc, typeString(), typeAny());
+  if (container->kind == TYPE_UNION) {
+    Type* valueType = NULL;
+    for (int i = 0; i < container->unionCount; i++) {
+      Type* member = container->unionTypes[i];
+      if (member && member->kind == TYPE_MAP) {
+        valueType = typeMerge(tc, valueType, member->value ? member->value : typeAny());
+      }
+    }
+    if (!valueType) valueType = typeAny();
+    return typeMap(tc, typeString(), valueType);
+  }
+  if (typeIsAny(container) || container->kind != TYPE_MAP) {
+    return typeMap(tc, typeString(), typeAny());
+  }
+  return typeMap(tc, typeString(), container->value ? container->value : typeAny());
+}
+
+static void emitPatternRestKeyArray(Compiler* c, PatternBinding* binding) {
+  int count = binding->restKeyCount;
+  emitByte(c, OP_ARRAY, binding->name);
+  emitShort(c, (uint16_t)count, binding->name);
+  for (int i = 0; i < count; i++) {
+    PatternRestKey* key = &binding->restKeys[i];
+    emitPatternKeyConstant(c, key->key, key->keyIsString, binding->name);
+    emitByte(c, OP_ARRAY_APPEND, binding->name);
+  }
+}
+
 static void emitPatternBindings(Compiler* c, int switchValue, PatternBindingList* bindings,
-                                uint8_t defineOp) {
+                                uint8_t defineOp, Type* matchType) {
   for (int i = 0; i < bindings->count; i++) {
     PatternBinding* binding = &bindings->entries[i];
-    emitPatternValueSteps(c, switchValue, binding->steps, binding->stepCount, binding->name);
+    Type* bindingType = typeAny();
+    if (typecheckEnabled(c)) {
+      switch (binding->kind) {
+        case PATTERN_BIND_PATH:
+          bindingType = typeForPatternPath(c->typecheck, matchType,
+                                           binding->steps, binding->stepCount);
+          if (!bindingType) bindingType = typeAny();
+          break;
+        case PATTERN_BIND_ARRAY_REST:
+          bindingType = typeForArrayRest(c->typecheck, matchType, binding);
+          break;
+        case PATTERN_BIND_MAP_REST:
+          bindingType = typeForMapRest(c->typecheck, matchType, binding);
+          break;
+      }
+    }
+    switch (binding->kind) {
+      case PATTERN_BIND_PATH:
+        emitPatternValueSteps(c, switchValue, binding->steps, binding->stepCount, binding->name);
+        break;
+      case PATTERN_BIND_ARRAY_REST: {
+        emitPatternValueSteps(c, switchValue, binding->steps, binding->stepCount, binding->name);
+        int arrayTemp = emitTempNameConstant(c, "rest_arr");
+        emitDefineVarConstant(c, arrayTemp);
+        int restFn = emitStringConstantFromChars(c, "arrayRest", 9);
+        emitGetVarConstant(c, restFn);
+        emitGetVarConstant(c, arrayTemp);
+        emitConstant(c, NUMBER_VAL((double)binding->restIndex), binding->name);
+        emitByte(c, OP_CALL, binding->name);
+        emitByte(c, 2, binding->name);
+        break;
+      }
+      case PATTERN_BIND_MAP_REST: {
+        emitPatternValueSteps(c, switchValue, binding->steps, binding->stepCount, binding->name);
+        int mapTemp = emitTempNameConstant(c, "rest_map");
+        emitDefineVarConstant(c, mapTemp);
+        emitPatternRestKeyArray(c, binding);
+        int keysTemp = emitTempNameConstant(c, "rest_keys");
+        emitDefineVarConstant(c, keysTemp);
+        int restFn = emitStringConstantFromChars(c, "mapRest", 7);
+        emitGetVarConstant(c, restFn);
+        emitGetVarConstant(c, mapTemp);
+        emitGetVarConstant(c, keysTemp);
+        emitByte(c, OP_CALL, binding->name);
+        emitByte(c, 2, binding->name);
+        break;
+      }
+    }
     int nameIdx = emitStringConstant(c, binding->name);
     emitByte(c, defineOp, binding->name);
     emitShort(c, (uint16_t)nameIdx, binding->name);
+    if (defineOp == OP_SET_VAR) {
+      emitByte(c, OP_POP, binding->name);
+    }
     if (typecheckEnabled(c)) {
-      typeDefine(c, binding->name, typeAny(), true);
+      if (defineOp == OP_SET_VAR) {
+        typeAssign(c, binding->name, bindingType);
+      } else {
+        typeDefine(c, binding->name, bindingType ? bindingType : typeAny(), true);
+      }
     }
   }
 }
@@ -4291,6 +5234,7 @@ static void initRules(void) {
   rules[TOKEN_LEFT_BRACKET] = (ParseRule){array, index_, PREC_CALL};
   rules[TOKEN_LEFT_BRACE] = (ParseRule){map, NULL, PREC_NONE};
   rules[TOKEN_DOT] = (ParseRule){NULL, dot, PREC_CALL};
+  rules[TOKEN_DOT_DOT] = (ParseRule){NULL, binary, PREC_RANGE};
   rules[TOKEN_QUESTION] = (ParseRule){NULL, tryUnwrap, PREC_CALL};
   rules[TOKEN_QUESTION_DOT] = (ParseRule){NULL, optionalDot, PREC_CALL};
   rules[TOKEN_MINUS] = (ParseRule){unary, binary, PREC_TERM};
@@ -4310,6 +5254,7 @@ static void initRules(void) {
   rules[TOKEN_NUMBER] = (ParseRule){number, NULL, PREC_NONE};
   rules[TOKEN_AND] = (ParseRule){NULL, andExpr, PREC_AND};
   rules[TOKEN_OR] = (ParseRule){NULL, orExpr, PREC_OR};
+  rules[TOKEN_MATCH] = (ParseRule){matchExpression, NULL, PREC_NONE};
   rules[TOKEN_FALSE] = (ParseRule){literal, NULL, PREC_NONE};
   rules[TOKEN_TRUE] = (ParseRule){literal, NULL, PREC_NONE};
   rules[TOKEN_NULL] = (ParseRule){literal, NULL, PREC_NONE};
@@ -4350,6 +5295,8 @@ static void parsePrecedence(Compiler* c, Precedence prec) {
 
 static void expression(Compiler* c) {
   c->pendingOptionalCall = false;
+  c->lastExprWasVar = false;
+  memset(&c->lastExprVar, 0, sizeof(Token));
   parsePrecedence(c, PREC_ASSIGNMENT);
 }
 
@@ -4358,6 +5305,52 @@ static void expressionStatement(Compiler* c) {
   typePop(c);
   consume(c, TOKEN_SEMICOLON, "Expect ';' after expression.");
   emitByte(c, OP_POP, noToken());
+  emitGc(c);
+}
+
+static bool isPatternAssignmentStart(Compiler* c) {
+  if (!check(c, TOKEN_LEFT_BRACKET) && !check(c, TOKEN_LEFT_BRACE)) return false;
+  ErkaoTokenType open = peek(c).type;
+  ErkaoTokenType close = open == TOKEN_LEFT_BRACKET ? TOKEN_RIGHT_BRACKET : TOKEN_RIGHT_BRACE;
+  int depth = 0;
+  for (int i = c->current; i < c->tokens->count; i++) {
+    ErkaoTokenType type = c->tokens->tokens[i].type;
+    if (type == TOKEN_LEFT_BRACKET || type == TOKEN_LEFT_BRACE || type == TOKEN_LEFT_PAREN) {
+      depth++;
+      continue;
+    }
+    if (type == TOKEN_RIGHT_BRACKET || type == TOKEN_RIGHT_BRACE || type == TOKEN_RIGHT_PAREN) {
+      depth--;
+      if (depth < 0) return false;
+      if (depth == 0 && type == close) {
+        if (i + 1 < c->tokens->count &&
+            c->tokens->tokens[i + 1].type == TOKEN_EQUAL) {
+          return true;
+        }
+        return false;
+      }
+    }
+    if (type == TOKEN_EOF) break;
+  }
+  return false;
+}
+
+static void patternAssignmentStatement(Compiler* c) {
+  Pattern* pattern = parsePattern(c);
+  consume(c, TOKEN_EQUAL, "Expect '=' after pattern.");
+  expression(c);
+  Type* valueType = typePop(c);
+  consume(c, TOKEN_SEMICOLON, "Expect ';' after pattern assignment.");
+
+  int matchValue = emitTempNameConstant(c, "match");
+  emitDefineVarConstant(c, matchValue);
+
+  PatternBindingList bindings;
+  patternBindingListInit(&bindings);
+  emitPatternMatchOrThrow(c, matchValue, pattern, &bindings);
+  emitPatternBindings(c, matchValue, &bindings, OP_SET_VAR, valueType);
+  patternBindingListFree(&bindings);
+  freePattern(pattern);
   emitGc(c);
 }
 
@@ -4421,12 +5414,14 @@ static void varDeclaration(Compiler* c, bool isConst, bool isExport, bool isPriv
     parseType(c);
   }
 
+  Type* valueType = typeUnknown();
   if (!match(c, TOKEN_EQUAL)) {
     errorAt(c, pattern->token, "Pattern declarations require an initializer.");
     emitByte(c, OP_NULL, noToken());
+    valueType = typeNull();
   } else {
     expression(c);
-    typePop(c);
+    valueType = typePop(c);
   }
   consume(c, TOKEN_SEMICOLON, "Expect ';' after variable declaration.");
 
@@ -4437,7 +5432,7 @@ static void varDeclaration(Compiler* c, bool isConst, bool isExport, bool isPriv
   patternBindingListInit(&bindings);
   emitPatternMatchOrThrow(c, matchValue, pattern, &bindings);
   emitPatternBindings(c, matchValue, &bindings,
-                      isConst ? OP_DEFINE_CONST : OP_DEFINE_VAR);
+                      isConst ? OP_DEFINE_CONST : OP_DEFINE_VAR, valueType);
 
   if (isPrivate || isExport) {
     for (int i = 0; i < bindings.count; i++) {
@@ -4456,6 +5451,27 @@ static void varDeclaration(Compiler* c, bool isConst, bool isExport, bool isPriv
   patternBindingListFree(&bindings);
   freePattern(pattern);
   emitGc(c);
+}
+
+static bool isReservedTypeName(Token name) {
+  return tokenMatches(name, "number") || tokenMatches(name, "string") ||
+         tokenMatches(name, "bool") || tokenMatches(name, "boolean") ||
+         tokenMatches(name, "null") || tokenMatches(name, "void") ||
+         tokenMatches(name, "any") || tokenMatches(name, "array") ||
+         tokenMatches(name, "map");
+}
+
+static void typeDeclaration(Compiler* c) {
+  Token name = consume(c, TOKEN_IDENTIFIER, "Expect type alias name.");
+  if (isReservedTypeName(name)) {
+    errorAt(c, name, "Cannot alias a built-in type name.");
+  }
+  consume(c, TOKEN_EQUAL, "Expect '=' after type alias name.");
+  Type* aliasType = parseType(c);
+  consume(c, TOKEN_SEMICOLON, "Expect ';' after type alias.");
+  if (typecheckEnabled(c)) {
+    typeAliasDefine(c, name, aliasType);
+  }
 }
 
 static void block(Compiler* c, Token open) {
@@ -4479,12 +5495,13 @@ static void blockStatement(Compiler* c) {
 
 static void ifStatement(Compiler* c) {
   Token keyword = previous(c);
-  Token openParen = consume(c, TOKEN_LEFT_PAREN, "Expect '(' after 'if'.");
-  if (match(c, TOKEN_MATCH)) {
+  if (match(c, TOKEN_LET)) {
     Pattern* pattern = parsePattern(c);
-    consume(c, TOKEN_EQUAL, "Expect '=' after match pattern.");
+    consume(c, TOKEN_EQUAL, "Expect '=' after let pattern.");
     expression(c);
-    typePop(c);
+    Type* matchType = typePop(c);
+    bool hasMatchVar = c->lastExprWasVar;
+    Token matchVar = c->lastExprVar;
     int matchValue = emitTempNameConstant(c, "match");
     emitDefineVarConstant(c, matchValue);
 
@@ -4498,7 +5515,92 @@ static void ifStatement(Compiler* c) {
     emitByte(c, OP_BEGIN_SCOPE, noToken());
     c->scopeDepth++;
     typeCheckerEnterScope(c);
-    emitPatternBindings(c, matchValue, &bindings, OP_DEFINE_VAR);
+    emitPatternBindings(c, matchValue, &bindings, OP_DEFINE_VAR, matchType);
+    if (typecheckEnabled(c) && hasMatchVar &&
+        !patternBindingFind(&bindings, matchVar)) {
+      Type* narrowed = typeNarrowByPattern(c, matchType, pattern);
+      typeDefine(c, matchVar, narrowed ? narrowed : typeAny(), true);
+    }
+
+    int guardJump = -1;
+    if (hasGuard) {
+      expression(c);
+      Type* guardType = typePop(c);
+      if (typecheckEnabled(c) && guardType &&
+          guardType->kind != TYPE_BOOL &&
+          guardType->kind != TYPE_ANY &&
+          guardType->kind != TYPE_UNKNOWN) {
+        typeErrorAt(c, previous(c), "Guard expects bool.");
+      }
+      guardJump = emitJump(c, OP_JUMP_IF_FALSE, keyword);
+      emitByte(c, OP_POP, noToken());
+    }
+
+    statement(c);
+
+    emitByte(c, OP_END_SCOPE, noToken());
+    c->scopeDepth--;
+    typeCheckerExitScope(c);
+    emitGc(c);
+
+    bool hasElse = match(c, TOKEN_ELSE);
+    int elseJump = -1;
+    if (hasElse) {
+      elseJump = emitJump(c, OP_JUMP, keyword);
+    }
+
+    int guardToElse = -1;
+    if (guardJump != -1) {
+      patchJump(c, guardJump, keyword);
+      emitByte(c, OP_POP, noToken());
+      emitByte(c, OP_END_SCOPE, noToken());
+      emitGc(c);
+      guardToElse = emitJump(c, OP_JUMP, keyword);
+    }
+
+    patchJump(c, thenJump, keyword);
+    emitByte(c, OP_POP, noToken());
+    if (guardToElse != -1) {
+      patchJump(c, guardToElse, keyword);
+    }
+
+    patternBindingListFree(&bindings);
+    freePattern(pattern);
+
+    if (hasElse) {
+      statement(c);
+      patchJump(c, elseJump, keyword);
+    }
+    emitGc(c);
+    return;
+  }
+  Token openParen = consume(c, TOKEN_LEFT_PAREN, "Expect '(' after 'if'.");
+  if (match(c, TOKEN_MATCH)) {
+    Pattern* pattern = parsePattern(c);
+    consume(c, TOKEN_EQUAL, "Expect '=' after match pattern.");
+    expression(c);
+    Type* matchType = typePop(c);
+    bool hasMatchVar = c->lastExprWasVar;
+    Token matchVar = c->lastExprVar;
+    int matchValue = emitTempNameConstant(c, "match");
+    emitDefineVarConstant(c, matchValue);
+
+    bool hasGuard = match(c, TOKEN_IF);
+    PatternBindingList bindings;
+    patternBindingListInit(&bindings);
+    emitPatternMatchValue(c, matchValue, pattern, &bindings);
+    int thenJump = emitJump(c, OP_JUMP_IF_FALSE, keyword);
+    emitByte(c, OP_POP, noToken());
+
+    emitByte(c, OP_BEGIN_SCOPE, noToken());
+    c->scopeDepth++;
+    typeCheckerEnterScope(c);
+    emitPatternBindings(c, matchValue, &bindings, OP_DEFINE_VAR, matchType);
+    if (typecheckEnabled(c) && hasMatchVar &&
+        !patternBindingFind(&bindings, matchVar)) {
+      Type* narrowed = typeNarrowByPattern(c, matchType, pattern);
+      typeDefine(c, matchVar, narrowed ? narrowed : typeAny(), true);
+    }
 
     int guardJump = -1;
     if (hasGuard) {
@@ -4578,12 +5680,13 @@ static void ifStatement(Compiler* c) {
 static void whileStatement(Compiler* c) {
   Token keyword = previous(c);
   int loopStart = c->chunk->count;
-  Token openParen = consume(c, TOKEN_LEFT_PAREN, "Expect '(' after 'while'.");
-  if (match(c, TOKEN_MATCH)) {
+  if (match(c, TOKEN_LET)) {
     Pattern* pattern = parsePattern(c);
-    consume(c, TOKEN_EQUAL, "Expect '=' after match pattern.");
+    consume(c, TOKEN_EQUAL, "Expect '=' after let pattern.");
     expression(c);
-    typePop(c);
+    Type* matchType = typePop(c);
+    bool hasMatchVar = c->lastExprWasVar;
+    Token matchVar = c->lastExprVar;
     int matchValue = emitTempNameConstant(c, "match");
     emitDefineVarConstant(c, matchValue);
 
@@ -4598,7 +5701,97 @@ static void whileStatement(Compiler* c) {
     emitByte(c, OP_BEGIN_SCOPE, noToken());
     c->scopeDepth++;
     typeCheckerEnterScope(c);
-    emitPatternBindings(c, matchValue, &bindings, OP_DEFINE_VAR);
+    emitPatternBindings(c, matchValue, &bindings, OP_DEFINE_VAR, matchType);
+    if (typecheckEnabled(c) && hasMatchVar &&
+        !patternBindingFind(&bindings, matchVar)) {
+      Type* narrowed = typeNarrowByPattern(c, matchType, pattern);
+      typeDefine(c, matchVar, narrowed ? narrowed : typeAny(), true);
+    }
+
+    int guardJump = -1;
+    if (hasGuard) {
+      expression(c);
+      Type* guardType = typePop(c);
+      if (typecheckEnabled(c) && guardType &&
+          guardType->kind != TYPE_BOOL &&
+          guardType->kind != TYPE_ANY &&
+          guardType->kind != TYPE_UNKNOWN) {
+        typeErrorAt(c, previous(c), "Guard expects bool.");
+      }
+      guardJump = emitJump(c, OP_JUMP_IF_FALSE, keyword);
+      emitByte(c, OP_POP, noToken());
+    }
+
+    BreakContext loop;
+    loop.type = BREAK_LOOP;
+    loop.enclosing = c->breakContext;
+    loop.scopeDepth = loopScopeDepth;
+    initJumpList(&loop.breaks);
+    initJumpList(&loop.continues);
+    c->breakContext = &loop;
+
+    statement(c);
+    emitByte(c, OP_END_SCOPE, noToken());
+    c->scopeDepth--;
+    typeCheckerExitScope(c);
+    int continueTarget = c->chunk->count;
+    emitGc(c);
+    emitLoop(c, loopStart, keyword);
+    c->breakContext = loop.enclosing;
+
+    int guardToExit = -1;
+    if (guardJump != -1) {
+      patchJump(c, guardJump, keyword);
+      emitByte(c, OP_POP, noToken());
+      emitByte(c, OP_END_SCOPE, noToken());
+      emitGc(c);
+      guardToExit = emitJump(c, OP_JUMP, keyword);
+    }
+
+    patchJump(c, exitJump, keyword);
+    emitByte(c, OP_POP, noToken());
+    emitGc(c);
+    int loopEnd = c->chunk->count;
+    if (guardToExit != -1) {
+      patchJump(c, guardToExit, keyword);
+    }
+    patchJumpList(c, &loop.breaks, loopEnd, keyword);
+    patchJumpList(c, &loop.continues, continueTarget, keyword);
+    freeJumpList(&loop.breaks);
+    freeJumpList(&loop.continues);
+
+    patternBindingListFree(&bindings);
+    freePattern(pattern);
+    return;
+  }
+  Token openParen = consume(c, TOKEN_LEFT_PAREN, "Expect '(' after 'while'.");
+  if (match(c, TOKEN_MATCH)) {
+    Pattern* pattern = parsePattern(c);
+    consume(c, TOKEN_EQUAL, "Expect '=' after match pattern.");
+    expression(c);
+    Type* matchType = typePop(c);
+    bool hasMatchVar = c->lastExprWasVar;
+    Token matchVar = c->lastExprVar;
+    int matchValue = emitTempNameConstant(c, "match");
+    emitDefineVarConstant(c, matchValue);
+
+    bool hasGuard = match(c, TOKEN_IF);
+    PatternBindingList bindings;
+    patternBindingListInit(&bindings);
+    emitPatternMatchValue(c, matchValue, pattern, &bindings);
+    int exitJump = emitJump(c, OP_JUMP_IF_FALSE, keyword);
+    emitByte(c, OP_POP, noToken());
+
+    int loopScopeDepth = c->scopeDepth;
+    emitByte(c, OP_BEGIN_SCOPE, noToken());
+    c->scopeDepth++;
+    typeCheckerEnterScope(c);
+    emitPatternBindings(c, matchValue, &bindings, OP_DEFINE_VAR, matchType);
+    if (typecheckEnabled(c) && hasMatchVar &&
+        !patternBindingFind(&bindings, matchVar)) {
+      Type* narrowed = typeNarrowByPattern(c, matchType, pattern);
+      typeDefine(c, matchVar, narrowed ? narrowed : typeAny(), true);
+    }
 
     int guardJump = -1;
     if (hasGuard) {
@@ -4785,34 +5978,34 @@ static void foreachStatement(Compiler* c) {
   Type* iterType = typePop(c);
   consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after foreach iterable.", openParen);
 
+  int iterableName = emitTempNameConstant(c, "iterable");
+  emitDefineVarConstant(c, iterableName);
+
+  int iterFn = emitStringConstantFromChars(c, "iter", 4);
+  emitGetVarConstant(c, iterFn);
+  emitGetVarConstant(c, iterableName);
+  emitByte(c, OP_CALL, noToken());
+  emitByte(c, 1, noToken());
   int iterName = emitTempNameConstant(c, "iter");
   emitDefineVarConstant(c, iterName);
 
-  int collectionName = iterName;
-  if (hasKey) {
-    int keysFn = emitStringConstantFromChars(c, "keys", 4);
-    emitGetVarConstant(c, keysFn);
-    emitGetVarConstant(c, iterName);
-    emitByte(c, OP_CALL, noToken());
-    emitByte(c, 1, noToken());
-    int keysName = emitTempNameConstant(c, "keys");
-    emitDefineVarConstant(c, keysName);
-    collectionName = keysName;
-  }
-
-  int indexName = emitTempNameConstant(c, "i");
-  emitConstant(c, NUMBER_VAL(0), noToken());
-  emitDefineVarConstant(c, indexName);
-
-  int lenFn = emitStringConstantFromChars(c, "len", 3);
   int loopStart = c->chunk->count;
-  emitGetVarConstant(c, indexName);
-  emitGetVarConstant(c, lenFn);
-  emitGetVarConstant(c, collectionName);
+  int nextFn = emitStringConstantFromChars(c, "next", 4);
+  emitGetVarConstant(c, nextFn);
+  emitGetVarConstant(c, iterName);
   emitByte(c, OP_CALL, noToken());
   emitByte(c, 1, noToken());
-  emitByte(c, OP_LESS, keyword);
-  int exitJump = emitJump(c, OP_JUMP_IF_FALSE, keyword);
+  int stepName = emitTempNameConstant(c, "step");
+  emitDefineVarConstant(c, stepName);
+
+  Token doneToken = syntheticToken("done");
+  emitGetVarConstant(c, stepName);
+  emitPatternKeyConstant(c, doneToken, false, doneToken);
+  emitByte(c, OP_GET_INDEX, keyword);
+  int bodyJump = emitJump(c, OP_JUMP_IF_FALSE, keyword);
+  emitByte(c, OP_POP, noToken());
+  int exitJump = emitJump(c, OP_JUMP, keyword);
+  patchJump(c, bodyJump, keyword);
   emitByte(c, OP_POP, noToken());
 
   BreakContext loop;
@@ -4823,24 +6016,26 @@ static void foreachStatement(Compiler* c) {
   initJumpList(&loop.continues);
   c->breakContext = &loop;
 
+  Token valueField = syntheticToken("value");
+  Token keyField = syntheticToken("key");
   if (hasKey) {
     int keyName = emitStringConstant(c, keyToken);
     int valueName = emitStringConstant(c, valueToken);
-    emitGetVarConstant(c, collectionName);
-    emitGetVarConstant(c, indexName);
+    emitGetVarConstant(c, stepName);
+    emitPatternKeyConstant(c, keyField, false, keyField);
     emitByte(c, OP_GET_INDEX, keyToken);
     emitByte(c, OP_DEFINE_VAR, keyToken);
     emitShort(c, (uint16_t)keyName, keyToken);
-    emitGetVarConstant(c, iterName);
-    emitByte(c, OP_GET_VAR, keyToken);
-    emitShort(c, (uint16_t)keyName, keyToken);
+
+    emitGetVarConstant(c, stepName);
+    emitPatternKeyConstant(c, valueField, false, valueField);
     emitByte(c, OP_GET_INDEX, valueToken);
     emitByte(c, OP_DEFINE_VAR, valueToken);
     emitShort(c, (uint16_t)valueName, valueToken);
   } else {
     int valueName = emitStringConstant(c, valueToken);
-    emitGetVarConstant(c, iterName);
-    emitGetVarConstant(c, indexName);
+    emitGetVarConstant(c, stepName);
+    emitPatternKeyConstant(c, valueField, false, valueField);
     emitByte(c, OP_GET_INDEX, valueToken);
     emitByte(c, OP_DEFINE_VAR, valueToken);
     emitShort(c, (uint16_t)valueName, valueToken);
@@ -4855,6 +6050,9 @@ static void foreachStatement(Compiler* c) {
     } else if (iterType && iterType->kind == TYPE_MAP) {
       keyType = iterType->key ? iterType->key : typeString();
       valueType = iterType->value ? iterType->value : typeAny();
+    } else if (typeNamedIs(iterType, "range")) {
+      keyType = typeNumber();
+      valueType = typeNumber();
     }
     if (hasKey) {
       typeDefine(c, keyToken, keyType, true);
@@ -4863,18 +6061,12 @@ static void foreachStatement(Compiler* c) {
   }
 
   statement(c);
-  int continueTarget = c->chunk->count;
-  emitGetVarConstant(c, indexName);
-  emitConstant(c, NUMBER_VAL(1), noToken());
-  emitByte(c, OP_ADD, noToken());
-  emitSetVarConstant(c, indexName);
-  emitByte(c, OP_POP, noToken());
+  int continueTarget = loopStart;
   emitGc(c);
   emitLoop(c, loopStart, keyword);
   c->breakContext = loop.enclosing;
 
   patchJump(c, exitJump, keyword);
-  emitByte(c, OP_POP, noToken());
   emitGc(c);
   int loopEnd = c->chunk->count;
   patchJumpList(c, &loop.breaks, loopEnd, keyword);
@@ -4924,6 +6116,10 @@ static void switchStatement(Compiler* c) {
   int variantUsedCount = 0;
   bool sawEnumPattern = false;
   bool hasDefault = false;
+  bool hasCatchAll = false;
+  ConstValue* literalUsed = NULL;
+  int literalUsedCount = 0;
+  int literalUsedCapacity = 0;
 
   while (!check(c, TOKEN_RIGHT_BRACE) && !isAtEnd(c)) {
     if (match(c, TOKEN_CASE)) {
@@ -4940,6 +6136,25 @@ static void switchStatement(Compiler* c) {
         patternBindingListInit(&bindings);
         if (match(c, TOKEN_IF)) {
           hasGuard = true;
+        }
+
+        if (hasCatchAll || hasDefault) {
+          errorAt(c, pattern->token, "Unreachable case.");
+        }
+        if (!hasGuard) {
+          if (patternIsCatchAll(pattern)) {
+            hasCatchAll = true;
+          }
+          ConstValue literalValue;
+          if (patternConstValue(pattern, &literalValue)) {
+            if (constValueListContains(literalUsed, literalUsedCount, &literalValue)) {
+              errorAt(c, pattern->token, "Unreachable case.");
+              constValueFree(&literalValue);
+            } else {
+              constValueListAdd(&literalUsed, &literalUsedCount,
+                                &literalUsedCapacity, &literalValue);
+            }
+          }
         }
 
         if (pattern && pattern->kind == PATTERN_ENUM) {
@@ -4966,7 +6181,12 @@ static void switchStatement(Compiler* c) {
               int variantIndex = enumVariantIndex(matchEnum,
                                                   pattern->as.enumPattern.variantToken);
               if (variantIndex >= 0 && variantIndex < variantUsedCount) {
-                variantUsed[variantIndex] = true;
+                if (variantUsed && variantUsed[variantIndex]) {
+                  errorAt(c, pattern->as.enumPattern.variantToken, "Unreachable case.");
+                }
+                if (!hasGuard && variantUsed) {
+                  variantUsed[variantIndex] = true;
+                }
               }
             }
             sawEnumPattern = true;
@@ -4982,7 +6202,7 @@ static void switchStatement(Compiler* c) {
           typeCheckerEnterScope(c);
           guardScope = true;
         }
-        emitPatternBindings(c, switchValue, &bindings, OP_DEFINE_VAR);
+        emitPatternBindings(c, switchValue, &bindings, OP_DEFINE_VAR, switchType);
         if (hasGuard) {
           expression(c);
           Type* guardType = typePop(c);
@@ -5036,6 +6256,9 @@ static void switchStatement(Compiler* c) {
         }
       }
     } else if (match(c, TOKEN_DEFAULT)) {
+      if (hasCatchAll || hasDefault) {
+        errorAt(c, previous(c), "Unreachable default.");
+      }
       hasDefault = true;
       if (previousJump != -1) {
         patchJump(c, previousJump, keyword);
@@ -5054,7 +6277,7 @@ static void switchStatement(Compiler* c) {
     }
   }
 
-  if (isMatch && sawEnumPattern && matchEnum && !hasDefault) {
+  if (isMatch && sawEnumPattern && matchEnum && !hasDefault && !hasCatchAll) {
     bool missing = false;
     for (int i = 0; i < variantUsedCount; i++) {
       if (!variantUsed[i]) {
@@ -5081,6 +6304,7 @@ static void switchStatement(Compiler* c) {
   freeJumpList(&ctx.breaks);
   freeJumpList(&ctx.continues);
   free(variantUsed);
+  constValueListFree(literalUsed, literalUsedCount, literalUsedCapacity);
 
   emitByte(c, OP_END_SCOPE, noToken());
   c->scopeDepth--;
@@ -5142,6 +6366,29 @@ static void throwStatement(Compiler* c) {
   emitByte(c, OP_THROW, keyword);
 }
 
+static void yieldStatement(Compiler* c) {
+  Token keyword = previous(c);
+  if (!c->enclosing) {
+    errorAt(c, keyword, "Cannot use 'yield' outside of a function.");
+    return;
+  }
+  if (c->yieldName < 0 || c->yieldFlagName < 0) {
+    errorAt(c, keyword, "Yield is not available here.");
+    return;
+  }
+  emitByte(c, OP_TRUE, keyword);
+  emitSetVarConstant(c, c->yieldFlagName);
+  emitByte(c, OP_POP, noToken());
+  emitGetVarConstant(c, c->yieldName);
+  expression(c);
+  typePop(c);
+  consume(c, TOKEN_SEMICOLON, "Expect ';' after yield value.");
+  emitByte(c, OP_ARRAY_APPEND, keyword);
+  emitByte(c, OP_POP, noToken());
+  emitGc(c);
+  c->hasYield = true;
+}
+
 static void breakStatement(Compiler* c) {
   Token keyword = previous(c);
   consume(c, TOKEN_SEMICOLON, "Expect ';' after 'break'.");
@@ -5169,10 +6416,11 @@ static void continueStatement(Compiler* c) {
 
 static void returnStatement(Compiler* c) {
   Token keyword = previous(c);
+  bool checkReturn = typecheckEnabled(c) && c->typecheck->currentReturn && !c->hasYield;
   if (!check(c, TOKEN_SEMICOLON)) {
     expression(c);
     Type* valueType = typePop(c);
-    if (typecheckEnabled(c) && c->typecheck->currentReturn) {
+    if (checkReturn) {
       if (!typeAssignable(c->typecheck->currentReturn, valueType)) {
         char expected[64];
         char got[64];
@@ -5182,7 +6430,7 @@ static void returnStatement(Compiler* c) {
       }
     }
   } else {
-    if (typecheckEnabled(c) && c->typecheck->currentReturn &&
+    if (checkReturn && c->typecheck->currentReturn &&
         c->typecheck->currentReturn->kind != TYPE_NULL &&
         c->typecheck->currentReturn->kind != TYPE_ANY &&
         c->typecheck->currentReturn->kind != TYPE_UNKNOWN) {
@@ -5193,7 +6441,19 @@ static void returnStatement(Compiler* c) {
     emitByte(c, OP_NULL, noToken());
   }
   consume(c, TOKEN_SEMICOLON, "Expect ';' after return value.");
-  emitByte(c, OP_RETURN, keyword);
+  if (c->yieldName >= 0 && c->yieldFlagName >= 0) {
+    emitGetVarConstant(c, c->yieldFlagName);
+    int normalJump = emitJump(c, OP_JUMP_IF_FALSE, keyword);
+    emitByte(c, OP_POP, noToken());
+    emitByte(c, OP_POP, noToken());
+    emitGetVarConstant(c, c->yieldName);
+    emitByte(c, OP_RETURN, keyword);
+    patchJump(c, normalJump, keyword);
+    emitByte(c, OP_POP, noToken());
+    emitByte(c, OP_RETURN, keyword);
+  } else {
+    emitByte(c, OP_RETURN, keyword);
+  }
 }
 
 static void importStatement(Compiler* c) {
@@ -5968,6 +7228,8 @@ static void declaration(Compiler* c) {
     functionDeclaration(c, false, false);
   } else if (match(c, TOKEN_INTERFACE)) {
     interfaceDeclaration(c);
+  } else if (match(c, TOKEN_TYPE)) {
+    typeDeclaration(c);
   } else if (match(c, TOKEN_CONST)) {
     varDeclaration(c, true, false, false);
   } else if (match(c, TOKEN_LET)) {
@@ -5999,6 +7261,8 @@ static void statement(Compiler* c) {
     tryStatement(c);
   } else if (match(c, TOKEN_THROW)) {
     throwStatement(c);
+  } else if (match(c, TOKEN_YIELD)) {
+    yieldStatement(c);
   } else if (match(c, TOKEN_RETURN)) {
     returnStatement(c);
   } else if (match(c, TOKEN_BREAK)) {
@@ -6007,6 +7271,9 @@ static void statement(Compiler* c) {
     continueStatement(c);
   } else if (match(c, TOKEN_LEFT_BRACE)) {
     blockStatement(c);
+  } else if ((check(c, TOKEN_LEFT_BRACKET) || check(c, TOKEN_LEFT_BRACE)) &&
+             isPatternAssignmentStart(c)) {
+    patternAssignmentStatement(c);
   } else {
     expressionStatement(c);
   }
@@ -6203,6 +7470,11 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
   fnCompiler.scopeDepth = 0;
   fnCompiler.tempIndex = 0;
   fnCompiler.pendingOptionalCall = false;
+  fnCompiler.lastExprWasVar = false;
+  memset(&fnCompiler.lastExprVar, 0, sizeof(Token));
+  fnCompiler.hasYield = false;
+  fnCompiler.yieldName = -1;
+  fnCompiler.yieldFlagName = -1;
   fnCompiler.breakContext = NULL;
   fnCompiler.enclosing = c;
   fnCompiler.enums = NULL;
@@ -6224,6 +7496,19 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
       bool isExplicit = paramHasType && paramHasType[i];
       typeDefine(&fnCompiler, paramTokens[i], paramType, isExplicit);
     }
+  }
+
+  fnCompiler.yieldName = emitStringConstantFromChars(&fnCompiler, "__yield", 7);
+  emitByte(&fnCompiler, OP_ARRAY, noToken());
+  emitShort(&fnCompiler, 0, noToken());
+  emitDefineVarConstant(&fnCompiler, fnCompiler.yieldName);
+  fnCompiler.yieldFlagName = emitStringConstantFromChars(&fnCompiler, "__yield_used", 12);
+  emitByte(&fnCompiler, OP_FALSE, noToken());
+  emitDefineVarConstant(&fnCompiler, fnCompiler.yieldFlagName);
+  if (typecheckEnabled(&fnCompiler)) {
+    typeDefine(&fnCompiler, syntheticToken("__yield"),
+               typeArray(fnCompiler.typecheck, typeAny()), true);
+    typeDefine(&fnCompiler, syntheticToken("__yield_used"), typeBool(), true);
   }
 
   for (int i = 0; i < arity; i++) {
@@ -6271,7 +7556,11 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
       patternBindingListInit(&bindings);
       int paramNameIdx = emitStringConstant(&fnCompiler, paramTokens[i]);
       emitPatternMatchOrThrow(&fnCompiler, paramNameIdx, pattern, &bindings);
-      emitPatternBindings(&fnCompiler, paramNameIdx, &bindings, OP_DEFINE_VAR);
+      Type* paramType = typeAny();
+      if (paramHasType && paramHasType[i]) {
+        paramType = paramTypes[i];
+      }
+      emitPatternBindings(&fnCompiler, paramNameIdx, &bindings, OP_DEFINE_VAR, paramType);
       patternBindingListFree(&bindings);
       freePattern(pattern);
       paramPatterns[i] = NULL;
@@ -6347,8 +7636,13 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
   c.chunk = chunk;
   c.scopeDepth = 0;
   c.tempIndex = 0;
-    c.pendingOptionalCall = false;
-    c.breakContext = NULL;
+  c.pendingOptionalCall = false;
+  c.lastExprWasVar = false;
+  memset(&c.lastExprVar, 0, sizeof(Token));
+  c.hasYield = false;
+  c.yieldName = -1;
+  c.yieldFlagName = -1;
+  c.breakContext = NULL;
     c.enclosing = NULL;
     c.typecheck = &typecheck;
     c.enums = NULL;

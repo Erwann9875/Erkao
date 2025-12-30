@@ -1,0 +1,34 @@
+let data = [1, 2, 3];
+match (data) {
+  case [head, ...tail]:
+    print("array", head, tail);
+}
+
+let user = { name: "Ada", age: 42, city: "Paris" };
+match (user) {
+  case {name: n, ..rest}:
+    print("map", n, rest["age"], rest["city"]);
+}
+
+let a = 0;
+let b = 0;
+[a, b] = [5, 6];
+print("assign", a, b);
+
+let name = "";
+let details = {};
+{ name: name, ..details } = { name: "Bob", age: 30, role: "dev" };
+print("assign_map", name, details["age"], details["role"]);
+
+let pair = [1, 2];
+if let [x, y] = pair if x < y {
+  print("iflet", x, y);
+} else {
+  print("iflet", "no");
+}
+
+let loop = [2, 1];
+while let [x, y] = loop if x > y {
+  print("whilelet", x, y);
+  loop = [y, x];
+}

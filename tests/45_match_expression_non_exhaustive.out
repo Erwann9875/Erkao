@@ -1,0 +1,3 @@
+tests/45_match_expression_non_exhaustive.ek:2:1: Error at 'match': Non-exhaustive match. Add missing enum cases or 'default'.
+  match (Option.Some(1)) {
+  ^~~~~

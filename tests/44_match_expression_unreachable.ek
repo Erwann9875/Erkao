@@ -1,0 +1,7 @@
+let value = 1;
+let result = match (value) {
+case 1: "one";
+case 1: "dup";
+default: "other";
+};
+print(result);

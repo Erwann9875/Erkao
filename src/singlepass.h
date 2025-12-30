@@ -39,6 +39,11 @@ typedef struct Compiler {
   int scopeDepth;
   int tempIndex;
   bool pendingOptionalCall;
+  bool lastExprWasVar;
+  Token lastExprVar;
+  bool hasYield;
+  int yieldName;
+  int yieldFlagName;
   BreakContext* breakContext;
   struct Compiler* enclosing;
   TypeChecker* typecheck;

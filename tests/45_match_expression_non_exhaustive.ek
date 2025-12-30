@@ -1,0 +1,5 @@
+let value =
+match (Option.Some(1)) {
+  case Option.Some(x): "some";
+};
+print(value);

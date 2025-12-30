@@ -270,6 +270,8 @@ static ErkaoTokenType identifierType(Scanner* scanner) {
             if (type != TOKEN_IDENTIFIER) return type;
             return checkKeyword(scanner, 2, 3, "row", TOKEN_THROW);
           }
+          case 'y':
+            return checkKeyword(scanner, 2, 2, "pe", TOKEN_TYPE);
           case 'r': {
             ErkaoTokenType type = checkKeyword(scanner, 2, 2, "ue", TOKEN_TRUE);
             if (type != TOKEN_IDENTIFIER) return type;
@@ -278,6 +280,8 @@ static ErkaoTokenType identifierType(Scanner* scanner) {
         }
       }
       break;
+    case 'y':
+      return checkKeyword(scanner, 1, 4, "ield", TOKEN_YIELD);
     case 'w':
       return checkKeyword(scanner, 1, 4, "hile", TOKEN_WHILE);
   }
@@ -506,6 +510,10 @@ static Token scanToken(Scanner* scanner) {
     case ',':
       return makeToken(scanner, TOKEN_COMMA);
     case '.':
+      if (match(scanner, '.')) {
+        if (match(scanner, '.')) return makeToken(scanner, TOKEN_ELLIPSIS);
+        return makeToken(scanner, TOKEN_DOT_DOT);
+      }
       return makeToken(scanner, TOKEN_DOT);
     case '-':
       return makeToken(scanner, TOKEN_MINUS);
@@ -522,6 +530,8 @@ static Token scanToken(Scanner* scanner) {
       return makeToken(scanner, TOKEN_COLON);
     case '^':
       return makeToken(scanner, TOKEN_CARET);
+    case '|':
+      return makeToken(scanner, TOKEN_PIPE);
     case '!':
       return makeToken(scanner, match(scanner, '=') ? TOKEN_BANG_EQUAL : TOKEN_BANG);
     case '=':
@@ -585,6 +595,8 @@ const char* tokenTypeName(ErkaoTokenType type) {
     case TOKEN_RIGHT_BRACKET: return "RIGHT_BRACKET";
     case TOKEN_COMMA: return "COMMA";
     case TOKEN_DOT: return "DOT";
+    case TOKEN_DOT_DOT: return "DOT_DOT";
+    case TOKEN_ELLIPSIS: return "ELLIPSIS";
     case TOKEN_QUESTION: return "QUESTION";
     case TOKEN_QUESTION_DOT: return "QUESTION_DOT";
     case TOKEN_MINUS: return "MINUS";
@@ -594,6 +606,7 @@ const char* tokenTypeName(ErkaoTokenType type) {
     case TOKEN_STAR: return "STAR";
     case TOKEN_COLON: return "COLON";
     case TOKEN_CARET: return "CARET";
+    case TOKEN_PIPE: return "PIPE";
     case TOKEN_BANG: return "BANG";
     case TOKEN_BANG_EQUAL: return "BANG_EQUAL";
     case TOKEN_EQUAL: return "EQUAL";
@@ -626,11 +639,13 @@ const char* tokenTypeName(ErkaoTokenType type) {
     case TOKEN_OR: return "OR";
     case TOKEN_PRIVATE: return "PRIVATE";
     case TOKEN_RETURN: return "RETURN";
+    case TOKEN_TYPE: return "TYPE";
     case TOKEN_TRY: return "TRY";
     case TOKEN_CATCH: return "CATCH";
     case TOKEN_THROW: return "THROW";
     case TOKEN_THIS: return "THIS";
     case TOKEN_TRUE: return "TRUE";
+    case TOKEN_YIELD: return "YIELD";
     case TOKEN_LET: return "LET";
     case TOKEN_WHILE: return "WHILE";
     case TOKEN_FOR: return "FOR";

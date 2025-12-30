@@ -1,0 +1,26 @@
+enum Color { Red(), Blue() }
+
+let shade = Color.Red;
+let label = match (shade) {
+  case Color.Red: "warm";
+  case Color.Blue: "cool";
+};
+print("enum", label);
+
+let value = "hi";
+let result = match (value) {
+  case "hi": "hello";
+  case "bye": "goodbye";
+  default: "other";
+};
+print("match", result);
+
+type NumOrStr = number | string;
+fun describe(value: NumOrStr) {
+  return match (value) {
+    case 0: "zero";
+    case "one": "one";
+    default: "other";
+  };
+}
+print("alias", describe("one"), describe(2));

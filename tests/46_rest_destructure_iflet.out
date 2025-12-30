@@ -1,0 +1,6 @@
+array 1 [2, 3]
+map Ada 42 Paris
+assign 5 6
+assign_map Bob 30 dev
+iflet 1 2
+whilelet 2 1

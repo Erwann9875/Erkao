@@ -1,0 +1,12 @@
+let task = spawn(fun(a, b) {
+  return a + b;
+}, 2, 3);
+print("await", await(task));
+
+let ch = channel();
+send(ch, "a");
+send(ch, "b");
+print("recv", recv(ch), recv(ch), recv(ch));
+
+sleep(0);
+print("sleep", "ok");

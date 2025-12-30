@@ -1,0 +1,3 @@
+tests/44_match_expression_unreachable.ek:4:6: Error at '1': Unreachable case.
+  case 1: "dup";
+       ^

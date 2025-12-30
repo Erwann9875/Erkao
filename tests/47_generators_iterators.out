@@ -1,0 +1,4 @@
+yield [1, 2]
+yield_return [3]
+range 10
+iter [0, 1, 2]
