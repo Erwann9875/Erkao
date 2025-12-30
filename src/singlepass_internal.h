@@ -262,10 +262,10 @@ struct EnumInfo {
   bool isAdt;
 };
 
-typedef struct StructInfo {
+struct StructInfo {
   char* name;
   int nameLength;
-} StructInfo;
+};
 
 extern TypeRegistry* gTypeRegistry;
 
