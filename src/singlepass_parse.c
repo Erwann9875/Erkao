@@ -377,6 +377,7 @@ static void binary(Compiler* c, bool canAssign) {
     case TOKEN_MINUS: emitByte(c, OP_SUBTRACT, op); break;
     case TOKEN_STAR: emitByte(c, OP_MULTIPLY, op); break;
     case TOKEN_SLASH: emitByte(c, OP_DIVIDE, op); break;
+    case TOKEN_PERCENT: emitByte(c, OP_MODULO, op); break;
     case TOKEN_GREATER: emitByte(c, OP_GREATER, op); break;
     case TOKEN_GREATER_EQUAL: emitByte(c, OP_GREATER_EQUAL, op); break;
     case TOKEN_LESS: emitByte(c, OP_LESS, op); break;
@@ -794,6 +795,7 @@ static void initRules(void) {
   rules[TOKEN_PLUS] = (ParseRule){NULL, binary, PREC_TERM};
   rules[TOKEN_SLASH] = (ParseRule){NULL, binary, PREC_FACTOR};
   rules[TOKEN_STAR] = (ParseRule){NULL, binary, PREC_FACTOR};
+  rules[TOKEN_PERCENT] = (ParseRule){NULL, binary, PREC_FACTOR};
   rules[TOKEN_BANG] = (ParseRule){unary, NULL, PREC_NONE};
   rules[TOKEN_BANG_EQUAL] = (ParseRule){NULL, binary, PREC_EQUALITY};
   rules[TOKEN_EQUAL_EQUAL] = (ParseRule){NULL, binary, PREC_EQUALITY};

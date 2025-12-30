@@ -179,6 +179,8 @@ static int disassembleInstruction(const Chunk* chunk, int offset) {
       return simpleInstruction("OP_MULTIPLY", chunk, offset);
     case OP_DIVIDE:
       return simpleInstruction("OP_DIVIDE", chunk, offset);
+    case OP_MODULO:
+      return simpleInstruction("OP_MODULO", chunk, offset);
     case OP_NOT:
       return simpleInstruction("OP_NOT", chunk, offset);
     case OP_NEGATE:

@@ -1728,6 +1728,7 @@ Type* typeBinaryResult(Compiler* c, Token op, Type* left, Type* right) {
     case TOKEN_MINUS:
     case TOKEN_STAR:
     case TOKEN_SLASH:
+    case TOKEN_PERCENT:
       typeEnsureNonNull(c, op, left, "Operator expects non-null numbers.");
       typeEnsureNonNull(c, op, right, "Operator expects non-null numbers.");
       if (!typeIsAny(left) && left->kind != TYPE_NUMBER) {

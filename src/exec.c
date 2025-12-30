@@ -1448,6 +1448,14 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
         push(vm, NUMBER_VAL(AS_NUMBER(a) / AS_NUMBER(b)));
         break;
       }
+      case OP_MODULO: {
+        Value b = pop(vm);
+        Value a = pop(vm);
+        Token token = currentToken(frame);
+        if (!ensureNumberOperands(vm, token, a, b)) return false;
+        push(vm, NUMBER_VAL(fmod(AS_NUMBER(a), AS_NUMBER(b))));
+        break;
+      }
       case OP_NOT: {
         Value value = pop(vm);
         push(vm, BOOL_VAL(!isTruthy(value)));

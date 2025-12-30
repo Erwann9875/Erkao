@@ -526,6 +526,8 @@ static Token scanToken(Scanner* scanner) {
       return makeToken(scanner, TOKEN_SEMICOLON);
     case '*':
       return makeToken(scanner, TOKEN_STAR);
+    case '%':
+      return makeToken(scanner, TOKEN_PERCENT);
     case ':':
       return makeToken(scanner, TOKEN_COLON);
     case '^':
@@ -604,6 +606,7 @@ const char* tokenTypeName(ErkaoTokenType type) {
     case TOKEN_SEMICOLON: return "SEMICOLON";
     case TOKEN_SLASH: return "SLASH";
     case TOKEN_STAR: return "STAR";
+    case TOKEN_PERCENT: return "PERCENT";
     case TOKEN_COLON: return "COLON";
     case TOKEN_CARET: return "CARET";
     case TOKEN_PIPE: return "PIPE";

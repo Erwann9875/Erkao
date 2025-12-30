@@ -1,0 +1,4 @@
+print("mod1", 5 % 2);
+print("mod2", 10 % 5);
+print("mod3", 7 % 3);
+print("modFloat", 7.5 % 2);

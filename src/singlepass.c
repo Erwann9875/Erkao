@@ -1,5 +1,6 @@
 #include "singlepass_internal.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -413,6 +414,14 @@ void optimizeChunk(VM* vm, Chunk* chunk) {
             folded = true;
           }
           break;
+        case OP_MODULO:
+          if (a.type == CONST_NUMBER && b.type == CONST_NUMBER) {
+            result.type = CONST_NUMBER;
+            result.ownsString = false;
+            result.as.number = fmod(a.as.number, b.as.number);
+            folded = true;
+          }
+          break;
         case OP_EQUAL:
           result.type = CONST_BOOL;
           result.ownsString = false;
@@ -619,6 +628,7 @@ const char* tokenDescription(ErkaoTokenType type) {
     case TOKEN_SEMICOLON: return "';'";
     case TOKEN_SLASH: return "'/'";
     case TOKEN_STAR: return "'*'";
+    case TOKEN_PERCENT: return "'%'";
     case TOKEN_COLON: return "':'";
     case TOKEN_CARET: return "'^'";
     case TOKEN_PIPE: return "'|'";
