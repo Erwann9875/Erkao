@@ -1,6 +1,8 @@
-let task = spawn(fun(a, b) {
+fun add(a, b) {
   return a + b;
-}, 2, 3);
+}
+
+let task = spawn(add, 2, 3);
 print("await", await(task));
 
 let ch = channel();

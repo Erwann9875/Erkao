@@ -554,6 +554,11 @@ static bool checkNext(Compiler* c, ErkaoTokenType type) {
   return c->tokens->tokens[c->current + 1].type == type;
 }
 
+static bool checkNextNext(Compiler* c, ErkaoTokenType type) {
+  if (c->current + 2 >= c->tokens->count) return false;
+  return c->tokens->tokens[c->current + 2].type == type;
+}
+
 static bool match(Compiler* c, ErkaoTokenType type) {
   if (!check(c, type)) return false;
   advance(c);
@@ -3300,6 +3305,12 @@ static void emitPatternBindings(Compiler* c, int switchValue, PatternBindingList
                                 uint8_t defineOp, Type* matchType);
 static Type* typeNarrowByPattern(Compiler* c, Type* valueType, Pattern* pattern);
 
+static bool isTypeDeclarationStart(Compiler* c) {
+  return check(c, TOKEN_TYPE_KW) &&
+         checkNext(c, TOKEN_IDENTIFIER) &&
+         checkNextNext(c, TOKEN_EQUAL);
+}
+
 typedef enum {
   PREC_NONE,
   PREC_ASSIGNMENT,
@@ -3973,7 +3984,7 @@ static void map(Compiler* c, bool canAssign) {
   int sizeOffset = c->chunk->count - 2;
   if (!check(c, TOKEN_RIGHT_BRACE)) {
     do {
-      if (match(c, TOKEN_IDENTIFIER)) {
+      if (match(c, TOKEN_IDENTIFIER) || match(c, TOKEN_TYPE_KW)) {
         Token key = previous(c);
         char* keyName = copyTokenLexeme(key);
         ObjString* keyStr = takeStringWithLength(c->vm, keyName, key.length);
@@ -4422,7 +4433,7 @@ static Pattern* parsePattern(Compiler* c) {
       match(c, TOKEN_TRUE) || match(c, TOKEN_FALSE) || match(c, TOKEN_NULL)) {
     return newPattern(PATTERN_LITERAL, previous(c));
   }
-  if (match(c, TOKEN_IDENTIFIER)) {
+  if (match(c, TOKEN_IDENTIFIER) || match(c, TOKEN_TYPE_KW)) {
     Token name = previous(c);
     if (tokenIsUnderscore(name)) {
       return newPattern(PATTERN_WILDCARD, name);
@@ -4479,7 +4490,7 @@ static Pattern* parseMapPattern(Compiler* c) {
       }
       Token key;
       bool keyIsString = false;
-      if (match(c, TOKEN_IDENTIFIER)) {
+      if (match(c, TOKEN_IDENTIFIER) || match(c, TOKEN_TYPE_KW)) {
         key = previous(c);
       } else if (match(c, TOKEN_STRING)) {
         key = previous(c);
@@ -5267,6 +5278,7 @@ static void initRules(void) {
   rules[TOKEN_LESS] = (ParseRule){NULL, binary, PREC_COMPARISON};
   rules[TOKEN_LESS_EQUAL] = (ParseRule){NULL, binary, PREC_COMPARISON};
   rules[TOKEN_IDENTIFIER] = (ParseRule){variable, NULL, PREC_NONE};
+  rules[TOKEN_TYPE_KW] = (ParseRule){variable, NULL, PREC_NONE};
   rules[TOKEN_STRING] = (ParseRule){string, NULL, PREC_NONE};
   rules[TOKEN_STRING_SEGMENT] = (ParseRule){stringSegment, NULL, PREC_NONE};
   rules[TOKEN_NUMBER] = (ParseRule){number, NULL, PREC_NONE};
@@ -7246,7 +7258,8 @@ static void declaration(Compiler* c) {
     functionDeclaration(c, false, false);
   } else if (match(c, TOKEN_INTERFACE)) {
     interfaceDeclaration(c);
-  } else if (match(c, TOKEN_TYPE_KW)) {
+  } else if (isTypeDeclarationStart(c)) {
+    advance(c);
     typeDeclaration(c);
   } else if (match(c, TOKEN_CONST)) {
     varDeclaration(c, true, false, false);
@@ -7287,11 +7300,11 @@ static void statement(Compiler* c) {
     breakStatement(c);
   } else if (match(c, TOKEN_CONTINUE)) {
     continueStatement(c);
-  } else if (match(c, TOKEN_LEFT_BRACE)) {
-    blockStatement(c);
   } else if ((check(c, TOKEN_LEFT_BRACKET) || check(c, TOKEN_LEFT_BRACE)) &&
              isPatternAssignmentStart(c)) {
     patternAssignmentStatement(c);
+  } else if (match(c, TOKEN_LEFT_BRACE)) {
+    blockStatement(c);
   } else {
     expressionStatement(c);
   }
@@ -7592,7 +7605,19 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
   consumeClosing(&fnCompiler, TOKEN_RIGHT_BRACE, "Expect '}' after function body.", openBrace);
 
   emitByte(&fnCompiler, OP_NULL, noToken());
-  emitByte(&fnCompiler, OP_RETURN, noToken());
+  if (fnCompiler.yieldName >= 0 && fnCompiler.yieldFlagName >= 0) {
+    emitGetVarConstant(&fnCompiler, fnCompiler.yieldFlagName);
+    int normalJump = emitJump(&fnCompiler, OP_JUMP_IF_FALSE, noToken());
+    emitByte(&fnCompiler, OP_POP, noToken());
+    emitByte(&fnCompiler, OP_POP, noToken());
+    emitGetVarConstant(&fnCompiler, fnCompiler.yieldName);
+    emitByte(&fnCompiler, OP_RETURN, noToken());
+    patchJump(&fnCompiler, normalJump, noToken());
+    emitByte(&fnCompiler, OP_POP, noToken());
+    emitByte(&fnCompiler, OP_RETURN, noToken());
+  } else {
+    emitByte(&fnCompiler, OP_RETURN, noToken());
+  }
 
   c->current = fnCompiler.current;
 

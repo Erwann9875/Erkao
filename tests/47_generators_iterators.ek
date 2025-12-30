@@ -16,21 +16,20 @@ foreach (n in 1..4) {
 }
 print("range", sum);
 
-let seq = {
-  iter: fun() {
-    let state = { i: 0 };
-    return {
-      next: fun() {
-        if (state["i"] >= 3) {
-          return { done: true };
-        }
-        let v = state["i"];
-        state["i"] = state["i"] + 1;
-        return { done: false, value: v, key: v };
-      }
-    };
+fun makeSeqIter() {
+  let state = { i: 0 };
+  fun nextStep() {
+    if (state["i"] >= 3) {
+      return { done: true };
+    }
+    let v = state["i"];
+    state["i"] = state["i"] + 1;
+    return { done: false, value: v, key: v };
   }
-};
+  return { next: nextStep };
+}
+
+let seq = { iter: makeSeqIter };
 
 let values = [];
 foreach (v in seq) {
