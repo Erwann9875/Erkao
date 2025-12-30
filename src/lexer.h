@@ -63,7 +63,7 @@ typedef enum {
   TOKEN_OR,
   TOKEN_PRIVATE,
   TOKEN_RETURN,
-  TOKEN_TYPE,
+  TOKEN_TYPE_KW,
   TOKEN_TRY,
   TOKEN_CATCH,
   TOKEN_THROW,
@@ -109,3 +109,4 @@ TokenArray scanTokens(const char* source, const char* path, bool* hadError);
 const char* tokenTypeName(ErkaoTokenType type);
 
 #endif
+

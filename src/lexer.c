@@ -271,7 +271,7 @@ static ErkaoTokenType identifierType(Scanner* scanner) {
             return checkKeyword(scanner, 2, 3, "row", TOKEN_THROW);
           }
           case 'y':
-            return checkKeyword(scanner, 2, 2, "pe", TOKEN_TYPE);
+            return checkKeyword(scanner, 2, 2, "pe", TOKEN_TYPE_KW);
           case 'r': {
             ErkaoTokenType type = checkKeyword(scanner, 2, 2, "ue", TOKEN_TRUE);
             if (type != TOKEN_IDENTIFIER) return type;
@@ -639,7 +639,7 @@ const char* tokenTypeName(ErkaoTokenType type) {
     case TOKEN_OR: return "OR";
     case TOKEN_PRIVATE: return "PRIVATE";
     case TOKEN_RETURN: return "RETURN";
-    case TOKEN_TYPE: return "TYPE";
+    case TOKEN_TYPE_KW: return "TYPE";
     case TOKEN_TRY: return "TRY";
     case TOKEN_CATCH: return "CATCH";
     case TOKEN_THROW: return "THROW";
@@ -662,3 +662,4 @@ const char* tokenTypeName(ErkaoTokenType type) {
     default: return "UNKNOWN";
   }
 }
+

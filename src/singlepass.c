@@ -595,7 +595,7 @@ static const KeywordEntry keywordEntries[] = {
   {TOKEN_INTERFACE, "interface"},
   {TOKEN_LET, "let"},
   {TOKEN_MATCH, "match"},
-  {TOKEN_TYPE, "type"},
+  {TOKEN_TYPE_KW, "type"},
   {TOKEN_NULL, "null"},
   {TOKEN_OR, "or"},
   {TOKEN_PRIVATE, "private"},
@@ -677,7 +677,7 @@ static const char* tokenDescription(ErkaoTokenType type) {
     case TOKEN_INTERFACE: return "'interface'";
     case TOKEN_LET: return "'let'";
     case TOKEN_MATCH: return "'match'";
-    case TOKEN_TYPE: return "'type'";
+    case TOKEN_TYPE_KW: return "'type'";
     case TOKEN_NULL: return "'null'";
     case TOKEN_OR: return "'or'";
     case TOKEN_PRIVATE: return "'private'";
@@ -879,7 +879,7 @@ static void synchronize(Compiler* c) {
     switch (peek(c).type) {
       case TOKEN_CLASS: case TOKEN_FUN: case TOKEN_LET: case TOKEN_CONST:
       case TOKEN_ENUM: case TOKEN_EXPORT: case TOKEN_IMPORT: case TOKEN_FROM:
-      case TOKEN_TYPE:
+      case TOKEN_TYPE_KW:
       case TOKEN_IF: case TOKEN_WHILE: case TOKEN_FOR: case TOKEN_FOREACH:
       case TOKEN_SWITCH: case TOKEN_MATCH: case TOKEN_RETURN:
       case TOKEN_TRY: case TOKEN_THROW: case TOKEN_CATCH: case TOKEN_YIELD:
@@ -2881,11 +2881,13 @@ static Type* typeMerge(TypeChecker* tc, Type* current, Type* next) {
       case TYPE_STRING:
       case TYPE_BOOL:
         return typeMakeNullable(tc, current);
-        case TYPE_NAMED:
-          if (typeNamesEqual(current->name, next->name)) {
-            return typeMakeNullable(tc, current);
-          }
-          break;
+      case TYPE_UNION:
+        break;
+      case TYPE_NAMED:
+        if (typeNamesEqual(current->name, next->name)) {
+          return typeMakeNullable(tc, current);
+        }
+        break;
         case TYPE_GENERIC:
           if (typeNamesEqual(current->name, next->name)) {
             return typeMakeNullable(tc, current);
@@ -3281,6 +3283,22 @@ static void declaration(Compiler* c);
 static void statement(Compiler* c);
 static void block(Compiler* c, Token open);
 static void matchExpression(Compiler* c, bool canAssign);
+static Pattern* parsePattern(Compiler* c);
+static void freePattern(Pattern* pattern);
+static void patternBindingListInit(PatternBindingList* list);
+static void patternBindingListFree(PatternBindingList* list);
+static PatternBinding* patternBindingFind(PatternBindingList* list, Token name);
+static bool patternIsCatchAll(Pattern* pattern);
+static bool patternConstValue(Pattern* pattern, ConstValue* out);
+static bool constValueListContains(ConstValue* values, int count, ConstValue* value);
+static void constValueListAdd(ConstValue** values, int* count, int* capacity,
+                              ConstValue* value);
+static void constValueListFree(ConstValue* values, int count, int capacity);
+static void emitPatternMatchValue(Compiler* c, int switchValue, Pattern* pattern,
+                                  PatternBindingList* bindings);
+static void emitPatternBindings(Compiler* c, int switchValue, PatternBindingList* bindings,
+                                uint8_t defineOp, Type* matchType);
+static Type* typeNarrowByPattern(Compiler* c, Type* valueType, Pattern* pattern);
 
 typedef enum {
   PREC_NONE,
@@ -7228,7 +7246,7 @@ static void declaration(Compiler* c) {
     functionDeclaration(c, false, false);
   } else if (match(c, TOKEN_INTERFACE)) {
     interfaceDeclaration(c);
-  } else if (match(c, TOKEN_TYPE)) {
+  } else if (match(c, TOKEN_TYPE_KW)) {
     typeDeclaration(c);
   } else if (match(c, TOKEN_CONST)) {
     varDeclaration(c, true, false, false);
@@ -7675,3 +7693,4 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
     typeRegistryFree(&registry);
     return function;
   }
+
