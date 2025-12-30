@@ -22,11 +22,11 @@ jobs:
 
       - name: Install deps (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev libsdl2-mixer-dev patchelf
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev libsdl2-mixer-dev patchelf libpq-dev default-libmysqlclient-dev libmongoc-dev libbson-dev
 
       - name: Install deps (macOS)
         if: runner.os == 'macOS'
-        run: brew install curl sdl2 sdl2_image sdl2_ttf sdl2_mixer
+        run: brew install curl sdl2 sdl2_image sdl2_ttf sdl2_mixer libpq mysql-client mongo-c-driver
 
       - name: Fetch vcpkg (Windows)
         if: runner.os == 'Windows'
@@ -41,7 +41,7 @@ jobs:
         shell: pwsh
         run: |
           .\vcpkg\bootstrap-vcpkg.bat
-          .\vcpkg\vcpkg.exe install sdl2:x64-windows sdl2-image:x64-windows sdl2-ttf:x64-windows sdl2-mixer:x64-windows
+          .\vcpkg\vcpkg.exe install sdl2:x64-windows sdl2-image:x64-windows sdl2-ttf:x64-windows sdl2-mixer:x64-windows libpq:x64-windows libmysql:x64-windows mongo-c-driver:x64-windows
 
       - name: Configure (Windows)
         if: runner.os == 'Windows'
@@ -56,7 +56,7 @@ jobs:
       - name: Configure (macOS)
         if: runner.os == 'macOS'
         shell: bash
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$(brew --prefix curl);$(brew --prefix sdl2);$(brew --prefix sdl2_image);$(brew --prefix sdl2_ttf);$(brew --prefix sdl2_mixer)"
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$(brew --prefix curl);$(brew --prefix sdl2);$(brew --prefix sdl2_image);$(brew --prefix sdl2_ttf);$(brew --prefix sdl2_mixer);$(brew --prefix libpq);$(brew --prefix mysql-client);$(brew --prefix mongo-c-driver)"
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
@@ -97,7 +97,7 @@ jobs:
           mkdir -p dist/lib
           cp build/erkao dist/erkao
           chmod +x dist/erkao
-          ldd build/erkao | awk '/libSDL2/ {print $3}' | sort -u | while read -r lib; do
+          ldd build/erkao | awk '/libSDL2|libpq|libmysqlclient|libmongoc-1.0|libbson-1.0/ {print $3}' | sort -u | while read -r lib; do
             if [ -n "$lib" ] && [ -f "$lib" ]; then
               cp -L "$lib" dist/lib/
             fi
@@ -112,7 +112,7 @@ jobs:
           mkdir -p dist/lib
           cp build/erkao dist/erkao
           chmod +x dist/erkao
-          libs=$(otool -L build/erkao | awk '/libSDL2/ {print $1}' | sort -u)
+          libs=$(otool -L build/erkao | awk '/libSDL2|libpq|libmysqlclient|libmongoc-1.0|libbson-1.0/ {print $1}' | sort -u)
           for lib in $libs; do
             base=$(basename "$lib")
             if [ -f "$lib" ]; then

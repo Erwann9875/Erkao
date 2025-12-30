@@ -259,6 +259,37 @@ function Ensure-VcpkgSdl {
   }
 }
 
+function Ensure-VcpkgDb {
+  param(
+    [string]$VcpkgExe,
+    [string]$Triplet
+  )
+  $vcpkgRoot = Split-Path -Parent $VcpkgExe
+  $portsDir = Join-Path $vcpkgRoot "ports"
+  $packages = @()
+  if (Test-Path -LiteralPath (Join-Path $portsDir "libpq")) {
+    $packages += "libpq:$Triplet"
+  }
+  if (Test-Path -LiteralPath (Join-Path $portsDir "libmysql")) {
+    $packages += "libmysql:$Triplet"
+  }
+  if (Test-Path -LiteralPath (Join-Path $portsDir "mongo-c-driver")) {
+    $packages += "mongo-c-driver:$Triplet"
+  }
+  if ($packages.Count -eq 0) {
+    return
+  }
+  Push-Location $vcpkgRoot
+  try {
+    & $VcpkgExe install $packages | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+      throw "vcpkg install failed (exit code $LASTEXITCODE)."
+    }
+  } finally {
+    Pop-Location
+  }
+}
+
 function Should-UseVcpkg {
   param([string]$PresetName, [string]$GeneratorName)
   if ($UseVcpkg.IsPresent) {
@@ -329,6 +360,7 @@ function Build-Project {
       $resolvedTriplet = Resolve-VcpkgTriplet -Requested $VcpkgTriplet
       $vcpkgExe = Ensure-Vcpkg -Root $resolvedVcpkgRoot
       Ensure-VcpkgSdl -VcpkgExe $vcpkgExe -Triplet $resolvedTriplet
+      Ensure-VcpkgDb -VcpkgExe $vcpkgExe -Triplet $resolvedTriplet
       $toolchain = Join-Path $resolvedVcpkgRoot "scripts/buildsystems/vcpkg.cmake"
       $cmakeArgs += "-DCMAKE_TOOLCHAIN_FILE=$toolchain"
       $cmakeArgs += "-DVCPKG_TARGET_TRIPLET=$resolvedTriplet"
@@ -382,6 +414,7 @@ function Build-Project {
     $resolvedTriplet = Resolve-VcpkgTriplet -Requested $VcpkgTriplet
     $vcpkgExe = Ensure-Vcpkg -Root $resolvedVcpkgRoot
     Ensure-VcpkgSdl -VcpkgExe $vcpkgExe -Triplet $resolvedTriplet
+    Ensure-VcpkgDb -VcpkgExe $vcpkgExe -Triplet $resolvedTriplet
     $toolchain = Join-Path $resolvedVcpkgRoot "scripts/buildsystems/vcpkg.cmake"
   }
 
