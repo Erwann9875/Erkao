@@ -52,6 +52,43 @@ typedef struct Compiler {
   int enumCapacity;
 } Compiler;
 
+typedef enum {
+  PREC_NONE,
+  PREC_ASSIGNMENT,
+  PREC_OR,
+  PREC_AND,
+  PREC_EQUALITY,
+  PREC_COMPARISON,
+  PREC_RANGE,
+  PREC_TERM,
+  PREC_FACTOR,
+  PREC_UNARY,
+  PREC_CALL,
+  PREC_PRIMARY
+} Precedence;
+
+typedef void (*ParseFn)(Compiler* c, bool canAssign);
+
+typedef struct {
+  ParseFn prefix;
+  ParseFn infix;
+  Precedence precedence;
+} ParseRule;
+
+typedef struct {
+  ParseRule* rules;
+  int count;
+} ParserRules;
+
+typedef struct {
+  void (*register_rules)(ParserRules* rules);
+  bool (*parse_statement)(Compiler* c);
+  bool (*parse_expression)(Compiler* c, bool canAssign);
+  void (*type_hook)(TypeChecker* tc);
+} CompilerPlugin;
+
+void compiler_register_plugin(const CompilerPlugin* plugin);
+
 ObjFunction* compile(VM* vm, const TokenArray* tokens, const char* source,
                      const char* path, bool* hadError);
 

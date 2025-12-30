@@ -13,6 +13,9 @@ option(ERKAO_WERROR "Treat warnings as errors" OFF)
 set(ERKAO_CORE_SOURCES
   src/lexer.c
   src/singlepass.c
+  src/singlepass_parse.c
+  src/singlepass_patterns.c
+  src/singlepass_types.c
   src/value.c
   src/chunk.c
   src/disasm.c
