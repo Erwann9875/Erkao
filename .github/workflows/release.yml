@@ -28,6 +28,14 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install curl sdl2 sdl2_image sdl2_ttf sdl2_mixer
 
+      - name: Fetch vcpkg (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "vcpkg")) {
+            git clone https://github.com/microsoft/vcpkg.git vcpkg
+          }
+
       - name: Install SDL2 (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
