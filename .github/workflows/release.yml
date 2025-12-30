@@ -82,6 +82,12 @@ jobs:
           if (Test-Path $applocal) {
             & $applocal -targetBinary (Resolve-Path dist\erkao.exe) -installedDir "${{ github.workspace }}\\vcpkg\\installed\\x64-windows"
           }
+          $binDir = "${{ github.workspace }}\\vcpkg\\installed\\x64-windows\\bin"
+          if (Test-Path $binDir) {
+            Get-ChildItem -Path $binDir -Filter "*.dll" | ForEach-Object {
+              Copy-Item $_.FullName dist\ -Force
+            }
+          }
           Compress-Archive -Path dist\* -DestinationPath dist\erkao-windows-x64.zip -Force
 
       - name: Package (Linux)
