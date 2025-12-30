@@ -34,7 +34,15 @@ jobs:
         run: |
           if (-not (Test-Path "vcpkg")) {
             git clone https://github.com/microsoft/vcpkg.git vcpkg
+          } else {
+            git -C vcpkg pull
           }
+
+      - name: Enable vcpkg cache (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "VCPKG_BINARY_SOURCES=clear;x-gha,readwrite" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Install SDL2 (Windows)
         if: runner.os == 'Windows'
