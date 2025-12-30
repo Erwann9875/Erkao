@@ -1,0 +1,15 @@
+import "orm" as orm;
+
+let conn = db.connect("memory://");
+
+let User = orm.model(conn, "users", { name: "string", age: "number" });
+let Task = orm.model(conn, "tasks", { title: "string", done: "bool" }, { version: 2 });
+
+print("apply1", orm.migrate([User, Task]));
+print("apply2", orm.migrate([User, Task]));
+print("apply3", User.migrate());
+
+let migrations = db.find(conn, "__migrations", {});
+print("count", len(migrations));
+print("m0", migrations[0].name);
+print("m1", migrations[1].name);

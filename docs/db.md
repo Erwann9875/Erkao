@@ -92,6 +92,37 @@ User.update({ name: "Ada" }, { age: 43 });
 User.remove({ name: "Ada" });
 ```
 
+## Migrations
+
+Define schemas on your models and apply them with `orm.migrate`.
+
+```ek
+import "orm" as orm;
+
+let conn = db.connect("memory://");
+let User = orm.model(conn, "users", { name: "string", age: "number" });
+let Task = orm.model(conn, "tasks", { title: "string", done: "bool" }, { version: 2 });
+
+let applied = orm.migrate([User, Task]);
+print("applied", applied);
+```
+
+Notes:
+
+- SQL drivers create tables with `CREATE TABLE IF NOT EXISTS`.
+- For Postgres/MySQL, missing columns are added when the schema grows.
+- Document drivers only record migrations; they do not enforce schemas.
+- Bump `version` (number) to apply a new migration name for the same model.
+
+Supported schema type names:
+
+- `string`/`text` -> `TEXT`
+- `number`/`float`/`double` -> `DOUBLE`
+- `int`/`integer` -> `INTEGER`
+- `bool`/`boolean` -> `BOOLEAN`
+- `json` -> `JSONB` (Postgres) or `JSON` (MySQL)
+- `datetime`/`timestamp` -> `TIMESTAMP`
+
 ## Driver availability
 
 ```ek

@@ -1,6 +1,171 @@
-fun model(conn, name, schema = null) {
+let MIGRATIONS_TABLE = "__migrations";
+
+fun sqlTypeFor(typeName, driver) {
+  if (typeName == null) {
+    typeName = "string";
+  }
+  let normalized = typeName;
+  if (normalized != null) {
+    normalized = str.lower(normalized);
+  }
+  if (normalized == "string" or normalized == "text") {
+    return "TEXT";
+  }
+  if (normalized == "number" or normalized == "float" or normalized == "double") {
+    return "DOUBLE";
+  }
+  if (normalized == "int" or normalized == "integer") {
+    return "INTEGER";
+  }
+  if (normalized == "bool" or normalized == "boolean") {
+    return "BOOLEAN";
+  }
+  if (normalized == "json") {
+    if (driver == "postgres") {
+      return "JSONB";
+    }
+    return "JSON";
+  }
+  if (normalized == "datetime" or normalized == "timestamp") {
+    return "TIMESTAMP";
+  }
+  return typeName;
+}
+
+fun sqlPlaceholder(conn, index) {
+  if (conn.driver == "postgres") {
+    return "$" + index;
+  }
+  return "?";
+}
+
+fun sqlEnsureMigrations(conn) {
+  let sql = "CREATE TABLE IF NOT EXISTS " + MIGRATIONS_TABLE +
+    " (name VARCHAR(255) PRIMARY KEY, applied_at VARCHAR(32))";
+  db.exec(conn, sql);
+}
+
+fun migrationKey(model) {
+  let version = model.version;
+  if (version == null) version = 1;
+  return model.name + "@" + json.stringify(version);
+}
+
+fun migrationApplied(conn, name) {
+  if (conn.kind == "sql") {
+    let placeholder = sqlPlaceholder(conn, 1);
+    let sql = "SELECT name FROM " + MIGRATIONS_TABLE + " WHERE name = " + placeholder;
+    let res = db.exec(conn, sql, [name]);
+    let rows = res["rows"];
+    if (rows == null) return false;
+    return len(rows) > 0;
+  }
+  let rows = db.find(conn, MIGRATIONS_TABLE, { name: name });
+  return len(rows) > 0;
+}
+
+fun migrationRecord(conn, name) {
+  let stamp = time.iso(time.now(), true);
+  if (conn.kind == "sql") {
+    let placeholder = sqlPlaceholder(conn, 1);
+    let placeholder2 = sqlPlaceholder(conn, 2);
+    let sql = "INSERT INTO " + MIGRATIONS_TABLE +
+      " (name, applied_at) VALUES (" + placeholder + ", " + placeholder2 + ")";
+    db.exec(conn, sql, [name, stamp]);
+    return;
+  }
+  db.insert(conn, MIGRATIONS_TABLE, { name: name, applied_at: stamp });
+}
+
+fun sqlEnsureTable(conn, model) {
+  let columns = [];
+  foreach (col, typeName in model.schema) {
+    let sqlType = sqlTypeFor(typeName, conn.driver);
+    push(columns, col + " " + sqlType);
+  }
+  if (len(columns) == 0) return;
+  let sql = "CREATE TABLE IF NOT EXISTS " + model.name + " (" +
+    str.join(columns, ", ") + ")";
+  db.exec(conn, sql);
+}
+
+fun sqlExistingColumns(conn, table) {
+  let placeholder = sqlPlaceholder(conn, 1);
+  if (conn.driver == "postgres") {
+    let sql = "SELECT column_name AS name FROM information_schema.columns " +
+      "WHERE table_schema = current_schema() AND table_name = " + placeholder;
+    let res = db.exec(conn, sql, [table]);
+    let rows = res["rows"];
+    let map = {};
+    if (rows != null) {
+      foreach (row in rows) {
+        let colName = row["name"];
+        if (colName != null) {
+          map[colName] = true;
+        }
+      }
+    }
+    return map;
+  }
+  if (conn.driver == "mysql") {
+    let sql = "SELECT column_name AS name FROM information_schema.columns " +
+      "WHERE table_schema = DATABASE() AND table_name = " + placeholder;
+    let res = db.exec(conn, sql, [table]);
+    let rows = res["rows"];
+    let map = {};
+    if (rows != null) {
+      foreach (row in rows) {
+        let colName = row["name"];
+        if (colName != null) {
+          map[colName] = true;
+        }
+      }
+    }
+    return map;
+  }
+  return null;
+}
+
+fun sqlEnsureColumns(conn, model) {
+  let existing = sqlExistingColumns(conn, model.name);
+  if (existing == null) return;
+  foreach (col, typeName in model.schema) {
+    if (existing[col] == null) {
+      let sqlType = sqlTypeFor(typeName, conn.driver);
+      let sql = "ALTER TABLE " + model.name + " ADD COLUMN " + col + " " + sqlType;
+      db.exec(conn, sql);
+    }
+  }
+}
+
+fun migrate(models) {
+  let applied = 0;
+  foreach (model in models) {
+    let conn = model.conn;
+    if (conn.kind == "sql") {
+      sqlEnsureMigrations(conn);
+      sqlEnsureTable(conn, model);
+      sqlEnsureColumns(conn, model);
+    }
+    let key = migrationKey(model);
+    if (!migrationApplied(conn, key)) {
+      migrationRecord(conn, key);
+      applied = applied + 1;
+    }
+  }
+  return applied;
+}
+
+fun model(conn, name, schema = null, options = null) {
   if (schema == null) {
     schema = {};
+  }
+  if (options == null) {
+    options = {};
+  }
+  let version = options.version;
+  if (version == null) {
+    version = 1;
   }
 
   fun insert(row) {
@@ -43,14 +208,21 @@ fun model(conn, name, schema = null) {
     return db.find(conn, name, {});
   }
 
+  fun migrateSelf() {
+    return migrate([{ conn: conn, name: name, schema: schema, version: version }]);
+  }
+
   return {
+    conn: conn,
     name: name,
     schema: schema,
+    version: version,
     insert: insert,
     find: find,
     findOne: findOne,
     update: update,
     remove: remove,
-    all: all
+    all: all,
+    migrate: migrateSelf
   };
 }
