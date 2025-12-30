@@ -1185,6 +1185,22 @@ Type* typeLookupStdlibMember(Compiler* c, Type* objectType, Token name) {
     if (tokenMatches(name, "resolve")) return typeFunctionN(tc, 2, any, mapAny, string);
   }
 
+  if (typeNamedIs(objectType, "db")) {
+    Type* mapAny = typeMap(tc, string, any);
+    Type* arrayAny = typeArray(tc, any);
+    Type* arrayString = typeArray(tc, string);
+    if (tokenMatches(name, "connect")) return typeFunctionN(tc, -1, any);
+    if (tokenMatches(name, "close")) return typeFunctionN(tc, 1, boolean, any);
+    if (tokenMatches(name, "drivers")) return typeFunctionN(tc, 0, arrayString);
+    if (tokenMatches(name, "supports")) return typeFunctionN(tc, 1, boolean, string);
+    if (tokenMatches(name, "insert")) return typeFunctionN(tc, 3, any, any, string, mapAny);
+    if (tokenMatches(name, "find")) return typeFunctionN(tc, -1, arrayAny);
+    if (tokenMatches(name, "update")) return typeFunctionN(tc, -1, number);
+    if (tokenMatches(name, "delete")) return typeFunctionN(tc, -1, number);
+    if (tokenMatches(name, "exec")) return typeFunctionN(tc, -1, mapAny);
+    if (tokenMatches(name, "Connection")) return any;
+  }
+
   if (typeNamedIs(objectType, "vec2")) {
     Type* arrayNumber = typeArray(tc, number);
     if (tokenMatches(name, "make")) return typeFunctionN(tc, 2, arrayNumber, number, number);
@@ -1313,6 +1329,7 @@ void typeDefineStdlib(Compiler* c) {
     typeDefineSynthetic(c, "env", typeNamed(tc, copyString(c->vm, "env")));
     typeDefineSynthetic(c, "plugin", typeNamed(tc, copyString(c->vm, "plugin")));
     typeDefineSynthetic(c, "di", typeNamed(tc, copyString(c->vm, "di")));
+    typeDefineSynthetic(c, "db", typeNamed(tc, copyString(c->vm, "db")));
   }
   {
     Token optionToken;

@@ -9,6 +9,9 @@ option(ERKAO_SANITIZERS "Enable ASAN/UBSAN" OFF)
 option(ERKAO_FUZZ "Build libFuzzer targets" OFF)
 option(ERKAO_WARNINGS "Enable compiler warnings" ON)
 option(ERKAO_WERROR "Treat warnings as errors" OFF)
+option(ERKAO_DB_POSTGRES "Enable PostgreSQL driver" ON)
+option(ERKAO_DB_MYSQL "Enable MySQL driver" ON)
+option(ERKAO_DB_MONGO "Enable MongoDB driver" ON)
 
 set(ERKAO_CORE_SOURCES
   src/lexer.c
@@ -24,6 +27,10 @@ set(ERKAO_CORE_SOURCES
   src/exec.c
   src/imports.c
   src/stdlib.c
+  src/db.c
+  src/db_postgres.c
+  src/db_mysql.c
+  src/db_mongo.c
   src/package.c
   src/gc_core.c
   src/gc_trace.c
@@ -130,6 +137,53 @@ function(erkao_link_libs target)
 endfunction()
 
 erkao_link_libs(erkao)
+
+if(ERKAO_DB_POSTGRES)
+  find_path(ERKAO_POSTGRES_INCLUDE libpq-fe.h)
+  find_library(ERKAO_POSTGRES_LIBRARY NAMES pq libpq)
+  if(ERKAO_POSTGRES_INCLUDE AND ERKAO_POSTGRES_LIBRARY)
+    target_compile_definitions(erkao PRIVATE ERKAO_DB_POSTGRES=1)
+    target_include_directories(erkao PRIVATE ${ERKAO_POSTGRES_INCLUDE})
+    target_link_libraries(erkao ${ERKAO_POSTGRES_LIBRARY})
+  else()
+    target_compile_definitions(erkao PRIVATE ERKAO_DB_POSTGRES=0)
+    message(STATUS "PostgreSQL not found - db postgres driver disabled")
+  endif()
+else()
+  target_compile_definitions(erkao PRIVATE ERKAO_DB_POSTGRES=0)
+endif()
+
+if(ERKAO_DB_MYSQL)
+  find_path(ERKAO_MYSQL_INCLUDE mysql.h PATH_SUFFIXES mysql)
+  find_library(ERKAO_MYSQL_LIBRARY NAMES mysqlclient libmysql)
+  if(ERKAO_MYSQL_INCLUDE AND ERKAO_MYSQL_LIBRARY)
+    target_compile_definitions(erkao PRIVATE ERKAO_DB_MYSQL=1)
+    target_include_directories(erkao PRIVATE ${ERKAO_MYSQL_INCLUDE})
+    target_link_libraries(erkao ${ERKAO_MYSQL_LIBRARY})
+  else()
+    target_compile_definitions(erkao PRIVATE ERKAO_DB_MYSQL=0)
+    message(STATUS "MySQL not found - db mysql driver disabled")
+  endif()
+else()
+  target_compile_definitions(erkao PRIVATE ERKAO_DB_MYSQL=0)
+endif()
+
+if(ERKAO_DB_MONGO)
+  find_path(ERKAO_MONGO_INCLUDE mongoc/mongoc.h)
+  find_path(ERKAO_BSON_INCLUDE bson/bson.h)
+  find_library(ERKAO_MONGO_LIBRARY NAMES mongoc-1.0 mongoc)
+  find_library(ERKAO_BSON_LIBRARY NAMES bson-1.0 bson)
+  if(ERKAO_MONGO_INCLUDE AND ERKAO_BSON_INCLUDE AND ERKAO_MONGO_LIBRARY AND ERKAO_BSON_LIBRARY)
+    target_compile_definitions(erkao PRIVATE ERKAO_DB_MONGO=1)
+    target_include_directories(erkao PRIVATE ${ERKAO_MONGO_INCLUDE} ${ERKAO_BSON_INCLUDE})
+    target_link_libraries(erkao ${ERKAO_MONGO_LIBRARY} ${ERKAO_BSON_LIBRARY})
+  else()
+    target_compile_definitions(erkao PRIVATE ERKAO_DB_MONGO=0)
+    message(STATUS "MongoDB not found - db mongo driver disabled")
+  endif()
+else()
+  target_compile_definitions(erkao PRIVATE ERKAO_DB_MONGO=0)
+endif()
 
 if(ERKAO_SANITIZERS)
   if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")

@@ -1,5 +1,6 @@
 #include "interpreter_internal.h"
 #include "erkao_stdlib.h"
+#include "db.h"
 #include "gc.h"
 #include "plugin.h"
 #include "program.h"
@@ -311,6 +312,7 @@ void vmInit(VM* vm) {
   vm->modulePathCapacity = 0;
   vm->projectRoot = NULL;
   vm->globalPackagesDir = resolveGlobalPackagesDir();
+  vm->dbState = NULL;
   vm->frameCount = 0;
   vm->stackTop = vm->stack;
   vm->tryCount = 0;
@@ -356,6 +358,7 @@ void vmInit(VM* vm) {
 }
 
 void vmFree(VM* vm) {
+  dbShutdown(vm);
   pluginUnloadAll(vm);
 
   for (int i = 0; i < vm->modulePathCount; i++) {

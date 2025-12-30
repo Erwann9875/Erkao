@@ -1,0 +1,11 @@
+drivers [memory, postgres, mysql, mongo]
+supports_pg true
+conn_driver memory
+conn_kind document
+count 2
+bob Bob 30
+updated 1
+ada 43
+removed 1
+count2 1
+find_direct 1

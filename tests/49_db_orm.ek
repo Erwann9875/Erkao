@@ -1,0 +1,22 @@
+import "orm" as orm;
+
+let conn = db.connect("memory://");
+print("drivers", db.drivers());
+print("supports_pg", db.supports("postgres"));
+print("conn_driver", conn.driver);
+print("conn_kind", conn.kind);
+
+let User = orm.model(conn, "users", {});
+User.insert({ name: "Ada", age: 42 });
+User.insert({ name: "Bob", age: 30 });
+print("count", len(User.all()));
+let bob = User.findOne({ name: "Bob" });
+print("bob", bob.name, bob.age);
+let updated = User.update({ name: "Ada" }, { age: 43 });
+print("updated", updated);
+print("ada", User.findOne({ name: "Ada" }).age);
+let removed = User.remove({ name: "Bob" });
+print("removed", removed);
+print("count2", len(User.all()));
+let direct = db.find(conn, "users", { age: 43 });
+print("find_direct", len(direct));

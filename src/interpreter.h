@@ -3,6 +3,8 @@
 
 #include "value.h"
 
+typedef struct DbState DbState;
+
 #define FRAMES_MAX 64
 #define STACK_MAX (FRAMES_MAX * 256)
 #define TRY_MAX 256
@@ -102,6 +104,7 @@ struct VM {
   char* projectRoot;
   char* globalPackagesDir;
   void* compiler;
+  DbState* dbState;
 };
 
 void vmInit(VM* vm);

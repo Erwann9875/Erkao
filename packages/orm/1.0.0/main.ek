@@ -1,0 +1,56 @@
+fun model(conn, name, schema = null) {
+  if (schema == null) {
+    schema = {};
+  }
+
+  fun insert(row) {
+    return db.insert(conn, name, row);
+  }
+
+  fun find(query = null, options = null) {
+    if (query == null) {
+      query = {};
+    }
+    if (options == null) {
+      return db.find(conn, name, query);
+    }
+    return db.find(conn, name, query, options);
+  }
+
+  fun findOne(query = null, options = null) {
+    let rows = find(query, options);
+    if (len(rows) > 0) {
+      return rows[0];
+    }
+    return null;
+  }
+
+  fun update(query, changes, options = null) {
+    if (options == null) {
+      return db.update(conn, name, query, changes);
+    }
+    return db.update(conn, name, query, changes, options);
+  }
+
+  fun remove(query, options = null) {
+    if (options == null) {
+      return db.delete(conn, name, query);
+    }
+    return db.delete(conn, name, query, options);
+  }
+
+  fun all() {
+    return db.find(conn, name, {});
+  }
+
+  return {
+    name: name,
+    schema: schema,
+    insert: insert,
+    find: find,
+    findOne: findOne,
+    update: update,
+    remove: remove,
+    all: all
+  };
+}

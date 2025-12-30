@@ -1,4 +1,5 @@
 #include "erkao_stdlib.h"
+#include "db.h"
 #include "gc.h"
 #include "interpreter_internal.h"
 #include "plugin.h"
@@ -5350,6 +5351,8 @@ void defineStdlib(VM* vm) {
   moduleAdd(vm, di, "value", nativeDiValue, 3);
   moduleAdd(vm, di, "resolve", nativeDiResolve, 2);
   defineGlobal(vm, "di", OBJ_VAL(di));
+
+  defineDbModule(vm);
 
   ObjInstance* plugin = makeModule(vm, "plugin");
   moduleAdd(vm, plugin, "load", nativePluginLoad, 1);
