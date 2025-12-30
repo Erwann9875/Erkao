@@ -1328,6 +1328,7 @@ void typeDefineStdlib(Compiler* c) {
     typeDefineSynthetic(c, "proc", typeNamed(tc, copyString(c->vm, "proc")));
     typeDefineSynthetic(c, "env", typeNamed(tc, copyString(c->vm, "env")));
     typeDefineSynthetic(c, "plugin", typeNamed(tc, copyString(c->vm, "plugin")));
+    typeDefineSynthetic(c, "ffi", typeNamed(tc, copyString(c->vm, "ffi")));
     typeDefineSynthetic(c, "di", typeNamed(tc, copyString(c->vm, "di")));
     typeDefineSynthetic(c, "db", typeNamed(tc, copyString(c->vm, "db")));
   }

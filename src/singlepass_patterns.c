@@ -456,7 +456,7 @@ Pattern* parseMapPattern(Compiler* c) {
   Pattern* pattern = newPattern(PATTERN_MAP, open);
   if (!check(c, TOKEN_RIGHT_BRACE)) {
     do {
-      if (match(c, TOKEN_DOT_DOT)) {
+      if (match(c, TOKEN_DOT_DOT) || match(c, TOKEN_ELLIPSIS)) {
         Token restName = consume(c, TOKEN_IDENTIFIER, "Expect rest binding name after '..'.");
         if (pattern->as.map.hasRest) {
           errorAt(c, restName, "Map pattern can only have one rest binding.");

@@ -11,6 +11,8 @@ static void declaration(Compiler* c);
 static void statement(Compiler* c);
 static void block(Compiler* c, Token open);
 static void matchExpression(Compiler* c, bool canAssign);
+static void deferStatement(Compiler* c);
+static void map(Compiler* c, bool canAssign);
 
 static bool isTypeDeclarationStart(Compiler* c) {
   return check(c, TOKEN_TYPE_KW) &&
@@ -303,6 +305,23 @@ static void matchExpression(Compiler* c, bool canAssign) {
 static void variable(Compiler* c, bool canAssign) {
   Token name = previous(c);
   int nameIdx = emitStringConstant(c, name);
+  if (check(c, TOKEN_LEFT_BRACE) && findStructInfo(c, name)) {
+    c->pendingOptionalCall = false;
+    c->lastExprWasVar = false;
+    emitByte(c, OP_GET_VAR, name);
+    emitShort(c, (uint16_t)nameIdx, name);
+    typePush(c, typeLookup(c, name));
+    consume(c, TOKEN_LEFT_BRACE, "Expect '{' after struct name.");
+    map(c, false);
+    if (typecheckEnabled(c)) {
+      typePop(c);
+      typePop(c);
+      typePush(c, typeNamed(c->typecheck, stringFromToken(c->vm, name)));
+    }
+    emitByte(c, OP_CALL, name);
+    emitByte(c, 1, name);
+    return;
+  }
   if (canAssign && match(c, TOKEN_EQUAL)) {
     c->lastExprWasVar = false;
     expression(c);
@@ -511,7 +530,7 @@ static void dot(Compiler* c, bool canAssign) {
     typePush(c, valueType);
     emitByte(c, OP_SET_PROPERTY, name);
     emitShort(c, (uint16_t)nameIdx, name);
-  } else if (check(c, TOKEN_LEFT_PAREN)) {
+  } else if (!c->forbidCall && check(c, TOKEN_LEFT_PAREN)) {
     Token paren = advance(c);
     int argc = 0;
     if (!check(c, TOKEN_RIGHT_PAREN)) {
@@ -573,6 +592,10 @@ static void optionalDot(Compiler* c, bool canAssign) {
   (void)canAssign;
   c->lastExprWasVar = false;
   if (check(c, TOKEN_LEFT_PAREN)) {
+    if (c->forbidCall) {
+      errorAtCurrent(c, "Optional call is not allowed here.");
+      return;
+    }
     c->pendingOptionalCall = true;
     return;
   }
@@ -585,7 +608,9 @@ static void optionalDot(Compiler* c, bool canAssign) {
     Type* result = typeIndexResult(c, bracket, objectType, indexType);
     typePush(c, typeMakeNullable(c->typecheck, result));
     emitByte(c, OP_GET_INDEX_OPTIONAL, bracket);
-    c->pendingOptionalCall = true;
+    if (!c->forbidCall) {
+      c->pendingOptionalCall = true;
+    }
     return;
   }
   Token name = consume(c, TOKEN_IDENTIFIER, "Expect property name after '?.'.");
@@ -598,7 +623,9 @@ static void optionalDot(Compiler* c, bool canAssign) {
   typePush(c, typeMakeNullable(c->typecheck, memberType));
   emitByte(c, OP_GET_PROPERTY_OPTIONAL, name);
   emitShort(c, (uint16_t)nameIdx, name);
-  c->pendingOptionalCall = true;
+  if (!c->forbidCall) {
+    c->pendingOptionalCall = true;
+  }
 }
 
 static void tryUnwrap(Compiler* c, bool canAssign) {
@@ -842,6 +869,9 @@ static void parsePrecedence(Compiler* c, Precedence prec) {
 
 parse_infix:
   while (prec <= getRule(peek(c).type)->precedence) {
+    if (c->forbidCall && peek(c).type == TOKEN_LEFT_PAREN) {
+      break;
+    }
     advance(c);
     ParseFn infixRule = getRule(previous(c).type)->infix;
     if (infixRule != NULL) {
@@ -1927,6 +1957,62 @@ static void throwStatement(Compiler* c) {
   emitByte(c, OP_THROW, keyword);
 }
 
+static void deferStatement(Compiler* c) {
+  Token keyword = previous(c);
+  bool savedForbid = c->forbidCall;
+  c->pendingOptionalCall = false;
+  c->lastExprWasVar = false;
+  memset(&c->lastExprVar, 0, sizeof(Token));
+  c->forbidCall = true;
+  parsePrecedence(c, PREC_CALL);
+  c->forbidCall = savedForbid;
+  c->pendingOptionalCall = false;
+
+  Token openParen = consume(c, TOKEN_LEFT_PAREN, "Expect '(' after defer callee.");
+  int argc = 0;
+  if (!check(c, TOKEN_RIGHT_PAREN)) {
+    do {
+      if (argc >= ERK_MAX_ARGS) {
+        errorAtCurrent(c, "Too many arguments.");
+      }
+      expression(c);
+      argc++;
+    } while (match(c, TOKEN_COMMA));
+  }
+  consumeClosing(c, TOKEN_RIGHT_PAREN, "Expect ')' after defer arguments.", openParen);
+  consume(c, TOKEN_SEMICOLON, "Expect ';' after defer call.");
+
+  if (typecheckEnabled(c)) {
+    Type* argTypes[ERK_MAX_ARGS];
+    for (int i = argc - 1; i >= 0; i--) {
+      argTypes[i] = typePop(c);
+    }
+    Type* callee = typePop(c);
+    if (callee && callee->kind == TYPE_FUNCTION) {
+      if (callee->paramCount >= 0 && callee->paramCount != argc) {
+        typeErrorAt(c, openParen, "Function expects %d arguments but got %d.",
+                    callee->paramCount, argc);
+      } else if (callee->params) {
+        int checkCount = callee->paramCount >= 0 ? callee->paramCount : argc;
+        for (int i = 0; i < checkCount && i < argc; i++) {
+          if (!typeAssignable(callee->params[i], argTypes[i])) {
+            char expected[64];
+            char got[64];
+            typeToString(callee->params[i], expected, sizeof(expected));
+            typeToString(argTypes[i], got, sizeof(got));
+            typeErrorAt(c, openParen, "Argument %d expects %s but got %s.",
+                        i + 1, expected, got);
+          }
+        }
+      }
+    }
+  }
+
+  emitByte(c, OP_DEFER, keyword);
+  emitByte(c, (uint8_t)argc, keyword);
+  emitGc(c);
+}
+
 static void yieldStatement(Compiler* c) {
   Token keyword = previous(c);
   if (!c->enclosing) {
@@ -2283,6 +2369,144 @@ static void functionDeclaration(Compiler* c, bool isExport, bool isPrivate) {
     }
   }
 
+static void structDeclarationWithName(Compiler* c, Token name,
+                                      bool isExport, bool exportDefault, bool isPrivate) {
+  if (findStructInfo(c, name)) {
+    errorAt(c, name, "Struct already declared.");
+  } else {
+    compilerAddStruct(c, name);
+  }
+
+  ObjString* structName = stringFromToken(c->vm, name);
+  Token openBrace = consume(c, TOKEN_LEFT_BRACE, "Expect '{' before struct body.");
+
+  int nameConst = emitStringConstant(c, name);
+  emitByte(c, OP_NULL, noToken());
+  emitByte(c, OP_DEFINE_VAR, name);
+  emitShort(c, (uint16_t)nameConst, name);
+
+  int fieldsTemp = emitTempNameConstant(c, "struct_fields");
+  emitByte(c, OP_MAP, noToken());
+  emitShort(c, 0, noToken());
+  emitDefineVarConstant(c, fieldsTemp);
+
+  int defaultsTemp = emitTempNameConstant(c, "struct_defaults");
+  emitByte(c, OP_MAP, noToken());
+  emitShort(c, 0, noToken());
+  emitDefineVarConstant(c, defaultsTemp);
+
+  int readonlyTemp = emitTempNameConstant(c, "struct_readonly");
+  emitByte(c, OP_MAP, noToken());
+  emitShort(c, 0, noToken());
+  emitDefineVarConstant(c, readonlyTemp);
+
+  Token* fieldNames = NULL;
+  int fieldCount = 0;
+  int fieldCapacity = 0;
+
+  if (!check(c, TOKEN_RIGHT_BRACE)) {
+    for (;;) {
+      bool isReadonly = match(c, TOKEN_READONLY);
+      Token fieldName = consume(c, TOKEN_IDENTIFIER, "Expect field name.");
+      for (int i = 0; i < fieldCount; i++) {
+        if (fieldNames[i].length == fieldName.length &&
+            memcmp(fieldNames[i].start, fieldName.start, (size_t)fieldName.length) == 0) {
+          errorAt(c, fieldName, "Duplicate struct field.");
+          break;
+        }
+      }
+      if (fieldCount >= fieldCapacity) {
+        int oldCap = fieldCapacity;
+        fieldCapacity = GROW_CAPACITY(oldCap);
+        fieldNames = GROW_ARRAY(Token, fieldNames, oldCap, fieldCapacity);
+        if (!fieldNames) {
+          fprintf(stderr, "Out of memory.\n");
+          exit(1);
+        }
+      }
+      fieldNames[fieldCount++] = fieldName;
+
+      Type* fieldType = NULL;
+      bool hasType = false;
+      if (match(c, TOKEN_COLON)) {
+        fieldType = parseType(c);
+        hasType = true;
+      }
+
+      ObjString* fieldKey = stringFromToken(c->vm, fieldName);
+
+      emitGetVarConstant(c, fieldsTemp);
+      emitConstant(c, OBJ_VAL(fieldKey), fieldName);
+      emitByte(c, OP_TRUE, fieldName);
+      emitByte(c, OP_MAP_SET, fieldName);
+      emitByte(c, OP_POP, fieldName);
+
+      if (isReadonly) {
+        emitGetVarConstant(c, readonlyTemp);
+        emitConstant(c, OBJ_VAL(fieldKey), fieldName);
+        emitByte(c, OP_TRUE, fieldName);
+        emitByte(c, OP_MAP_SET, fieldName);
+        emitByte(c, OP_POP, fieldName);
+      }
+
+      if (match(c, TOKEN_EQUAL)) {
+        emitGetVarConstant(c, defaultsTemp);
+        emitConstant(c, OBJ_VAL(fieldKey), fieldName);
+        expression(c);
+        Type* defaultType = typePop(c);
+        if (typecheckEnabled(c) && hasType && fieldType &&
+            !typeAssignable(fieldType, defaultType)) {
+          char expected[64];
+          char got[64];
+          typeToString(fieldType, expected, sizeof(expected));
+          typeToString(defaultType, got, sizeof(got));
+          typeErrorAt(c, fieldName, "Default value expects %s but got %s.", expected, got);
+        }
+        emitByte(c, OP_MAP_SET, fieldName);
+        emitByte(c, OP_POP, fieldName);
+      }
+      if (match(c, TOKEN_COMMA) || match(c, TOKEN_SEMICOLON)) {
+        if (check(c, TOKEN_RIGHT_BRACE)) break;
+        continue;
+      }
+      break;
+    }
+  }
+
+  consumeClosing(c, TOKEN_RIGHT_BRACE, "Expect '}' after struct body.", openBrace);
+
+  free(fieldNames);
+
+  emitGetVarConstant(c, fieldsTemp);
+  emitGetVarConstant(c, defaultsTemp);
+  emitGetVarConstant(c, readonlyTemp);
+  emitByte(c, OP_STRUCT, name);
+  emitShort(c, (uint16_t)nameConst, name);
+
+  if (isPrivate) {
+    emitPrivateName(c, nameConst, name);
+  }
+  if (isExport) {
+    emitByte(c, OP_EXPORT, name);
+    emitShort(c, (uint16_t)nameConst, name);
+  }
+  if (exportDefault) {
+    emitGetVarConstant(c, nameConst);
+    int defaultIdx = emitStringConstantFromChars(c, "default", 7);
+    emitExportValue(c, (uint16_t)defaultIdx, name);
+  }
+  emitGc(c);
+
+  if (typecheckEnabled(c) && gTypeRegistry) {
+    typeRegistryAddClass(gTypeRegistry, structName, NULL, 0);
+  }
+}
+
+static void structDeclaration(Compiler* c, bool isExport, bool isPrivate) {
+  Token name = consume(c, TOKEN_IDENTIFIER, "Expect struct name.");
+  structDeclarationWithName(c, name, isExport, false, isPrivate);
+}
+
 static void classDeclarationWithName(Compiler* c, Token name,
                                      bool isExport, bool exportDefault, bool isPrivate) {
     ObjString* className = stringFromToken(c->vm, name);
@@ -2617,8 +2841,8 @@ static void exportDeclaration(Compiler* c) {
     errorAt(c, keyword, "Export declarations must be at top level.");
   }
 
-  if (match(c, TOKEN_DEFAULT)) {
-      if (match(c, TOKEN_FUN)) {
+    if (match(c, TOKEN_DEFAULT)) {
+        if (match(c, TOKEN_FUN)) {
         Token name = consume(c, TOKEN_IDENTIFIER, "Expect function name.");
         Type* functionType = NULL;
         ObjFunction* function = compileFunction(c, name, false, &functionType, true);
@@ -2638,12 +2862,17 @@ static void exportDeclaration(Compiler* c) {
       emitGc(c);
       return;
     }
-    if (match(c, TOKEN_CLASS)) {
-      Token name = consume(c, TOKEN_IDENTIFIER, "Expect class name.");
-      classDeclarationWithName(c, name, false, allowExport, false);
-      return;
-    }
-    expression(c);
+      if (match(c, TOKEN_CLASS)) {
+        Token name = consume(c, TOKEN_IDENTIFIER, "Expect class name.");
+        classDeclarationWithName(c, name, false, allowExport, false);
+        return;
+      }
+      if (match(c, TOKEN_STRUCT)) {
+        Token name = consume(c, TOKEN_IDENTIFIER, "Expect struct name.");
+        structDeclarationWithName(c, name, false, allowExport, false);
+        return;
+      }
+      expression(c);
     typePop(c);
     consume(c, TOKEN_SEMICOLON, "Expect ';' after export.");
     if (allowExport) {
@@ -2718,10 +2947,14 @@ static void exportDeclaration(Compiler* c) {
     functionDeclaration(c, allowExport, false);
     return;
   }
-  if (match(c, TOKEN_CLASS)) {
-    classDeclaration(c, allowExport, false);
-    return;
-  }
+    if (match(c, TOKEN_CLASS)) {
+      classDeclaration(c, allowExport, false);
+      return;
+    }
+    if (match(c, TOKEN_STRUCT)) {
+      structDeclaration(c, allowExport, false);
+      return;
+    }
     if (match(c, TOKEN_ENUM)) {
       enumDeclaration(c, allowExport, false);
       return;
@@ -2762,10 +2995,14 @@ static void privateDeclaration(Compiler* c) {
     functionDeclaration(c, false, allowPrivate);
     return;
   }
-  if (match(c, TOKEN_CLASS)) {
-    classDeclaration(c, false, allowPrivate);
-    return;
-  }
+    if (match(c, TOKEN_CLASS)) {
+      classDeclaration(c, false, allowPrivate);
+      return;
+    }
+    if (match(c, TOKEN_STRUCT)) {
+      structDeclaration(c, false, allowPrivate);
+      return;
+    }
   if (match(c, TOKEN_ENUM)) {
     enumDeclaration(c, false, allowPrivate);
     return;
@@ -2785,6 +3022,8 @@ static void declaration(Compiler* c) {
     exportDeclaration(c);
   } else if (match(c, TOKEN_CLASS)) {
     classDeclaration(c, false, false);
+  } else if (match(c, TOKEN_STRUCT)) {
+    structDeclaration(c, false, false);
   } else if (match(c, TOKEN_FUN)) {
     functionDeclaration(c, false, false);
   } else if (match(c, TOKEN_INTERFACE)) {
@@ -2822,12 +3061,14 @@ static void statement(Compiler* c) {
     foreachStatement(c);
   } else if (match(c, TOKEN_SWITCH) || match(c, TOKEN_MATCH)) {
     switchStatement(c);
-  } else if (match(c, TOKEN_TRY)) {
-    tryStatement(c);
-  } else if (match(c, TOKEN_THROW)) {
-    throwStatement(c);
-  } else if (match(c, TOKEN_YIELD)) {
-    yieldStatement(c);
+    } else if (match(c, TOKEN_TRY)) {
+      tryStatement(c);
+    } else if (match(c, TOKEN_THROW)) {
+      throwStatement(c);
+    } else if (match(c, TOKEN_DEFER)) {
+      deferStatement(c);
+    } else if (match(c, TOKEN_YIELD)) {
+      yieldStatement(c);
   } else if (match(c, TOKEN_RETURN)) {
     returnStatement(c);
   } else if (match(c, TOKEN_BREAK)) {
@@ -3035,6 +3276,7 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
   fnCompiler.scopeDepth = 0;
   fnCompiler.tempIndex = 0;
   fnCompiler.pendingOptionalCall = false;
+  fnCompiler.forbidCall = false;
   fnCompiler.lastExprWasVar = false;
   memset(&fnCompiler.lastExprVar, 0, sizeof(Token));
   fnCompiler.hasYield = false;
@@ -3045,6 +3287,9 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
   fnCompiler.enums = NULL;
   fnCompiler.enumCount = 0;
   fnCompiler.enumCapacity = 0;
+  fnCompiler.structs = NULL;
+  fnCompiler.structCount = 0;
+  fnCompiler.structCapacity = 0;
 
   TypeChecker fnTypeChecker;
   typeCheckerInit(&fnTypeChecker, c->typecheck,
@@ -3178,6 +3423,7 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
 
   typeCheckerFree(&fnTypeChecker);
   compilerEnumsFree(&fnCompiler);
+  compilerStructsFree(&fnCompiler);
 
   if (fnCompiler.hadError) {
     c->hadError = true;
@@ -3214,6 +3460,7 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
   c.scopeDepth = 0;
   c.tempIndex = 0;
   c.pendingOptionalCall = false;
+  c.forbidCall = false;
   c.lastExprWasVar = false;
   memset(&c.lastExprVar, 0, sizeof(Token));
   c.hasYield = false;
@@ -3223,8 +3470,11 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
     c.enclosing = NULL;
     c.typecheck = &typecheck;
     c.enums = NULL;
-    c.enumCount = 0;
-    c.enumCapacity = 0;
+  c.enumCount = 0;
+  c.enumCapacity = 0;
+  c.structs = NULL;
+  c.structCount = 0;
+  c.structCapacity = 0;
     vm->compiler = &c;
     gTypeRegistry = &registry;
     typeDefineStdlib(&c);
@@ -3239,17 +3489,19 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
     vm->compiler = NULL;
     gTypeRegistry = NULL;
 
-    *hadError = c.hadError;
-    if (c.hadError) {
-      compilerEnumsFree(&c);
-      typeCheckerFree(&typecheck);
-      typeRegistryFree(&registry);
-      return NULL;
-    }
-    optimizeChunk(vm, chunk);
+  *hadError = c.hadError;
+  if (c.hadError) {
     compilerEnumsFree(&c);
+    compilerStructsFree(&c);
     typeCheckerFree(&typecheck);
     typeRegistryFree(&registry);
-    return function;
+    return NULL;
   }
+  optimizeChunk(vm, chunk);
+  compilerEnumsFree(&c);
+  compilerStructsFree(&c);
+  typeCheckerFree(&typecheck);
+  typeRegistryFree(&registry);
+  return function;
+}
 

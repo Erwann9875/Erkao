@@ -207,7 +207,11 @@ static ErkaoTokenType identifierType(Scanner* scanner) {
       }
       return TOKEN_IDENTIFIER;
     case 'd':
-      return checkKeyword(scanner, 1, 6, "efault", TOKEN_DEFAULT);
+      {
+        ErkaoTokenType type = checkKeyword(scanner, 1, 6, "efault", TOKEN_DEFAULT);
+        if (type != TOKEN_IDENTIFIER) return type;
+        return checkKeyword(scanner, 1, 4, "efer", TOKEN_DEFER);
+      }
     case 'e':
       if ((int)(scanner->current - scanner->start) > 1) {
         switch (scanner->start[1]) {
@@ -258,10 +262,16 @@ static ErkaoTokenType identifierType(Scanner* scanner) {
       return checkKeyword(scanner, 1, 1, "r", TOKEN_OR);
     case 'p':
       return checkKeyword(scanner, 1, 6, "rivate", TOKEN_PRIVATE);
-    case 'r':
+    case 'r': {
+      ErkaoTokenType type = checkKeyword(scanner, 1, 7, "eadonly", TOKEN_READONLY);
+      if (type != TOKEN_IDENTIFIER) return type;
       return checkKeyword(scanner, 1, 5, "eturn", TOKEN_RETURN);
-    case 's':
+    }
+    case 's': {
+      ErkaoTokenType type = checkKeyword(scanner, 1, 5, "truct", TOKEN_STRUCT);
+      if (type != TOKEN_IDENTIFIER) return type;
       return checkKeyword(scanner, 1, 5, "witch", TOKEN_SWITCH);
+    }
     case 't':
       if ((int)(scanner->current - scanner->start) > 1) {
         switch (scanner->start[1]) {
@@ -628,6 +638,7 @@ const char* tokenTypeName(ErkaoTokenType type) {
     case TOKEN_AS: return "AS";
     case TOKEN_CLASS: return "CLASS";
     case TOKEN_CONST: return "CONST";
+    case TOKEN_DEFER: return "DEFER";
     case TOKEN_ELSE: return "ELSE";
     case TOKEN_ENUM: return "ENUM";
     case TOKEN_EXPORT: return "EXPORT";
@@ -641,7 +652,9 @@ const char* tokenTypeName(ErkaoTokenType type) {
     case TOKEN_NULL: return "NULL";
     case TOKEN_OR: return "OR";
     case TOKEN_PRIVATE: return "PRIVATE";
+    case TOKEN_READONLY: return "READONLY";
     case TOKEN_RETURN: return "RETURN";
+    case TOKEN_STRUCT: return "STRUCT";
     case TOKEN_TYPE_KW: return "TYPE";
     case TOKEN_TRY: return "TRY";
     case TOKEN_CATCH: return "CATCH";

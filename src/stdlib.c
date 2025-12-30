@@ -26,6 +26,7 @@
 #else
 #include <arpa/inet.h>
 #include <curl/curl.h>
+#include <dlfcn.h>
 #include <dirent.h>
 #include <errno.h>
 #include <netinet/in.h>
@@ -46,7 +47,10 @@ static ObjInstance* makeModule(VM* vm, const char* name) {
   ObjString* className = copyString(vm, name);
   ObjMap* methods = newMap(vm);
   ObjClass* klass = newClass(vm, className, methods);
-  return newInstance(vm, klass);
+  ObjInstance* module = newInstance(vm, klass);
+  ObjString* defaultKey = copyString(vm, "default");
+  mapSet(module->fields, defaultKey, OBJ_VAL(module));
+  return module;
 }
 
 static void moduleAdd(VM* vm, ObjInstance* module, const char* name, NativeFn fn, int arity) {
@@ -3099,6 +3103,54 @@ static Value nativePrint(VM* vm, int argc, Value* args) {
   return NULL_VAL;
 }
 
+static Value nativeFmt(VM* vm, int argc, Value* args) {
+  if (argc < 1 || !isObjType(args[0], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "fmt expects a format string.");
+  }
+  ObjString* format = (ObjString*)AS_OBJ(args[0]);
+  ByteBuffer buffer;
+  bufferInit(&buffer);
+  int argIndex = 1;
+
+  for (int i = 0; i < format->length; i++) {
+    char c = format->chars[i];
+    if (c == '{') {
+      if (i + 1 < format->length && format->chars[i + 1] == '{') {
+        bufferAppendChar(&buffer, '{');
+        i++;
+        continue;
+      }
+      if (i + 1 < format->length && format->chars[i + 1] == '}') {
+        if (argIndex >= argc) {
+          bufferFree(&buffer);
+          return runtimeErrorValue(vm, "fmt expects a value for '{}'.");
+        }
+        ObjString* text = stringifyValue(vm, args[argIndex++]);
+        bufferAppendN(&buffer, text->chars, (size_t)text->length);
+        i++;
+        continue;
+      }
+      bufferFree(&buffer);
+      return runtimeErrorValue(vm, "fmt expects '{}' or '{{'.");
+    }
+    if (c == '}') {
+      if (i + 1 < format->length && format->chars[i + 1] == '}') {
+        bufferAppendChar(&buffer, '}');
+        i++;
+        continue;
+      }
+      bufferFree(&buffer);
+      return runtimeErrorValue(vm, "fmt expects '}' to be escaped as '}}'.");
+    }
+    bufferAppendChar(&buffer, c);
+  }
+
+  ObjString* result = copyStringWithLength(vm, buffer.data ? buffer.data : "",
+                                           (int)buffer.length);
+  bufferFree(&buffer);
+  return OBJ_VAL(result);
+}
+
 static Value nativeClock(VM* vm, int argc, Value* args) {
   (void)vm;
   (void)argc;
@@ -5127,6 +5179,180 @@ static Value nativeDiResolve(VM* vm, int argc, Value* args) {
   return instance;
 }
 
+static int ffiStoreHandle(VM* vm, void* handle, bool owns) {
+  for (int i = 0; i < vm->ffiCount; i++) {
+    if (!vm->ffiHandles[i].handle) {
+      vm->ffiHandles[i].handle = handle;
+      vm->ffiHandles[i].owns = owns;
+      return i;
+    }
+  }
+  if (vm->ffiCapacity < vm->ffiCount + 1) {
+    int oldCap = vm->ffiCapacity;
+    vm->ffiCapacity = GROW_CAPACITY(oldCap);
+    vm->ffiHandles = GROW_ARRAY(FfiHandle, vm->ffiHandles, oldCap, vm->ffiCapacity);
+    if (!vm->ffiHandles) {
+      fprintf(stderr, "Out of memory.\n");
+      exit(1);
+    }
+  }
+  vm->ffiHandles[vm->ffiCount].handle = handle;
+  vm->ffiHandles[vm->ffiCount].owns = owns;
+  return vm->ffiCount++;
+}
+
+static bool ffiGetHandle(VM* vm, Value handleValue, int* outId, FfiHandle** outHandle) {
+  if (!isObjType(handleValue, OBJ_MAP)) return false;
+  ObjMap* map = (ObjMap*)AS_OBJ(handleValue);
+  ObjString* key = copyString(vm, "_ffi");
+  Value idValue;
+  if (!mapGet(map, key, &idValue) || !IS_NUMBER(idValue)) return false;
+  int id = (int)AS_NUMBER(idValue);
+  if (id < 0 || id >= vm->ffiCount) return false;
+  FfiHandle* handle = &vm->ffiHandles[id];
+  if (!handle->handle) return false;
+  if (outId) *outId = id;
+  if (outHandle) *outHandle = handle;
+  return true;
+}
+
+static Value nativeFfiOpen(VM* vm, int argc, Value* args) {
+  if (argc != 1 || (!IS_NULL(args[0]) && !isObjType(args[0], OBJ_STRING))) {
+    return runtimeErrorValue(vm, "ffi.open expects a path string or null.");
+  }
+
+  void* handle = NULL;
+  bool owns = false;
+
+  if (IS_NULL(args[0])) {
+#ifdef _WIN32
+    handle = (void*)GetModuleHandleA(NULL);
+#else
+    handle = dlopen(NULL, RTLD_NOW);
+#endif
+    owns = false;
+  } else {
+    ObjString* path = (ObjString*)AS_OBJ(args[0]);
+#ifdef _WIN32
+    handle = (void*)LoadLibraryA(path->chars);
+    if (!handle) {
+      char buffer[128];
+      snprintf(buffer, sizeof(buffer), "LoadLibrary failed (%lu).", (unsigned long)GetLastError());
+      return runtimeErrorValue(vm, buffer);
+    }
+#else
+    handle = dlopen(path->chars, RTLD_NOW);
+    if (!handle) {
+      const char* error = dlerror();
+      return runtimeErrorValue(vm, error ? error : "dlopen failed.");
+    }
+#endif
+    owns = true;
+  }
+
+  if (!handle) {
+    return runtimeErrorValue(vm, "ffi.open failed.");
+  }
+
+  int id = ffiStoreHandle(vm, handle, owns);
+  ObjMap* out = newMap(vm);
+  ObjString* key = copyString(vm, "_ffi");
+  mapSet(out, key, NUMBER_VAL((double)id));
+  return OBJ_VAL(out);
+}
+
+static Value nativeFfiClose(VM* vm, int argc, Value* args) {
+  if (argc != 1) {
+    return runtimeErrorValue(vm, "ffi.close expects a handle.");
+  }
+  int id = -1;
+  FfiHandle* handle = NULL;
+  if (!ffiGetHandle(vm, args[0], &id, &handle)) {
+    return runtimeErrorValue(vm, "ffi.close expects a valid handle.");
+  }
+  if (handle->handle && handle->owns) {
+#ifdef _WIN32
+    FreeLibrary((HMODULE)handle->handle);
+#else
+    dlclose(handle->handle);
+#endif
+  }
+  handle->handle = NULL;
+  handle->owns = false;
+  return NULL_VAL;
+}
+
+static Value nativeFfiCall(VM* vm, int argc, Value* args) {
+  if (argc < 2) {
+    return runtimeErrorValue(vm, "ffi.call expects (handle, name, ...args).");
+  }
+  FfiHandle* handle = NULL;
+  if (!ffiGetHandle(vm, args[0], NULL, &handle)) {
+    return runtimeErrorValue(vm, "ffi.call expects a valid handle.");
+  }
+  if (!isObjType(args[1], OBJ_STRING)) {
+    return runtimeErrorValue(vm, "ffi.call expects a symbol name.");
+  }
+  ObjString* name = (ObjString*)AS_OBJ(args[1]);
+#ifdef _WIN32
+  FARPROC proc = GetProcAddress((HMODULE)handle->handle, name->chars);
+  if (!proc) {
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "GetProcAddress failed (%lu).",
+             (unsigned long)GetLastError());
+    return runtimeErrorValue(vm, buffer);
+  }
+  void* symbol = (void*)proc;
+#else
+  dlerror();
+  void* symbol = dlsym(handle->handle, name->chars);
+  const char* error = dlerror();
+  if (!symbol || error) {
+    return runtimeErrorValue(vm, error ? error : "dlsym failed.");
+  }
+#endif
+
+  int argCount = argc - 2;
+  if (argCount > 4) {
+    return runtimeErrorValue(vm, "ffi.call supports up to 4 arguments.");
+  }
+  double values[4] = {0};
+  for (int i = 0; i < argCount; i++) {
+    Value value = args[i + 2];
+    if (IS_NUMBER(value)) {
+      values[i] = AS_NUMBER(value);
+    } else if (IS_BOOL(value)) {
+      values[i] = AS_BOOL(value) ? 1.0 : 0.0;
+    } else {
+      return runtimeErrorValue(vm, "ffi.call expects number arguments.");
+    }
+  }
+
+  double result = 0.0;
+  switch (argCount) {
+    case 0:
+      result = ((double (*)(void))symbol)();
+      break;
+    case 1:
+      result = ((double (*)(double))symbol)(values[0]);
+      break;
+    case 2:
+      result = ((double (*)(double, double))symbol)(values[0], values[1]);
+      break;
+    case 3:
+      result = ((double (*)(double, double, double))symbol)(values[0], values[1], values[2]);
+      break;
+    case 4:
+      result = ((double (*)(double, double, double, double))symbol)(values[0], values[1],
+                                                                    values[2], values[3]);
+      break;
+    default:
+      break;
+  }
+
+  return NUMBER_VAL(result);
+}
+
 static Value nativePluginLoad(VM* vm, int argc, Value* args) {
   (void)argc;
   if (!isObjType(args[0], OBJ_STRING)) {
@@ -5142,6 +5368,7 @@ static Value nativePluginLoad(VM* vm, int argc, Value* args) {
 
 void defineStdlib(VM* vm) {
   defineNative(vm, "print", nativePrint, -1);
+  defineNative(vm, "fmt", nativeFmt, -1);
   defineNative(vm, "clock", nativeClock, 0);
   defineNative(vm, "type", nativeType, 1);
   defineNative(vm, "len", nativeLen, 1);
@@ -5353,6 +5580,12 @@ void defineStdlib(VM* vm) {
   defineGlobal(vm, "di", OBJ_VAL(di));
 
   defineDbModule(vm);
+
+  ObjInstance* ffi = makeModule(vm, "ffi");
+  moduleAdd(vm, ffi, "open", nativeFfiOpen, 1);
+  moduleAdd(vm, ffi, "close", nativeFfiClose, 1);
+  moduleAdd(vm, ffi, "call", nativeFfiCall, -1);
+  defineGlobal(vm, "ffi", OBJ_VAL(ffi));
 
   ObjInstance* plugin = makeModule(vm, "plugin");
   moduleAdd(vm, plugin, "load", nativePluginLoad, 1);

@@ -203,6 +203,8 @@ static int disassembleInstruction(const Chunk* chunk, int offset) {
       return byteInstruction("OP_CALL", chunk, offset);
     case OP_CALL_OPTIONAL:
       return byteInstruction("OP_CALL_OPTIONAL", chunk, offset);
+    case OP_DEFER:
+      return byteInstruction("OP_DEFER", chunk, offset);
     case OP_INVOKE:
       return invokeInstruction("OP_INVOKE", chunk, offset);
     case OP_ARG_COUNT:
@@ -229,6 +231,8 @@ static int disassembleInstruction(const Chunk* chunk, int offset) {
       printf("'\n");
       return offset + 5;
     }
+    case OP_STRUCT:
+      return constantInstruction("OP_STRUCT", chunk, offset);
     case OP_IMPORT: {
       uint8_t hasAlias = chunk->code[offset + 1];
       uint16_t alias = (uint16_t)((chunk->code[offset + 2] << 8) | chunk->code[offset + 3]);

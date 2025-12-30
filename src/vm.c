@@ -11,6 +11,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
+
 static bool envFlagEnabled(const char* name) {
   const char* value = getenv(name);
   if (!value || value[0] == '\0') return false;
@@ -271,6 +277,12 @@ void vmInit(VM* vm) {
   vm->pluginHandles = NULL;
   vm->pluginCount = 0;
   vm->pluginCapacity = 0;
+  vm->ffiHandles = NULL;
+  vm->ffiCount = 0;
+  vm->ffiCapacity = 0;
+  vm->defers = NULL;
+  vm->deferCount = 0;
+  vm->deferCapacity = 0;
   vm->gcYoungBytes = 0;
   vm->gcOldBytes = 0;
   vm->gcEnvBytes = 0;
@@ -360,6 +372,26 @@ void vmInit(VM* vm) {
 void vmFree(VM* vm) {
   dbShutdown(vm);
   pluginUnloadAll(vm);
+  for (int i = 0; i < vm->ffiCount; i++) {
+    if (!vm->ffiHandles[i].handle) continue;
+    if (!vm->ffiHandles[i].owns) continue;
+#ifdef _WIN32
+    FreeLibrary((HMODULE)vm->ffiHandles[i].handle);
+#else
+    dlclose(vm->ffiHandles[i].handle);
+#endif
+  }
+  FREE_ARRAY(FfiHandle, vm->ffiHandles, vm->ffiCapacity);
+  vm->ffiHandles = NULL;
+  vm->ffiCount = 0;
+  vm->ffiCapacity = 0;
+  for (int i = 0; i < vm->deferCount; i++) {
+    free(vm->defers[i].args);
+  }
+  FREE_ARRAY(DeferEntry, vm->defers, vm->deferCapacity);
+  vm->defers = NULL;
+  vm->deferCount = 0;
+  vm->deferCapacity = 0;
 
   for (int i = 0; i < vm->modulePathCount; i++) {
     free(vm->modulePaths[i]);

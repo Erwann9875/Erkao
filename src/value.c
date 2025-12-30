@@ -191,6 +191,10 @@ ObjClass* newClass(VM* vm, ObjString* name, ObjMap* methods) {
   ObjClass* klass = (ObjClass*)allocateObject(vm, sizeof(ObjClass), OBJ_CLASS, OBJ_GEN_OLD);
   klass->name = name;
   klass->methods = methods;
+  klass->isStruct = false;
+  klass->structFields = NULL;
+  klass->structDefaults = NULL;
+  klass->structReadonly = NULL;
   gcRememberObjectIfYoungRefs(vm, (Obj*)klass);
   return klass;
 }
@@ -604,4 +608,177 @@ static void printObject(Value value) {
       printf("<bound method>");
       break;
   }
+}
+
+typedef struct {
+  char* data;
+  int length;
+  int capacity;
+} StringBuilder;
+
+static void sbInit(StringBuilder* sb) {
+  sb->data = NULL;
+  sb->length = 0;
+  sb->capacity = 0;
+}
+
+static void sbEnsure(StringBuilder* sb, int needed) {
+  if (sb->capacity >= needed) return;
+  int newCap = sb->capacity == 0 ? 64 : sb->capacity;
+  while (newCap < needed) {
+    newCap *= 2;
+  }
+  char* next = (char*)realloc(sb->data, (size_t)newCap);
+  if (!next) {
+    fprintf(stderr, "Out of memory.\n");
+    exit(1);
+  }
+  sb->data = next;
+  sb->capacity = newCap;
+}
+
+static void sbAppendN(StringBuilder* sb, const char* text, int length) {
+  if (length <= 0) return;
+  sbEnsure(sb, sb->length + length + 1);
+  memcpy(sb->data + sb->length, text, (size_t)length);
+  sb->length += length;
+  sb->data[sb->length] = '\0';
+}
+
+static void sbAppendChar(StringBuilder* sb, char c) {
+  sbEnsure(sb, sb->length + 2);
+  sb->data[sb->length++] = c;
+  sb->data[sb->length] = '\0';
+}
+
+static void appendValue(StringBuilder* sb, Value value);
+
+static void appendArray(StringBuilder* sb, ObjArray* array) {
+  sbAppendChar(sb, '[');
+  for (int i = 0; i < array->count; i++) {
+    if (i > 0) sbAppendN(sb, ", ", 2);
+    appendValue(sb, array->items[i]);
+  }
+  sbAppendChar(sb, ']');
+}
+
+static void appendMap(StringBuilder* sb, ObjMap* map) {
+  sbAppendChar(sb, '{');
+  int printed = 0;
+  for (int i = 0; i < map->capacity; i++) {
+    if (!map->entries[i].key) continue;
+    if (printed > 0) sbAppendN(sb, ", ", 2);
+    sbAppendN(sb, map->entries[i].key->chars, map->entries[i].key->length);
+    sbAppendN(sb, ": ", 2);
+    appendValue(sb, map->entries[i].value);
+    printed++;
+  }
+  sbAppendChar(sb, '}');
+}
+
+static void appendObject(StringBuilder* sb, Obj* obj) {
+  switch (obj->type) {
+    case OBJ_STRING: {
+      ObjString* string = (ObjString*)obj;
+      sbAppendN(sb, string->chars, string->length);
+      break;
+    }
+    case OBJ_FUNCTION: {
+      ObjFunction* function = (ObjFunction*)obj;
+      if (function->name && function->name->chars) {
+        sbAppendN(sb, "<fun ", 5);
+        sbAppendN(sb, function->name->chars, function->name->length);
+        sbAppendChar(sb, '>');
+      } else {
+        sbAppendN(sb, "<fun>", 5);
+      }
+      break;
+    }
+    case OBJ_NATIVE: {
+      ObjNative* native = (ObjNative*)obj;
+      if (native->name && native->name->chars) {
+        sbAppendN(sb, "<native ", 8);
+        sbAppendN(sb, native->name->chars, native->name->length);
+        sbAppendChar(sb, '>');
+      } else {
+        sbAppendN(sb, "<native>", 8);
+      }
+      break;
+    }
+    case OBJ_ENUM_CTOR: {
+      ObjEnumCtor* ctor = (ObjEnumCtor*)obj;
+      sbAppendN(sb, "<enum ", 6);
+      if (ctor->enumName && ctor->enumName->chars) {
+        sbAppendN(sb, ctor->enumName->chars, ctor->enumName->length);
+      } else {
+        sbAppendN(sb, "enum", 4);
+      }
+      sbAppendChar(sb, '.');
+      if (ctor->variantName && ctor->variantName->chars) {
+        sbAppendN(sb, ctor->variantName->chars, ctor->variantName->length);
+      } else {
+        sbAppendN(sb, "variant", 7);
+      }
+      sbAppendChar(sb, '>');
+      break;
+    }
+    case OBJ_CLASS: {
+      ObjClass* klass = (ObjClass*)obj;
+      sbAppendN(sb, "<class ", 7);
+      sbAppendN(sb, klass->name->chars, klass->name->length);
+      sbAppendChar(sb, '>');
+      break;
+    }
+    case OBJ_INSTANCE: {
+      ObjInstance* instance = (ObjInstance*)obj;
+      sbAppendChar(sb, '<');
+      sbAppendN(sb, instance->klass->name->chars, instance->klass->name->length);
+      sbAppendN(sb, " instance>", 10);
+      break;
+    }
+    case OBJ_ARRAY:
+      appendArray(sb, (ObjArray*)obj);
+      break;
+    case OBJ_MAP:
+      appendMap(sb, (ObjMap*)obj);
+      break;
+    case OBJ_BOUND_METHOD:
+      sbAppendN(sb, "<bound method>", 14);
+      break;
+  }
+}
+
+static void appendValue(StringBuilder* sb, Value value) {
+  switch (value.type) {
+    case VAL_NULL:
+      sbAppendN(sb, "null", 4);
+      break;
+    case VAL_BOOL:
+      if (AS_BOOL(value)) {
+        sbAppendN(sb, "true", 4);
+      } else {
+        sbAppendN(sb, "false", 5);
+      }
+      break;
+    case VAL_NUMBER: {
+      char buffer[64];
+      int length = snprintf(buffer, sizeof(buffer), "%g", AS_NUMBER(value));
+      if (length < 0) length = 0;
+      if (length >= (int)sizeof(buffer)) {
+        length = (int)sizeof(buffer) - 1;
+      }
+      sbAppendN(sb, buffer, length);
+      break;
+    }
+    case VAL_OBJ:
+      appendObject(sb, AS_OBJ(value));
+      break;
+  }
+}
+
+ObjString* stringifyValue(VM* vm, Value value) {
+  StringBuilder sb;
+  sbInit(&sb);
+  appendValue(&sb, value);
+  return takeStringWithLength(vm, sb.data, sb.length);
 }

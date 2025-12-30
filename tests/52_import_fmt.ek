@@ -1,0 +1,8 @@
+import json from "json";
+import * as path from "path";
+
+let data = { a: 1, b: [2, 3] };
+print("fmt1", fmt("a={}, b={}", data["a"], data["b"]));
+print("fmt2", fmt("braces {{}}"));
+print("json", json.stringify({ x: 1 }));
+print("join", path.join("a", "b"));

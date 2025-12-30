@@ -262,6 +262,11 @@ struct EnumInfo {
   bool isAdt;
 };
 
+typedef struct StructInfo {
+  char* name;
+  int nameLength;
+} StructInfo;
+
 extern TypeRegistry* gTypeRegistry;
 
 bool isAtEnd(Compiler* c);
@@ -398,6 +403,10 @@ EnumVariantInfo* enumInfoAddVariant(EnumInfo* info, Token name, int arity);
 EnumVariantInfo* findEnumVariant(EnumInfo* info, Token name);
 int enumVariantIndex(EnumInfo* info, Token name);
 void enumInfoSetAdt(EnumInfo* info, bool isAdt);
+
+StructInfo* compilerAddStruct(Compiler* c, Token name);
+StructInfo* findStructInfo(Compiler* c, Token name);
+void compilerStructsFree(Compiler* c);
 
 char* parseStringChars(const char* start, int length);
 bool isTripleQuoted(Token token);

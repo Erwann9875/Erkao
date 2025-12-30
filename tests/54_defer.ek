@@ -1,0 +1,9 @@
+defer print("end");
+print("start");
+{
+  defer print("inner1");
+  defer print("inner2");
+  print("block");
+}
+defer print("after");
+print("done");

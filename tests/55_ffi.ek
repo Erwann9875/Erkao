@@ -1,0 +1,4 @@
+import * as ffi from "ffi";
+
+let lib = ffi.open(null);
+print("ffi", ffi.call(lib, "erkao_ffi_add", 2, 3));

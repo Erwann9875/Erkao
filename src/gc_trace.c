@@ -95,6 +95,9 @@ static void blackenObject(VM* vm, Obj* object) {
       ObjClass* klass = (ObjClass*)object;
       markObject(vm, (Obj*)klass->name);
       markObject(vm, (Obj*)klass->methods);
+      if (klass->structFields) markObject(vm, (Obj*)klass->structFields);
+      if (klass->structDefaults) markObject(vm, (Obj*)klass->structDefaults);
+      if (klass->structReadonly) markObject(vm, (Obj*)klass->structReadonly);
       break;
     }
     case OBJ_INSTANCE: {
@@ -181,6 +184,9 @@ void blackenYoungObject(VM* vm, Obj* object) {
       ObjClass* klass = (ObjClass*)object;
       markYoungObject(vm, (Obj*)klass->name);
       markYoungObject(vm, (Obj*)klass->methods);
+      if (klass->structFields) markYoungObject(vm, (Obj*)klass->structFields);
+      if (klass->structDefaults) markYoungObject(vm, (Obj*)klass->structDefaults);
+      if (klass->structReadonly) markYoungObject(vm, (Obj*)klass->structReadonly);
       break;
     }
     case OBJ_INSTANCE: {
@@ -272,8 +278,16 @@ void markRoots(VM* vm) {
     if (vm->frames[i].moduleAlias) {
       markObject(vm, (Obj*)vm->frames[i].moduleAlias);
     }
-    if (vm->frames[i].modulePrivate) {
-      markObject(vm, (Obj*)vm->frames[i].modulePrivate);
+      if (vm->frames[i].modulePrivate) {
+        markObject(vm, (Obj*)vm->frames[i].modulePrivate);
+      }
+    }
+
+  for (int i = 0; i < vm->deferCount; i++) {
+    DeferEntry* entry = &vm->defers[i];
+    markValue(vm, entry->callee);
+    for (int j = 0; j < entry->argCount; j++) {
+      markValue(vm, entry->args[j]);
     }
   }
 
@@ -314,8 +328,16 @@ void markYoungRoots(VM* vm) {
     if (vm->frames[i].moduleAlias) {
       markYoungObject(vm, (Obj*)vm->frames[i].moduleAlias);
     }
-    if (vm->frames[i].modulePrivate) {
-      markYoungObject(vm, (Obj*)vm->frames[i].modulePrivate);
+      if (vm->frames[i].modulePrivate) {
+        markYoungObject(vm, (Obj*)vm->frames[i].modulePrivate);
+      }
+    }
+
+  for (int i = 0; i < vm->deferCount; i++) {
+    DeferEntry* entry = &vm->defers[i];
+    markYoungValue(vm, entry->callee);
+    for (int j = 0; j < entry->argCount; j++) {
+      markYoungValue(vm, entry->args[j]);
     }
   }
 }
@@ -374,7 +396,10 @@ bool gcObjectHasYoungRefs(Obj* object) {
     case OBJ_CLASS: {
       ObjClass* klass = (ObjClass*)object;
       if (klass->name && klass->name->obj.generation == OBJ_GEN_YOUNG) return true;
-      return klass->methods && klass->methods->obj.generation == OBJ_GEN_YOUNG;
+      if (klass->methods && klass->methods->obj.generation == OBJ_GEN_YOUNG) return true;
+      if (klass->structFields && klass->structFields->obj.generation == OBJ_GEN_YOUNG) return true;
+      if (klass->structDefaults && klass->structDefaults->obj.generation == OBJ_GEN_YOUNG) return true;
+      return klass->structReadonly && klass->structReadonly->obj.generation == OBJ_GEN_YOUNG;
     }
     case OBJ_INSTANCE: {
       ObjInstance* instance = (ObjInstance*)object;

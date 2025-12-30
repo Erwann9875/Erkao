@@ -129,6 +129,10 @@ struct ObjClass {
   Obj obj;
   ObjString* name;
   ObjMap* methods;
+  bool isStruct;
+  ObjMap* structFields;
+  ObjMap* structDefaults;
+  ObjMap* structReadonly;
 };
 
 struct ObjInstance {
@@ -189,5 +193,6 @@ bool isObjType(Value value, ObjType type);
 const char* valueTypeName(Value value);
 bool valuesEqual(Value a, Value b);
 void printValue(Value value);
+ObjString* stringifyValue(VM* vm, Value value);
 
 #endif

@@ -15,6 +15,10 @@ static void resetStack(VM* vm) {
   vm->stackTop = vm->stack;
   vm->frameCount = 0;
   vm->tryCount = 0;
+  for (int i = 0; i < vm->deferCount; i++) {
+    free(vm->defers[i].args);
+  }
+  vm->deferCount = 0;
 }
 
 static void push(VM* vm, Value value) {
@@ -27,8 +31,6 @@ static Value pop(VM* vm) {
   return *vm->stackTop;
 }
 
-static ObjString* stringifyValue(VM* vm, Value value);
-
 static Value peek(VM* vm, int distance) {
   return vm->stackTop[-1 - distance];
 }
@@ -38,6 +40,78 @@ static void popTryFramesForFrame(VM* vm, int frameIndex) {
          vm->tryFrames[vm->tryCount - 1].frameIndex >= frameIndex) {
     vm->tryCount--;
   }
+}
+
+static void ensureDeferCapacity(VM* vm) {
+  if (vm->deferCapacity < vm->deferCount + 1) {
+    int oldCap = vm->deferCapacity;
+    vm->deferCapacity = GROW_CAPACITY(oldCap);
+    vm->defers = GROW_ARRAY(DeferEntry, vm->defers, oldCap, vm->deferCapacity);
+    if (!vm->defers) {
+      fprintf(stderr, "Out of memory.\n");
+      exit(1);
+    }
+  }
+}
+
+static void deferPush(VM* vm, int frameIndex, int scopeDepth,
+                      Value callee, int argCount, Value* args) {
+  ensureDeferCapacity(vm);
+  DeferEntry* entry = &vm->defers[vm->deferCount++];
+  entry->frameIndex = frameIndex;
+  entry->scopeDepth = scopeDepth;
+  entry->argCount = argCount;
+  entry->callee = callee;
+  entry->args = NULL;
+  if (argCount > 0) {
+    entry->args = (Value*)malloc(sizeof(Value) * (size_t)argCount);
+    if (!entry->args) {
+      fprintf(stderr, "Out of memory.\n");
+      exit(1);
+    }
+    memcpy(entry->args, args, sizeof(Value) * (size_t)argCount);
+  }
+}
+
+static bool runDeferredEntry(VM* vm, DeferEntry* entry) {
+  Value out = NULL_VAL;
+  if (!vmCallValue(vm, entry->callee, entry->argCount, entry->args, &out)) {
+    return false;
+  }
+  return true;
+}
+
+static bool runDefersForScope(VM* vm, int frameIndex, int scopeDepth) {
+  while (vm->deferCount > 0) {
+    DeferEntry* entry = &vm->defers[vm->deferCount - 1];
+    if (entry->frameIndex != frameIndex || entry->scopeDepth != scopeDepth) {
+      break;
+    }
+    vm->deferCount--;
+    if (!runDeferredEntry(vm, entry)) {
+      free(entry->args);
+      return false;
+    }
+    free(entry->args);
+  }
+  return true;
+}
+
+static bool runDefersUntil(VM* vm, int frameIndex, int scopeDepth) {
+  while (vm->deferCount > 0) {
+    DeferEntry* entry = &vm->defers[vm->deferCount - 1];
+    if (entry->frameIndex < frameIndex) break;
+    if (entry->frameIndex == frameIndex && entry->scopeDepth <= scopeDepth) {
+      break;
+    }
+    vm->deferCount--;
+    if (!runDeferredEntry(vm, entry)) {
+      free(entry->args);
+      return false;
+    }
+    free(entry->args);
+  }
+  return true;
 }
 
 static bool isErrorValue(VM* vm, Value value) {
@@ -94,6 +168,9 @@ static bool unwindToHandler(VM* vm, CallFrame** frame, Value error) {
       continue;
     }
     vm->tryCount--;
+    if (!runDefersUntil(vm, handler.frameIndex, handler.scopeDepth)) {
+      return false;
+    }
     vm->frameCount = handler.frameIndex + 1;
     vm->env = handler.env;
     vm->stackTop = handler.stackTop;
@@ -212,179 +289,6 @@ static Value concatenateStrings(VM* vm, ObjString* a, ObjString* b) {
   return OBJ_VAL(result);
 }
 
-typedef struct {
-  char* data;
-  int length;
-  int capacity;
-} StringBuilder;
-
-static void sbInit(StringBuilder* sb) {
-  sb->data = NULL;
-  sb->length = 0;
-  sb->capacity = 0;
-}
-
-static void sbEnsure(StringBuilder* sb, int needed) {
-  if (sb->capacity >= needed) return;
-  int newCap = sb->capacity == 0 ? 64 : sb->capacity;
-  while (newCap < needed) {
-    newCap *= 2;
-  }
-  char* next = (char*)realloc(sb->data, (size_t)newCap);
-  if (!next) {
-    fprintf(stderr, "Out of memory.\n");
-    exit(1);
-  }
-  sb->data = next;
-  sb->capacity = newCap;
-}
-
-static void sbAppendN(StringBuilder* sb, const char* text, int length) {
-  if (length <= 0) return;
-  sbEnsure(sb, sb->length + length + 1);
-  memcpy(sb->data + sb->length, text, (size_t)length);
-  sb->length += length;
-  sb->data[sb->length] = '\0';
-}
-
-static void sbAppendChar(StringBuilder* sb, char c) {
-  sbEnsure(sb, sb->length + 2);
-  sb->data[sb->length++] = c;
-  sb->data[sb->length] = '\0';
-}
-
-static void appendValue(StringBuilder* sb, Value value);
-
-static void appendArray(StringBuilder* sb, ObjArray* array) {
-  sbAppendChar(sb, '[');
-  for (int i = 0; i < array->count; i++) {
-    if (i > 0) sbAppendN(sb, ", ", 2);
-    appendValue(sb, array->items[i]);
-  }
-  sbAppendChar(sb, ']');
-}
-
-static void appendMap(StringBuilder* sb, ObjMap* map) {
-  sbAppendChar(sb, '{');
-  int printed = 0;
-  for (int i = 0; i < map->capacity; i++) {
-    if (!map->entries[i].key) continue;
-    if (printed > 0) sbAppendN(sb, ", ", 2);
-    sbAppendN(sb, map->entries[i].key->chars, map->entries[i].key->length);
-    sbAppendN(sb, ": ", 2);
-    appendValue(sb, map->entries[i].value);
-    printed++;
-  }
-  sbAppendChar(sb, '}');
-}
-
-static void appendObject(StringBuilder* sb, Obj* obj) {
-  switch (obj->type) {
-    case OBJ_STRING: {
-      ObjString* string = (ObjString*)obj;
-      sbAppendN(sb, string->chars, string->length);
-      break;
-    }
-    case OBJ_FUNCTION: {
-      ObjFunction* function = (ObjFunction*)obj;
-      if (function->name && function->name->chars) {
-        sbAppendN(sb, "<fun ", 5);
-        sbAppendN(sb, function->name->chars, function->name->length);
-        sbAppendChar(sb, '>');
-      } else {
-        sbAppendN(sb, "<fun>", 5);
-      }
-      break;
-    }
-    case OBJ_NATIVE: {
-      ObjNative* native = (ObjNative*)obj;
-      if (native->name && native->name->chars) {
-        sbAppendN(sb, "<native ", 8);
-        sbAppendN(sb, native->name->chars, native->name->length);
-        sbAppendChar(sb, '>');
-      } else {
-        sbAppendN(sb, "<native>", 8);
-      }
-      break;
-    }
-    case OBJ_ENUM_CTOR: {
-      ObjEnumCtor* ctor = (ObjEnumCtor*)obj;
-      sbAppendN(sb, "<enum ", 6);
-      if (ctor->enumName && ctor->enumName->chars) {
-        sbAppendN(sb, ctor->enumName->chars, ctor->enumName->length);
-      } else {
-        sbAppendN(sb, "enum", 4);
-      }
-      sbAppendChar(sb, '.');
-      if (ctor->variantName && ctor->variantName->chars) {
-        sbAppendN(sb, ctor->variantName->chars, ctor->variantName->length);
-      } else {
-        sbAppendN(sb, "variant", 7);
-      }
-      sbAppendChar(sb, '>');
-      break;
-    }
-    case OBJ_CLASS: {
-      ObjClass* klass = (ObjClass*)obj;
-      sbAppendN(sb, "<class ", 7);
-      sbAppendN(sb, klass->name->chars, klass->name->length);
-      sbAppendChar(sb, '>');
-      break;
-    }
-    case OBJ_INSTANCE: {
-      ObjInstance* instance = (ObjInstance*)obj;
-      sbAppendChar(sb, '<');
-      sbAppendN(sb, instance->klass->name->chars, instance->klass->name->length);
-      sbAppendN(sb, " instance>", 10);
-      break;
-    }
-    case OBJ_ARRAY:
-      appendArray(sb, (ObjArray*)obj);
-      break;
-    case OBJ_MAP:
-      appendMap(sb, (ObjMap*)obj);
-      break;
-    case OBJ_BOUND_METHOD:
-      sbAppendN(sb, "<bound method>", 14);
-      break;
-  }
-}
-
-static void appendValue(StringBuilder* sb, Value value) {
-  switch (value.type) {
-    case VAL_NULL:
-      sbAppendN(sb, "null", 4);
-      break;
-    case VAL_BOOL:
-      if (AS_BOOL(value)) {
-        sbAppendN(sb, "true", 4);
-      } else {
-        sbAppendN(sb, "false", 5);
-      }
-      break;
-    case VAL_NUMBER: {
-      char buffer[64];
-      int length = snprintf(buffer, sizeof(buffer), "%g", AS_NUMBER(value));
-      if (length < 0) length = 0;
-      if (length >= (int)sizeof(buffer)) {
-        length = (int)sizeof(buffer) - 1;
-      }
-      sbAppendN(sb, buffer, length);
-      break;
-    }
-    case VAL_OBJ:
-      appendObject(sb, AS_OBJ(value));
-      break;
-  }
-}
-
-static ObjString* stringifyValue(VM* vm, Value value) {
-  StringBuilder sb;
-  sbInit(&sb);
-  appendValue(&sb, value);
-  return takeStringWithLength(vm, sb.data, sb.length);
-}
-
 static ObjString* moduleNameFromPath(VM* vm, const char* path) {
   const char* lastSlash = strrchr(path, '/');
   const char* lastBackslash = strrchr(path, '\\');
@@ -402,6 +306,19 @@ static bool beginModuleImport(VM* vm, CallFrame** frame, ObjString* pathString,
       vm, vm->currentProgram ? vm->currentProgram->path : NULL,
       pathString->chars);
   if (!resolvedPath) {
+    Value builtin;
+    if (envGetByName(vm->globals, pathString, &builtin) &&
+        isObjType(builtin, OBJ_INSTANCE)) {
+      ObjString* key = copyStringWithLength(vm, pathString->chars, pathString->length);
+      mapSet(vm->modules, key, builtin);
+      if (pushResult) {
+        push(vm, builtin);
+      }
+      if (hasAlias && alias) {
+        envDefine(vm->env, alias, builtin);
+      }
+      return true;
+    }
     runtimeError(vm, currentToken(*frame), "Failed to resolve import path.");
     return false;
   }
@@ -461,6 +378,7 @@ static bool beginModuleImport(VM* vm, CallFrame** frame, ObjString* pathString,
   moduleFrame->previousProgram = vm->currentProgram;
   moduleFrame->receiver = NULL_VAL;
   moduleFrame->argCount = 0;
+  moduleFrame->scopeDepth = 0;
   moduleFrame->isModule = true;
   moduleFrame->discardResult = !pushResult;
   moduleFrame->moduleInstance = moduleInstance;
@@ -568,10 +486,11 @@ static bool callFunction(VM* vm, ObjFunction* function, Value receiver,
   frame->ip = function->chunk->code;
   frame->slots = vm->stackTop - argc - 1;
   frame->previousEnv = vm->env;
-  frame->previousProgram = vm->currentProgram;
-  frame->receiver = hasReceiver ? receiver : NULL_VAL;
-  frame->argCount = argc;
-  frame->isModule = false;
+    frame->previousProgram = vm->currentProgram;
+    frame->receiver = hasReceiver ? receiver : NULL_VAL;
+    frame->argCount = argc;
+    frame->scopeDepth = 0;
+    frame->isModule = false;
   frame->discardResult = false;
   frame->moduleInstance = NULL;
   frame->moduleAlias = NULL;
@@ -619,6 +538,9 @@ static bool returnFromFrame(VM* vm, CallFrame** frame, Value result, int targetF
   CallFrame* finished = *frame;
   Env* finishedEnv = vm->env;
   int finishedIndex = vm->frameCount - 1;
+  if (!runDefersUntil(vm, finishedIndex, -1)) {
+    return false;
+  }
   popTryFramesForFrame(vm, finishedIndex);
   vm->frameCount--;
   vm->env = finished->previousEnv;
@@ -761,6 +683,62 @@ static bool callValue(VM* vm, Value callee, int argc) {
 
   if (isObjType(callee, OBJ_CLASS)) {
     ObjClass* klass = (ObjClass*)AS_OBJ(callee);
+    if (klass->isStruct) {
+      if (argc > 1) {
+        Token token;
+        memset(&token, 0, sizeof(Token));
+        runtimeError(vm, token, "Struct constructors take 0 or 1 map argument.");
+        return false;
+      }
+      ObjMap* provided = NULL;
+      if (argc == 1) {
+        Value arg = vm->stackTop[-1];
+        if (!isObjType(arg, OBJ_MAP)) {
+          Token token;
+          memset(&token, 0, sizeof(Token));
+          runtimeError(vm, token, "Struct constructor expects a map.");
+          return false;
+        }
+        provided = (ObjMap*)AS_OBJ(arg);
+      }
+      ObjMap* fields = newMap(vm);
+      if (provided) {
+        for (int i = 0; i < provided->capacity; i++) {
+          ObjString* key = provided->entries[i].key;
+          if (!key) continue;
+          Value ignored;
+          if (!klass->structFields || !mapGet(klass->structFields, key, &ignored)) {
+            Token token;
+            memset(&token, 0, sizeof(Token));
+            runtimeError(vm, token, "Unknown struct field.");
+            return false;
+          }
+          mapSet(fields, key, provided->entries[i].value);
+        }
+      }
+      if (klass->structFields) {
+        for (int i = 0; i < klass->structFields->capacity; i++) {
+          ObjString* key = klass->structFields->entries[i].key;
+          if (!key) continue;
+          Value existing;
+          if (mapGet(fields, key, &existing)) continue;
+          Value defaultValue;
+          if (klass->structDefaults && mapGet(klass->structDefaults, key, &defaultValue)) {
+            mapSet(fields, key, defaultValue);
+            continue;
+          }
+          Token token;
+          memset(&token, 0, sizeof(Token));
+          runtimeError(vm, token, "Missing required struct field.");
+          return false;
+        }
+      }
+      ObjInstance* instance = newInstanceWithFields(vm, klass, fields);
+      Value instanceValue = OBJ_VAL(instance);
+      vm->stackTop -= argc + 1;
+      push(vm, instanceValue);
+      return true;
+    }
     ObjInstance* instance = newInstance(vm, klass);
     Value instanceValue = OBJ_VAL(instance);
 
@@ -1181,6 +1159,14 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
         Value object = pop(vm);
         if (isObjType(object, OBJ_INSTANCE)) {
           ObjInstance* instance = (ObjInstance*)AS_OBJ(object);
+          if (instance->klass && instance->klass->isStruct &&
+              instance->klass->structReadonly) {
+            Value ignored;
+            if (mapGet(instance->klass->structReadonly, name, &ignored)) {
+              runtimeError(vm, currentToken(frame), "Cannot assign to readonly field.");
+              return false;
+            }
+          }
           int index = mapSetIndex(instance->fields, name, value);
           if (cache) {
             cache->kind = IC_FIELD;
@@ -1500,6 +1486,7 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
         tryFrame->handler = frame->ip + offset;
         tryFrame->stackTop = vm->stackTop;
         tryFrame->env = vm->env;
+        tryFrame->scopeDepth = frame->scopeDepth;
         break;
       }
       case OP_END_TRY: {
@@ -1555,6 +1542,16 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
           break;
         }
         push(vm, out);
+        break;
+      }
+      case OP_DEFER: {
+        int argCount = READ_BYTE();
+        Value args[ERK_MAX_ARGS];
+        for (int i = argCount - 1; i >= 0; i--) {
+          args[i] = pop(vm);
+        }
+        Value callee = pop(vm);
+        deferPush(vm, vm->frameCount - 1, frame->scopeDepth, callee, argCount, args);
         break;
       }
       case OP_CALL: {
@@ -1707,10 +1704,17 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
       }
       case OP_BEGIN_SCOPE:
         vm->env = newEnv(vm, vm->env);
+        frame->scopeDepth++;
         break;
       case OP_END_SCOPE:
+        if (!runDefersForScope(vm, vm->frameCount - 1, frame->scopeDepth)) {
+          return false;
+        }
         if (vm->env && vm->env->enclosing) {
           vm->env = vm->env->enclosing;
+        }
+        if (frame->scopeDepth > 0) {
+          frame->scopeDepth--;
         }
         break;
       case OP_CLASS: {
@@ -1723,6 +1727,31 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
           mapSet(methods, method->name, methodValue);
         }
         ObjClass* klass = newClass(vm, name, methods);
+        if (!envAssignByName(vm->env, name, OBJ_VAL(klass))) {
+          envDefine(vm->env, name, OBJ_VAL(klass));
+        }
+        break;
+      }
+      case OP_STRUCT: {
+        ObjString* name = (ObjString*)AS_OBJ(READ_CONSTANT());
+        Value readonlyValue = pop(vm);
+        Value defaultsValue = pop(vm);
+        Value fieldsValue = pop(vm);
+        if (!isObjType(fieldsValue, OBJ_MAP) ||
+            !isObjType(defaultsValue, OBJ_MAP) ||
+            !isObjType(readonlyValue, OBJ_MAP)) {
+          runtimeError(vm, currentToken(frame), "Invalid struct metadata.");
+          return false;
+        }
+        ObjMap* methods = newMap(vm);
+        ObjClass* klass = newClass(vm, name, methods);
+        klass->isStruct = true;
+        klass->structFields = (ObjMap*)AS_OBJ(fieldsValue);
+        klass->structDefaults = (ObjMap*)AS_OBJ(defaultsValue);
+        klass->structReadonly = (ObjMap*)AS_OBJ(readonlyValue);
+        gcWriteBarrier(vm, (Obj*)klass, fieldsValue);
+        gcWriteBarrier(vm, (Obj*)klass, defaultsValue);
+        gcWriteBarrier(vm, (Obj*)klass, readonlyValue);
         if (!envAssignByName(vm->env, name, OBJ_VAL(klass))) {
           envDefine(vm->env, name, OBJ_VAL(klass));
         }
@@ -1901,6 +1930,7 @@ static bool callScript(VM* vm, ObjFunction* function) {
   frame->previousProgram = vm->currentProgram;
   frame->receiver = NULL_VAL;
   frame->argCount = 0;
+  frame->scopeDepth = 0;
   frame->isModule = false;
   frame->discardResult = false;
   frame->moduleInstance = NULL;

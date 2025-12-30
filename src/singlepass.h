@@ -26,6 +26,7 @@ typedef struct BreakContext {
 
 typedef struct TypeChecker TypeChecker;
 typedef struct EnumInfo EnumInfo;
+typedef struct StructInfo StructInfo;
 
 typedef struct Compiler {
   VM* vm;
@@ -39,6 +40,7 @@ typedef struct Compiler {
   int scopeDepth;
   int tempIndex;
   bool pendingOptionalCall;
+  bool forbidCall;
   bool lastExprWasVar;
   Token lastExprVar;
   bool hasYield;
@@ -50,6 +52,9 @@ typedef struct Compiler {
   EnumInfo* enums;
   int enumCount;
   int enumCapacity;
+  StructInfo* structs;
+  int structCount;
+  int structCapacity;
 } Compiler;
 
 typedef enum {

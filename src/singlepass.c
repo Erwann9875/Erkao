@@ -215,6 +215,7 @@ int instructionLength(const Chunk* chunk, int offset) {
       uint16_t count = (uint16_t)((chunk->code[offset + 1] << 8) | chunk->code[offset + 2]);
       return 3 + (int)count * 4;
     }
+    case OP_DEFER:
     case OP_CALL:
     case OP_CALL_OPTIONAL:
       return 2;
@@ -222,6 +223,8 @@ int instructionLength(const Chunk* chunk, int offset) {
       return 4;
     case OP_CLASS:
       return 5;
+    case OP_STRUCT:
+      return 3;
     case OP_END_TRY:
     case OP_THROW:
     case OP_TRY_UNWRAP:
@@ -570,6 +573,7 @@ static const KeywordEntry keywordEntries[] = {
   {TOKEN_CLASS, "class"},
   {TOKEN_CONST, "const"},
   {TOKEN_CONTINUE, "continue"},
+  {TOKEN_DEFER, "defer"},
   {TOKEN_DEFAULT, "default"},
   {TOKEN_ELSE, "else"},
   {TOKEN_ENUM, "enum"},
@@ -590,7 +594,9 @@ static const KeywordEntry keywordEntries[] = {
   {TOKEN_NULL, "null"},
   {TOKEN_OR, "or"},
   {TOKEN_PRIVATE, "private"},
+  {TOKEN_READONLY, "readonly"},
   {TOKEN_RETURN, "return"},
+  {TOKEN_STRUCT, "struct"},
   {TOKEN_TRY, "try"},
   {TOKEN_CATCH, "catch"},
   {TOKEN_THROW, "throw"},
@@ -654,6 +660,7 @@ const char* tokenDescription(ErkaoTokenType type) {
     case TOKEN_CONST: return "'const'";
     case TOKEN_CONTINUE: return "'continue'";
     case TOKEN_DEFAULT: return "'default'";
+    case TOKEN_DEFER: return "'defer'";
     case TOKEN_ELSE: return "'else'";
     case TOKEN_ENUM: return "'enum'";
     case TOKEN_EXPORT: return "'export'";
@@ -673,7 +680,9 @@ const char* tokenDescription(ErkaoTokenType type) {
     case TOKEN_NULL: return "'null'";
     case TOKEN_OR: return "'or'";
     case TOKEN_PRIVATE: return "'private'";
+    case TOKEN_READONLY: return "'readonly'";
     case TOKEN_RETURN: return "'return'";
+    case TOKEN_STRUCT: return "'struct'";
     case TOKEN_TRY: return "'try'";
     case TOKEN_CATCH: return "'catch'";
     case TOKEN_THROW: return "'throw'";
@@ -865,13 +874,14 @@ void synchronize(Compiler* c) {
   c->panicMode = false;
   while (!isAtEnd(c)) {
     if (previous(c).type == TOKEN_SEMICOLON) return;
-    switch (peek(c).type) {
-      case TOKEN_CLASS: case TOKEN_FUN: case TOKEN_LET: case TOKEN_CONST:
+      switch (peek(c).type) {
+        case TOKEN_CLASS: case TOKEN_STRUCT: case TOKEN_FUN: case TOKEN_LET: case TOKEN_CONST:
       case TOKEN_ENUM: case TOKEN_EXPORT: case TOKEN_IMPORT: case TOKEN_FROM:
       case TOKEN_TYPE_KW:
       case TOKEN_IF: case TOKEN_WHILE: case TOKEN_FOR: case TOKEN_FOREACH:
       case TOKEN_SWITCH: case TOKEN_MATCH: case TOKEN_RETURN:
       case TOKEN_TRY: case TOKEN_THROW: case TOKEN_CATCH: case TOKEN_YIELD:
+      case TOKEN_DEFER:
       case TOKEN_BREAK: case TOKEN_CONTINUE:
         return;
       default:
@@ -1083,6 +1093,48 @@ void compilerEnumsFree(Compiler* c) {
   c->enums = NULL;
   c->enumCount = 0;
   c->enumCapacity = 0;
+}
+
+StructInfo* compilerAddStruct(Compiler* c, Token name) {
+  if (c->structCount >= c->structCapacity) {
+    int oldCap = c->structCapacity;
+    c->structCapacity = GROW_CAPACITY(oldCap);
+    c->structs = (StructInfo*)realloc(c->structs,
+                                      sizeof(StructInfo) * (size_t)c->structCapacity);
+    if (!c->structs) {
+      fprintf(stderr, "Out of memory.\n");
+      exit(1);
+    }
+    memset(c->structs + oldCap, 0, sizeof(StructInfo) * (size_t)(c->structCapacity - oldCap));
+  }
+  StructInfo* info = &c->structs[c->structCount++];
+  info->name = copyTokenLexeme(name);
+  info->nameLength = name.length;
+  return info;
+}
+
+StructInfo* findStructInfo(Compiler* c, Token name) {
+  for (Compiler* cur = c; cur; cur = cur->enclosing) {
+    for (int i = 0; i < cur->structCount; i++) {
+      StructInfo* info = &cur->structs[i];
+      if (info->nameLength != name.length) continue;
+      if (memcmp(info->name, name.start, (size_t)name.length) == 0) {
+        return info;
+      }
+    }
+  }
+  return NULL;
+}
+
+void compilerStructsFree(Compiler* c) {
+  if (!c || !c->structs) return;
+  for (int i = 0; i < c->structCount; i++) {
+    free(c->structs[i].name);
+  }
+  free(c->structs);
+  c->structs = NULL;
+  c->structCount = 0;
+  c->structCapacity = 0;
 }
 
 EnumInfo* compilerAddEnum(Compiler* c, Token name) {

@@ -120,6 +120,16 @@ ObjArray* captureStackTrace(VM* vm, const char* fallbackPath) {
 #endif
 }
 
+#ifdef _WIN32
+#define ERKAO_FFI_EXPORT __declspec(dllexport)
+#else
+#define ERKAO_FFI_EXPORT __attribute__((visibility("default")))
+#endif
+
+ERKAO_FFI_EXPORT double erkao_ffi_add(double a, double b) {
+  return a + b;
+}
+
 void runtimeError(VM* vm, Token token, const char* message) {
   const char* displayPath = "<repl>";
   if (vm->currentProgram && vm->currentProgram->path) {

@@ -1,0 +1,4 @@
+fmt1 a=1, b=[2, 3]
+fmt2 braces {}
+json {"x":1}
+join a/b

@@ -17,6 +17,7 @@ typedef struct {
   Program* previousProgram;
   Value receiver;
   int argCount;
+  int scopeDepth;
   bool isModule;
   bool discardResult;
   ObjInstance* moduleInstance;
@@ -32,7 +33,21 @@ typedef struct {
   uint8_t* handler;
   Value* stackTop;
   Env* env;
+  int scopeDepth;
 } TryFrame;
+
+typedef struct {
+  int frameIndex;
+  int scopeDepth;
+  int argCount;
+  Value callee;
+  Value* args;
+} DeferEntry;
+
+typedef struct {
+  void* handle;
+  bool owns;
+} FfiHandle;
 
 struct Env {
   struct Env* enclosing;
@@ -59,9 +74,15 @@ struct VM {
   Value* stackTop;
   TryFrame tryFrames[TRY_MAX];
   int tryCount;
+  DeferEntry* defers;
+  int deferCount;
+  int deferCapacity;
   void** pluginHandles;
   int pluginCount;
   int pluginCapacity;
+  FfiHandle* ffiHandles;
+  int ffiCount;
+  int ffiCapacity;
   size_t gcYoungBytes;
   size_t gcOldBytes;
   size_t gcEnvBytes;

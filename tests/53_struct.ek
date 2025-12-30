@@ -1,0 +1,11 @@
+struct User {
+  name: string;
+  age: number = 42;
+  readonly role: string = "dev";
+}
+
+let a = User{ name: "Ada" };
+print("user", a.name, a.age, a.role);
+
+let b = User{ name: "Bob", age: 30, role: "ops" };
+print("user2", b.name, b.age, b.role);
