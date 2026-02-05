@@ -15,6 +15,8 @@ typedef struct {
   FrontendUnit frontend;
   SemaModuleKind moduleKind;
   uint32_t featureFlags;
+  int astNodeCount;
+  int topLevelStatementCount;
   int topLevelDeclarationCount;
   int topLevelValueDeclCount;
   int topLevelTypeDeclCount;

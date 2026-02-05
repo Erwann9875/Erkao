@@ -18,6 +18,43 @@ static bool frontendFail(const char* path, const Token* token, bool* hadError,
   return false;
 }
 
+static void frontendAstInit(FrontendAst* ast) {
+  if (!ast) return;
+  ast->nodes = NULL;
+  ast->count = 0;
+  ast->capacity = 0;
+}
+
+static void frontendAstFree(FrontendAst* ast) {
+  if (!ast) return;
+  free(ast->nodes);
+  frontendAstInit(ast);
+}
+
+static bool frontendAstReserve(FrontendAst* ast, int needed) {
+  if (!ast || needed <= 0) return false;
+  if (ast->capacity >= needed) return true;
+
+  int capacity = ast->capacity > 0 ? ast->capacity : 16;
+  while (capacity < needed) {
+    capacity *= 2;
+  }
+  FrontendNode* grown = (FrontendNode*)realloc(ast->nodes,
+                                               sizeof(FrontendNode) *
+                                               (size_t)capacity);
+  if (!grown) return false;
+  ast->nodes = grown;
+  ast->capacity = capacity;
+  return true;
+}
+
+static bool frontendAstAddNode(FrontendAst* ast, FrontendNode node) {
+  if (!ast) return false;
+  if (!frontendAstReserve(ast, ast->count + 1)) return false;
+  ast->nodes[ast->count++] = node;
+  return true;
+}
+
 static void frontendTrackFeature(FrontendUnit* out, ErkaoTokenType type) {
   switch (type) {
     case TOKEN_IMPORT: out->featureFlags |= FRONTEND_FEATURE_IMPORT; break;
@@ -42,21 +79,124 @@ static void frontendTrackFeature(FrontendUnit* out, ErkaoTokenType type) {
   }
 }
 
-static void frontendTrackTopLevel(FrontendUnit* out, ErkaoTokenType type) {
+static FrontendNodeKind frontendNodeKindFromToken(ErkaoTokenType type) {
   switch (type) {
-    case TOKEN_IMPORT: out->topLevel.imports++; break;
-    case TOKEN_EXPORT: out->topLevel.exports++; break;
-    case TOKEN_PRIVATE: out->topLevel.privates++; break;
-    case TOKEN_LET: out->topLevel.lets++; break;
-    case TOKEN_CONST: out->topLevel.consts++; break;
-    case TOKEN_FUN: out->topLevel.functions++; break;
-    case TOKEN_CLASS: out->topLevel.classes++; break;
-    case TOKEN_STRUCT: out->topLevel.structs++; break;
-    case TOKEN_ENUM: out->topLevel.enums++; break;
-    case TOKEN_INTERFACE: out->topLevel.interfaces++; break;
-    case TOKEN_TYPE_KW: out->topLevel.typeAliases++; break;
+    case TOKEN_IMPORT: return FRONTEND_NODE_IMPORT;
+    case TOKEN_EXPORT: return FRONTEND_NODE_EXPORT;
+    case TOKEN_PRIVATE: return FRONTEND_NODE_PRIVATE;
+    case TOKEN_LET: return FRONTEND_NODE_LET;
+    case TOKEN_CONST: return FRONTEND_NODE_CONST;
+    case TOKEN_FUN: return FRONTEND_NODE_FUNCTION;
+    case TOKEN_CLASS: return FRONTEND_NODE_CLASS;
+    case TOKEN_STRUCT: return FRONTEND_NODE_STRUCT;
+    case TOKEN_ENUM: return FRONTEND_NODE_ENUM;
+    case TOKEN_INTERFACE: return FRONTEND_NODE_INTERFACE;
+    case TOKEN_TYPE_KW: return FRONTEND_NODE_TYPE_ALIAS;
+    default: return FRONTEND_NODE_STATEMENT;
+  }
+}
+
+static void frontendTrackTopLevelNode(FrontendUnit* out, FrontendNodeKind kind) {
+  switch (kind) {
+    case FRONTEND_NODE_IMPORT: out->topLevel.imports++; break;
+    case FRONTEND_NODE_EXPORT: out->topLevel.exports++; break;
+    case FRONTEND_NODE_PRIVATE: out->topLevel.privates++; break;
+    case FRONTEND_NODE_LET: out->topLevel.lets++; break;
+    case FRONTEND_NODE_CONST: out->topLevel.consts++; break;
+    case FRONTEND_NODE_FUNCTION: out->topLevel.functions++; break;
+    case FRONTEND_NODE_CLASS: out->topLevel.classes++; break;
+    case FRONTEND_NODE_STRUCT: out->topLevel.structs++; break;
+    case FRONTEND_NODE_ENUM: out->topLevel.enums++; break;
+    case FRONTEND_NODE_INTERFACE: out->topLevel.interfaces++; break;
+    case FRONTEND_NODE_TYPE_ALIAS: out->topLevel.typeAliases++; break;
+    case FRONTEND_NODE_STATEMENT:
     default: break;
   }
+}
+
+static int frontendScanTopLevelFormEnd(const TokenArray* tokens, int startIndex) {
+  int parenDepth = 0;
+  int braceDepth = 0;
+  int bracketDepth = 0;
+  int interpDepth = 0;
+
+  for (int i = startIndex; i < tokens->count; i++) {
+    ErkaoTokenType type = tokens->tokens[i].type;
+    switch (type) {
+      case TOKEN_LEFT_PAREN: parenDepth++; break;
+      case TOKEN_RIGHT_PAREN:
+        if (parenDepth > 0) parenDepth--;
+        break;
+      case TOKEN_LEFT_BRACE: braceDepth++; break;
+      case TOKEN_RIGHT_BRACE:
+        if (braceDepth > 0) braceDepth--;
+        break;
+      case TOKEN_LEFT_BRACKET: bracketDepth++; break;
+      case TOKEN_RIGHT_BRACKET:
+        if (bracketDepth > 0) bracketDepth--;
+        break;
+      case TOKEN_INTERP_START: interpDepth++; break;
+      case TOKEN_INTERP_END:
+        if (interpDepth > 0) interpDepth--;
+        break;
+      default:
+        break;
+    }
+
+    if (type == TOKEN_EOF) {
+      return i > startIndex ? i - 1 : startIndex;
+    }
+    if (parenDepth != 0 || braceDepth != 0 || bracketDepth != 0 || interpDepth != 0) {
+      continue;
+    }
+    if (type == TOKEN_SEMICOLON) {
+      return i;
+    }
+    if (i > startIndex && type == TOKEN_RIGHT_BRACE) {
+      int nextIndex = i + 1;
+      while (nextIndex < tokens->count &&
+             tokens->tokens[nextIndex].type == TOKEN_SEMICOLON) {
+        nextIndex++;
+      }
+      if (nextIndex < tokens->count &&
+          tokens->tokens[nextIndex].type == TOKEN_ELSE) {
+        continue;
+      }
+      return i;
+    }
+  }
+  return tokens->count - 1;
+}
+
+static bool frontendBuildAst(const TokenArray* tokens, FrontendUnit* out,
+                             bool* hadError) {
+  int index = 0;
+  while (index < tokens->count) {
+    Token token = tokens->tokens[index];
+    if (token.type == TOKEN_EOF) break;
+    if (token.type == TOKEN_SEMICOLON) {
+      index++;
+      continue;
+    }
+
+    FrontendNode node;
+    node.kind = frontendNodeKindFromToken(token.type);
+    node.startToken = index;
+    node.endToken = frontendScanTopLevelFormEnd(tokens, index);
+    if (node.endToken < node.startToken) {
+      node.endToken = node.startToken;
+    }
+    node.anchor = token;
+
+    if (!frontendAstAddNode(&out->ast, node)) {
+      return frontendFail(out->path, &token, hadError,
+                          "Out of memory while building frontend AST.");
+    }
+
+    frontendTrackTopLevelNode(out, node.kind);
+    index = node.endToken + 1;
+  }
+  return true;
 }
 
 bool frontendBuildUnit(const TokenArray* tokens, const char* source,
@@ -67,10 +207,12 @@ bool frontendBuildUnit(const TokenArray* tokens, const char* source,
   }
 
   memset(out, 0, sizeof(*out));
+  frontendAstInit(&out->ast);
   out->tokens = tokens;
   out->source = source;
   out->path = path;
   if (!tokens->tokens || tokens->count <= 0) {
+    frontendAstFree(&out->ast);
     return frontendFail(path, NULL, hadError, "Token stream is empty.");
   }
 
@@ -78,6 +220,7 @@ bool frontendBuildUnit(const TokenArray* tokens, const char* source,
   out->firstToken = tokens->tokens[0];
   out->lastToken = tokens->tokens[tokens->count - 1];
   if (out->lastToken.type != TOKEN_EOF) {
+    frontendAstFree(&out->ast);
     return frontendFail(path, &out->lastToken, hadError,
                         "Token stream must terminate with EOF.");
   }
@@ -89,10 +232,12 @@ bool frontendBuildUnit(const TokenArray* tokens, const char* source,
   for (int i = 0; i < tokens->count; i++) {
     Token token = tokens->tokens[i];
     if (token.type == TOKEN_ERROR) {
+      frontendAstFree(&out->ast);
       return frontendFail(path, &token, hadError,
                           "Unexpected TOKEN_ERROR in token stream.");
     }
     if (token.type == TOKEN_EOF && i != tokens->count - 1) {
+      frontendAstFree(&out->ast);
       return frontendFail(path, &token, hadError,
                           "EOF token can only appear at stream end.");
     }
@@ -100,11 +245,6 @@ bool frontendBuildUnit(const TokenArray* tokens, const char* source,
     frontendTrackFeature(out, token.type);
     if (token.type != TOKEN_EOF) {
       out->nonEofTokenCount++;
-    }
-
-    if (parenDepth == 0 && braceDepth == 0 &&
-        bracketDepth == 0 && interpDepth == 0) {
-      frontendTrackTopLevel(out, token.type);
     }
 
     switch (token.type) {
@@ -148,5 +288,15 @@ bool frontendBuildUnit(const TokenArray* tokens, const char* source,
         break;
     }
   }
+
+  if (!frontendBuildAst(tokens, out, hadError)) {
+    frontendAstFree(&out->ast);
+    return false;
+  }
   return true;
+}
+
+void frontendFreeUnit(FrontendUnit* unit) {
+  if (!unit) return;
+  frontendAstFree(&unit->ast);
 }

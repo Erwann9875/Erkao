@@ -22,10 +22,16 @@ ObjFunction* compile(VM* vm, const TokenArray* tokens, const char* source,
 
   SemaUnit sema;
   if (!semaBuildUnit(&frontend, &sema, &stageError)) {
+    frontendFreeUnit(&frontend);
     *hadErrorOut = stageError;
     return NULL;
   }
 
-  return compileSinglePassLegacy(vm, sema.frontend.tokens, sema.frontend.source,
-                                 sema.frontend.path, hadErrorOut);
+  ObjFunction* function = compileSinglePassLegacy(vm,
+                                                  sema.frontend.tokens,
+                                                  sema.frontend.source,
+                                                  sema.frontend.path,
+                                                  hadErrorOut);
+  frontendFreeUnit(&frontend);
+  return function;
 }

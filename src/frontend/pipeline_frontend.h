@@ -23,6 +23,34 @@ typedef enum {
   FRONTEND_FEATURE_YIELD = 1u << 13
 } FrontendFeatureFlags;
 
+typedef enum {
+  FRONTEND_NODE_IMPORT,
+  FRONTEND_NODE_EXPORT,
+  FRONTEND_NODE_PRIVATE,
+  FRONTEND_NODE_LET,
+  FRONTEND_NODE_CONST,
+  FRONTEND_NODE_FUNCTION,
+  FRONTEND_NODE_CLASS,
+  FRONTEND_NODE_STRUCT,
+  FRONTEND_NODE_ENUM,
+  FRONTEND_NODE_INTERFACE,
+  FRONTEND_NODE_TYPE_ALIAS,
+  FRONTEND_NODE_STATEMENT
+} FrontendNodeKind;
+
+typedef struct {
+  FrontendNodeKind kind;
+  int startToken;
+  int endToken;
+  Token anchor;
+} FrontendNode;
+
+typedef struct {
+  FrontendNode* nodes;
+  int count;
+  int capacity;
+} FrontendAst;
+
 typedef struct {
   int maxParenDepth;
   int maxBraceDepth;
@@ -55,9 +83,11 @@ typedef struct {
   uint32_t featureFlags;
   FrontendDepthStats depthStats;
   FrontendTopLevelStats topLevel;
+  FrontendAst ast;
 } FrontendUnit;
 
 bool frontendBuildUnit(const TokenArray* tokens, const char* source,
                        const char* path, FrontendUnit* out, bool* hadError);
+void frontendFreeUnit(FrontendUnit* unit);
 
 #endif
