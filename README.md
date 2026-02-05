@@ -183,6 +183,9 @@ Run the snapshot (golden) tests from the repo root:
 ./scripts/run-tests.sh
 ```
 
+Golden files in `tests/*.out` are the behavior baseline. Keep them unchanged during
+refactors unless a behavior change is explicitly intentional.
+
 OS-specific wrappers are also available:
 
 ```powershell
@@ -276,6 +279,20 @@ Run the microbenchmarks from the repo root:
 
 ```sh
 ./scripts/unix/run-bench.sh --repeat 3
+```
+
+Benchmark helper files named `bench_*.ek` are ignored by the runner.
+
+Freeze/update the benchmark baseline:
+
+```sh
+python ./scripts/check-bench.py --update-baseline --repeat 5
+```
+
+Check current performance against the committed baseline:
+
+```sh
+python ./scripts/check-bench.py --repeat 5 --max-regression-pct 8 --min-slack-ms 20
 ```
 
 ## Language quick tour

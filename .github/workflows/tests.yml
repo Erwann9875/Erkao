@@ -71,6 +71,29 @@ jobs:
           ERKAO_HTTP_TEST: "1"
         run: bash ./scripts/unix/run-tests.sh
 
+  performance:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install curl (Linux)
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
+
+      - name: Configure (performance)
+        run: cmake -S . -B build-perf -DERKAO_GRAPHICS=OFF -DERKAO_WERROR=ON -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build (performance)
+        run: cmake --build build-perf
+
+      - name: Run benchmarks (performance gate)
+        run: python ./scripts/check-bench.py --exe build-perf/erkao --repeat 5 --max-regression-pct 8 --min-slack-ms 20
+
   sanitizers:
     runs-on: ubuntu-latest
     steps:
