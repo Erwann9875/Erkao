@@ -50,6 +50,7 @@ set(ERKAO_CORE_SOURCES
   src/db/db_postgres.c
   src/db/db_mysql.c
   src/db/db_mongo.c
+  src/platform/platform.c
   src/tooling/package.c
   src/gc/gc_core.c
   src/gc/gc_trace.c

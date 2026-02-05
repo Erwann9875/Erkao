@@ -1,6 +1,7 @@
 #include "interpreter_internal.h"
 #include "singlepass.h"
 #include "program.h"
+#include "platform.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -16,50 +17,15 @@
 #endif
 
 static char* readFilePath(const char* path) {
-  FILE* file = fopen(path, "rb");
-  if (!file) return NULL;
-
-  fseek(file, 0L, SEEK_END);
-  long size = ftell(file);
-  rewind(file);
-
-  if (size < 0) {
-    fclose(file);
-    return NULL;
-  }
-
-  char* buffer = (char*)malloc((size_t)size + 1);
-  if (!buffer) {
-    fclose(file);
-    fprintf(stderr, "Out of memory.\n");
-    exit(1);
-  }
-
-  size_t read = fread(buffer, 1, (size_t)size, file);
-  buffer[read] = '\0';
-  fclose(file);
-  return buffer;
+  return platform_read_file(path, NULL);
 }
 
 static bool isAbsolutePath(const char* path) {
-  if (!path || path[0] == '\0') return false;
-  if (path[0] == '/' || path[0] == '\\') return true;
-  if (((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) &&
-      path[1] == ':' && (path[2] == '\\' || path[2] == '/')) {
-    return true;
-  }
-  return false;
+  return platform_path_is_absolute(path);
 }
 
 static char* copyCString(const char* src, size_t length) {
-  char* out = (char*)malloc(length + 1);
-  if (!out) {
-    fprintf(stderr, "Out of memory.\n");
-    exit(1);
-  }
-  memcpy(out, src, length);
-  out[length] = '\0';
-  return out;
+  return platform_strndup(src, length);
 }
 
 typedef struct {
@@ -209,45 +175,11 @@ static char* normalizePath(const char* path) {
 }
 
 static char* pathDirname(const char* path) {
-  const char* lastSlash = strrchr(path, '/');
-  const char* lastBackslash = strrchr(path, '\\');
-  const char* sep = lastSlash;
-  if (lastBackslash && (!sep || lastBackslash > sep)) {
-    sep = lastBackslash;
-  }
-
-  if (!sep) {
-    return copyCString(".", 1);
-  }
-
-  size_t length = (size_t)(sep - path);
-  if (length == 0) {
-    return copyCString(path, 1);
-  }
-  return copyCString(path, length);
+  return platform_path_dirname(path);
 }
 
 static char* joinPaths(const char* dir, const char* rel) {
-  if (!dir || dir[0] == '\0' || strcmp(dir, ".") == 0) {
-    return copyCString(rel, strlen(rel));
-  }
-  char sep = '/';
-  if (strchr(dir, '\\')) sep = '\\';
-  size_t dirLen = strlen(dir);
-  size_t relLen = strlen(rel);
-  bool needsSep = dir[dirLen - 1] != '/' && dir[dirLen - 1] != '\\';
-  size_t total = dirLen + (needsSep ? 1 : 0) + relLen;
-  char* out = (char*)malloc(total + 1);
-  if (!out) {
-    fprintf(stderr, "Out of memory.\n");
-    exit(1);
-  }
-  memcpy(out, dir, dirLen);
-  size_t offset = dirLen;
-  if (needsSep) out[offset++] = sep;
-  memcpy(out + offset, rel, relLen);
-  out[total] = '\0';
-  return out;
+  return platform_path_join(dir, rel);
 }
 
 static bool isRelativePath(const char* path) {
@@ -259,44 +191,15 @@ static bool isRelativePath(const char* path) {
 }
 
 static bool pathExists(const char* path) {
-#ifdef _WIN32
-  DWORD attrs = GetFileAttributesA(path);
-  return attrs != INVALID_FILE_ATTRIBUTES;
-#else
-  struct stat st;
-  return stat(path, &st) == 0;
-#endif
+  return platform_path_exists(path);
 }
 
 static bool isDirectory(const char* path) {
-#ifdef _WIN32
-  DWORD attrs = GetFileAttributesA(path);
-  if (attrs == INVALID_FILE_ATTRIBUTES) return false;
-  return (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
-#else
-  struct stat st;
-  if (stat(path, &st) != 0) return false;
-  return S_ISDIR(st.st_mode);
-#endif
+  return platform_path_is_dir(path);
 }
 
 static char* getCwd(void) {
-#ifdef _WIN32
-  DWORD length = GetCurrentDirectoryA(0, NULL);
-  if (length == 0) return NULL;
-  char* buffer = (char*)malloc((size_t)length + 1);
-  if (!buffer) {
-    fprintf(stderr, "Out of memory.\n");
-    exit(1);
-  }
-  if (GetCurrentDirectoryA(length + 1, buffer) == 0) {
-    free(buffer);
-    return NULL;
-  }
-  return buffer;
-#else
-  return getcwd(NULL, 0);
-#endif
+  return platform_get_cwd();
 }
 
 static char* resolveModuleFile(const char* basePath) {

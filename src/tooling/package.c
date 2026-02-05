@@ -1,7 +1,7 @@
 #include "package.h"
+#include "platform.h"
 
 #include <ctype.h>
-#include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,154 +32,35 @@ typedef struct {
 } PackageManifest;
 
 static char* copyCString(const char* src) {
-  size_t length = strlen(src);
-  char* out = (char*)malloc(length + 1);
-  if (!out) {
-    fprintf(stderr, "Out of memory.\n");
-    exit(1);
-  }
-  memcpy(out, src, length + 1);
-  return out;
-}
-
-static char* copyCStringRange(const char* start, size_t length) {
-  char* out = (char*)malloc(length + 1);
-  if (!out) {
-    fprintf(stderr, "Out of memory.\n");
-    exit(1);
-  }
-  memcpy(out, start, length);
-  out[length] = '\0';
-  return out;
+  return platform_strdup(src);
 }
 
 static bool pathExists(const char* path) {
-#ifdef _WIN32
-  DWORD attrs = GetFileAttributesA(path);
-  return attrs != INVALID_FILE_ATTRIBUTES;
-#else
-  struct stat st;
-  return stat(path, &st) == 0;
-#endif
+  return platform_path_exists(path);
 }
 
 static bool isDirectory(const char* path) {
-#ifdef _WIN32
-  DWORD attrs = GetFileAttributesA(path);
-  if (attrs == INVALID_FILE_ATTRIBUTES) return false;
-  return (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
-#else
-  struct stat st;
-  if (stat(path, &st) != 0) return false;
-  return S_ISDIR(st.st_mode);
-#endif
-}
-
-static bool makeDir(const char* path) {
-#ifdef _WIN32
-  if (CreateDirectoryA(path, NULL)) return true;
-  return GetLastError() == ERROR_ALREADY_EXISTS;
-#else
-  if (mkdir(path, 0755) == 0) return true;
-  return errno == EEXIST;
-#endif
+  return platform_path_is_dir(path);
 }
 
 static bool ensureDir(const char* path) {
-  if (!path || path[0] == '\0') return false;
-  if (isDirectory(path)) return true;
-
-  char* buffer = copyCString(path);
-  char* cursor = buffer;
-  if (isalpha((unsigned char)cursor[0]) && cursor[1] == ':') {
-    cursor += 2;
-  }
-  while (*cursor) {
-    if (*cursor == '/' || *cursor == '\\') {
-      char saved = *cursor;
-      *cursor = '\0';
-      if (buffer[0] != '\0' && !isDirectory(buffer)) {
-        if (!makeDir(buffer)) {
-          free(buffer);
-          return false;
-        }
-      }
-      *cursor = saved;
-    }
-    cursor++;
-  }
-  if (!isDirectory(buffer)) {
-    if (!makeDir(buffer)) {
-      free(buffer);
-      return false;
-    }
-  }
-  free(buffer);
-  return true;
+  return platform_ensure_dir(path);
 }
 
 static char* pathDirname(const char* path) {
-  const char* lastSlash = strrchr(path, '/');
-  const char* lastBackslash = strrchr(path, '\\');
-  const char* sep = lastSlash;
-  if (lastBackslash && (!sep || lastBackslash > sep)) {
-    sep = lastBackslash;
-  }
-  if (!sep) return copyCString(".");
-  size_t length = (size_t)(sep - path);
-  if (length == 0) return copyCString(path);
-  return copyCStringRange(path, length);
+  return platform_path_dirname(path);
 }
 
 static char* pathBasename(const char* path) {
-  const char* lastSlash = strrchr(path, '/');
-  const char* lastBackslash = strrchr(path, '\\');
-  const char* base = path;
-  if (lastSlash && lastSlash + 1 > base) base = lastSlash + 1;
-  if (lastBackslash && lastBackslash + 1 > base) base = lastBackslash + 1;
-  return copyCString(base);
+  return platform_path_basename(path);
 }
 
 static char* joinPaths(const char* left, const char* right) {
-  if (!left || left[0] == '\0' || strcmp(left, ".") == 0) {
-    return copyCString(right);
-  }
-  char sep = '/';
-  if (strchr(left, '\\') || strchr(right, '\\')) sep = '\\';
-  size_t leftLen = strlen(left);
-  size_t rightLen = strlen(right);
-  bool needSep = left[leftLen - 1] != '/' && left[leftLen - 1] != '\\';
-  size_t total = leftLen + (needSep ? 1 : 0) + rightLen;
-  char* out = (char*)malloc(total + 1);
-  if (!out) {
-    fprintf(stderr, "Out of memory.\n");
-    exit(1);
-  }
-  memcpy(out, left, leftLen);
-  size_t offset = leftLen;
-  if (needSep) out[offset++] = sep;
-  memcpy(out + offset, right, rightLen);
-  out[total] = '\0';
-  return out;
+  return platform_path_join(left, right);
 }
 
 static char* getCwd(void) {
-#ifdef _WIN32
-  DWORD length = GetCurrentDirectoryA(0, NULL);
-  if (length == 0) return NULL;
-  char* buffer = (char*)malloc((size_t)length + 1);
-  if (!buffer) {
-    fprintf(stderr, "Out of memory.\n");
-    exit(1);
-  }
-  if (GetCurrentDirectoryA(length + 1, buffer) == 0) {
-    free(buffer);
-    return NULL;
-  }
-  return buffer;
-#else
-  return getcwd(NULL, 0);
-#endif
+  return platform_get_cwd();
 }
 
 static bool copyFile(const char* src, const char* dst) {

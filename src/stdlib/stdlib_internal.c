@@ -1,17 +1,8 @@
 #include "stdlib_internal.h"
+#include "platform.h"
 
 #include <math.h>
 #include <string.h>
-
-#ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
-#else
-#include <sys/stat.h>
-#include <unistd.h>
-#endif
 
 Value runtimeErrorValue(VM* vm, const char* message) {
   Token token;
@@ -50,80 +41,33 @@ const char* findLastSeparator(const char* path) {
 }
 
 bool isAbsolutePathString(const char* path) {
-  if (!path || path[0] == '\0') return false;
-  if (path[0] == '/' || path[0] == '\\') return true;
-  if (((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) &&
-      path[1] == ':' && (path[2] == '\\' || path[2] == '/')) {
-    return true;
-  }
-  return false;
+  return platform_path_is_absolute(path);
 }
 
 char pickSeparator(const char* left, const char* right) {
-  if ((left && strchr(left, '\\')) || (right && strchr(right, '\\'))) return '\\';
-  return '/';
+  return platform_path_pick_separator(left, right);
 }
 
 bool pathExists(const char* path) {
-#ifdef _WIN32
-  DWORD attrs = GetFileAttributesA(path);
-  return attrs != INVALID_FILE_ATTRIBUTES;
-#else
-  struct stat st;
-  return stat(path, &st) == 0;
-#endif
+  return platform_path_exists(path);
 }
 
 bool pathIsDir(const char* path) {
-#ifdef _WIN32
-  DWORD attrs = GetFileAttributesA(path);
-  if (attrs == INVALID_FILE_ATTRIBUTES) return false;
-  return (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
-#else
-  struct stat st;
-  if (stat(path, &st) != 0) return false;
-  return S_ISDIR(st.st_mode);
-#endif
+  return platform_path_is_dir(path);
 }
 
 bool pathIsFile(const char* path) {
-#ifdef _WIN32
-  DWORD attrs = GetFileAttributesA(path);
-  if (attrs == INVALID_FILE_ATTRIBUTES) return false;
-  return (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0;
-#else
-  struct stat st;
-  if (stat(path, &st) != 0) return false;
-  return S_ISREG(st.st_mode);
-#endif
+  return platform_path_is_file(path);
 }
 
 Value stdlibCwdValue(VM* vm) {
-#ifdef _WIN32
-  DWORD length = GetCurrentDirectoryA(0, NULL);
-  if (length == 0) {
-    return runtimeErrorValue(vm, "fs.cwd failed to read current directory.");
-  }
-  char* buffer = (char*)malloc((size_t)length);
-  if (!buffer) {
-    return runtimeErrorValue(vm, "fs.cwd out of memory.");
-  }
-  if (GetCurrentDirectoryA(length, buffer) == 0) {
-    free(buffer);
-    return runtimeErrorValue(vm, "fs.cwd failed to read current directory.");
-  }
-  ObjString* result = copyString(vm, buffer);
-  free(buffer);
-  return OBJ_VAL(result);
-#else
-  char* buffer = getcwd(NULL, 0);
+  char* buffer = platform_get_cwd();
   if (!buffer) {
     return runtimeErrorValue(vm, "fs.cwd failed to read current directory.");
   }
   ObjString* result = copyString(vm, buffer);
   free(buffer);
   return OBJ_VAL(result);
-#endif
 }
 
 void bufferInit(ByteBuffer* buffer) {
@@ -169,14 +113,7 @@ void bufferFree(ByteBuffer* buffer) {
 }
 
 char* copyCString(const char* src, size_t length) {
-  char* out = (char*)malloc(length + 1);
-  if (!out) {
-    fprintf(stderr, "Out of memory.\n");
-    exit(1);
-  }
-  memcpy(out, src, length);
-  out[length] = '\0';
-  return out;
+  return platform_strndup(src, length);
 }
 
 void stringListInit(StringList* list) {

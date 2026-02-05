@@ -1,5 +1,6 @@
 #include "tooling.h"
 #include "lexer.h"
+#include "platform.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -59,26 +60,11 @@ static void sbAppendIndent(StringBuilder* sb, int level, int indentSpaces) {
 }
 
 static char* readFile(const char* path) {
-  FILE* file = fopen(path, "rb");
-  if (!file) {
+  char* buffer = platform_read_file(path, NULL);
+  if (!buffer) {
     fprintf(stderr, "Could not open file '%s'.\n", path);
     return NULL;
   }
-
-  fseek(file, 0L, SEEK_END);
-  long size = ftell(file);
-  rewind(file);
-
-  char* buffer = (char*)malloc((size_t)size + 1);
-  if (!buffer) {
-    fprintf(stderr, "Not enough memory to read '%s'.\n", path);
-    fclose(file);
-    return NULL;
-  }
-
-  size_t read = fread(buffer, 1, (size_t)size, file);
-  buffer[read] = '\0';
-  fclose(file);
   return buffer;
 }
 
