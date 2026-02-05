@@ -220,18 +220,57 @@ jobs:
 
       - name: Run clang-tidy
         run: |
-          files=$(find src -type f -name '*.c' | sort)
-          if [ -n "$files" ]; then
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          compile_db = Path("build-analysis/compile_commands.json")
+          files = []
+          if compile_db.exists():
+              data = json.loads(compile_db.read_text(encoding="utf-8"))
+              seen = set()
+              for entry in data:
+                  path = entry.get("file")
+                  if not isinstance(path, str):
+                      continue
+                  norm = path.replace("\\", "/")
+                  if "/src/" not in norm:
+                      continue
+                  if norm in seen:
+                      continue
+                  seen.add(norm)
+                  files.append(path)
+          files.sort()
+          Path("clang-tidy-files.txt").write_text(
+              "\n".join(files) + ("\n" if files else ""),
+              encoding="utf-8",
+          )
+          PY
+          if [ -s clang-tidy-files.txt ]; then
             clang-tidy \
               -p build-analysis \
               -checks='-*,clang-analyzer-*,bugprone-*,performance-*,portability-*' \
-              $files > clang-tidy-report.txt 2>&1 || true
+              $(cat clang-tidy-files.txt) > clang-tidy-report.txt 2>&1 || true
           else
             : > clang-tidy-report.txt
           fi
 
       - name: Enforce zero new static analysis issues
-        run: python ./scripts/check-static-analysis.py --baseline docs/static_analysis_baseline.txt --cppcheck cppcheck-report.txt --clang-tidy clang-tidy-report.txt
+        run: |
+          python ./scripts/check-static-analysis.py \
+            --baseline docs/static_analysis_baseline.txt \
+            --cppcheck cppcheck-report.txt \
+            --clang-tidy clang-tidy-report.txt \
+            --write-findings static-analysis-current.txt
+
+      - name: Upload static analysis reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-analysis-reports
+          path: |
+            cppcheck-report.txt
+            clang-tidy-report.txt
+            static-analysis-current.txt
 
   fuzz:
     needs: architecture

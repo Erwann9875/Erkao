@@ -340,6 +340,25 @@ Critical-module coverage check (used by CI):
 python ./scripts/check-critical-coverage.py --coverage-json coverage.json --min-line-coverage 5
 ```
 
+Static-analysis baseline workflow:
+
+```sh
+python ./scripts/check-static-analysis.py \
+  --baseline docs/static_analysis_baseline.txt \
+  --cppcheck cppcheck-report.txt \
+  --clang-tidy clang-tidy-report.txt
+```
+
+Bootstrap/update baseline from current reports:
+
+```sh
+python ./scripts/check-static-analysis.py \
+  --baseline docs/static_analysis_baseline.txt \
+  --cppcheck cppcheck-report.txt \
+  --clang-tidy clang-tidy-report.txt \
+  --update-baseline
+```
+
 ## Language quick tour
 
 ```ek
