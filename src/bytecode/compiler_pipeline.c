@@ -1,7 +1,7 @@
 #include "singlepass.h"
-#include "singlepass_legacy.h"
 #include "pipeline_frontend.h"
 #include "pipeline_sema.h"
+#include "pipeline_lower.h"
 
 ObjFunction* compile(VM* vm, const TokenArray* tokens, const char* source,
                      const char* path, bool* hadError) {
@@ -27,11 +27,14 @@ ObjFunction* compile(VM* vm, const TokenArray* tokens, const char* source,
     return NULL;
   }
 
-  ObjFunction* function = compileSinglePassLegacy(vm,
-                                                  sema.frontend.tokens,
-                                                  sema.frontend.source,
-                                                  sema.frontend.path,
-                                                  hadErrorOut);
+  LowerUnit lower;
+  if (!lowerBuildUnit(&sema, &lower, &stageError)) {
+    frontendFreeUnit(&frontend);
+    *hadErrorOut = stageError;
+    return NULL;
+  }
+
+  ObjFunction* function = lowerEmitBytecode(vm, &lower, hadErrorOut);
   frontendFreeUnit(&frontend);
   return function;
 }

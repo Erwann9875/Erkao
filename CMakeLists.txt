@@ -17,6 +17,7 @@ set(ERKAO_CORE_SOURCES
   src/frontend/lexer.c
   src/frontend/pipeline_frontend.c
   src/bytecode/singlepass.c
+  src/bytecode/pipeline_lower.c
   src/bytecode/compiler_pipeline.c
   src/frontend/singlepass_parse.c
   src/frontend/singlepass_patterns.c

@@ -4,7 +4,8 @@ Erkao routes `compile()` through explicit stage contracts:
 
 1. Frontend stage (`src/frontend/pipeline_frontend.c`)
 2. Sema stage (`src/typecheck/pipeline_sema.c`)
-3. Lower/codegen stage (`src/bytecode/compiler_pipeline.c`)
+3. Lower/codegen stage (`src/bytecode/pipeline_lower.c`)
+4. Pipeline orchestration (`src/bytecode/compiler_pipeline.c`)
 
 ## Stage contracts
 
@@ -29,6 +30,8 @@ Sema builds a `SemaUnit` summary from `FrontendUnit`:
 Lowering currently preserves behavior by delegating to the legacy compiler:
 
 - `compileSinglePassLegacy(...)` in `src/frontend/singlepass_parse.c`
+- `lowerEmitBytecode(...)` in `src/bytecode/pipeline_lower.c` is the backend
+  seam invoked by pipeline orchestration.
 
 ## Next refactor targets
 
