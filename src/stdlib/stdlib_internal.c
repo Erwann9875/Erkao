@@ -1,6 +1,7 @@
 #include "stdlib_internal.h"
 #include "platform.h"
 
+#include <float.h>
 #include <math.h>
 #include <string.h>
 

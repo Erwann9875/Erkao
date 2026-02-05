@@ -1,5 +1,7 @@
 #include "stdlib_internal.h"
 
+#include <limits.h>
+
 static Value nativeStrUpper(VM* vm, int argc, Value* args) {
   (void)argc;
   if (!isObjType(args[0], OBJ_STRING)) {
