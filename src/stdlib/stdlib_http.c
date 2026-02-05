@@ -1,6 +1,8 @@
 #include "stdlib_internal.h"
+#include "gc.h"
 
 #include <errno.h>
+#include <math.h>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN

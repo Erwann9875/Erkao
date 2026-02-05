@@ -244,6 +244,9 @@ static void globWalk(const char* base, char sep, StringList* segments,
     }
   } else if (pathIsDir(next)) {
     globWalk(next, sep, segments, index + 1, matches, error);
+  }
+  free(next);
+}
 
 static Value nativeFsReadText(VM* vm, int argc, Value* args) {
   (void)argc;

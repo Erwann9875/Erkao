@@ -8,20 +8,24 @@ ObjFunction* compile(VM* vm, const TokenArray* tokens, const char* source,
   bool localHadError = false;
   bool* hadErrorOut = hadError ? hadError : &localHadError;
   *hadErrorOut = false;
+  if (!vm || !tokens || !source) {
+    *hadErrorOut = true;
+    return NULL;
+  }
 
   bool stageError = false;
   FrontendUnit frontend;
   if (!frontendBuildUnit(tokens, source, path, &frontend, &stageError)) {
-    *hadErrorOut = true;
+    *hadErrorOut = stageError;
     return NULL;
   }
 
   SemaUnit sema;
   if (!semaBuildUnit(&frontend, &sema, &stageError)) {
-    *hadErrorOut = true;
+    *hadErrorOut = stageError;
     return NULL;
   }
 
-  return compileSinglePassLegacy(vm, sema.unit.tokens, sema.unit.source,
-                                 sema.unit.path, hadErrorOut);
+  return compileSinglePassLegacy(vm, sema.frontend.tokens, sema.frontend.source,
+                                 sema.frontend.path, hadErrorOut);
 }

@@ -1,20 +1,34 @@
 # Compiler pipeline
 
-Erkao now routes `compile()` through explicit stages:
+Erkao routes `compile()` through explicit stage contracts:
 
 1. Frontend stage (`src/frontend/pipeline_frontend.c`)
 2. Sema stage (`src/typecheck/pipeline_sema.c`)
 3. Lower/codegen stage (`src/bytecode/compiler_pipeline.c`)
 
-Current behavior is preserved by delegating stage 3 to the legacy single-pass
-compiler implementation:
+## Stage contracts
+
+Frontend now builds a structured `FrontendUnit` from tokens/source:
+
+- validates stream invariants (`TOKEN_ERROR` rejection, final `TOKEN_EOF`)
+- captures feature flags (imports, exports, classes, loops, match/switch, etc.)
+- captures top-level declaration stats
+- captures depth stats (paren/brace/bracket/interpolation max depth)
+
+Sema builds a `SemaUnit` summary from `FrontendUnit`:
+
+- module kind (`script` vs `import/export` module)
+- declaration counters (value/type/top-level totals)
+- visibility/control-flow capability flags
+
+Lowering currently preserves behavior by delegating to the legacy compiler:
 
 - `compileSinglePassLegacy(...)` in `src/frontend/singlepass_parse.c`
 
-This establishes stable seams for the next refactor steps:
+## Next refactor targets
 
-- Replace frontend stage payload with a real AST.
-- Move type analysis from legacy compile into sema stage.
-- Move bytecode emission into dedicated backend lowering stage.
+- Replace `FrontendUnit` token summary with a true AST representation.
+- Move type-resolution and declaration checks from legacy compile into sema.
+- Move bytecode emission to a dedicated backend lowering pass.
 
-No language semantics changed in this step.
+No language semantics changed by this pipeline step.
