@@ -466,6 +466,82 @@ static bool isTraceFlag(const char* arg) {
   return isFlag(arg, "--trace", NULL);
 }
 
+static bool optionWithValue(const char* arg, const char* longName, const char** inlineValue) {
+  if (!arg || !longName) return false;
+  size_t prefixLen = strlen(longName);
+  if (strncmp(arg, longName, prefixLen) != 0) return false;
+  if (arg[prefixLen] == '\0') {
+    if (inlineValue) *inlineValue = NULL;
+    return true;
+  }
+  if (arg[prefixLen] == '=' && arg[prefixLen + 1] != '\0') {
+    if (inlineValue) *inlineValue = arg + prefixLen + 1;
+    return true;
+  }
+  return false;
+}
+
+static bool parseUnsafePolicyValue(const char* value, unsigned int* outMask) {
+  if (!value || !outMask) return false;
+  size_t length = strlen(value);
+  if (length == 0) return false;
+
+  char* copy = erkaoDupN(value, length);
+  if (!copy) return false;
+  for (size_t i = 0; i < length; i++) {
+    copy[i] = (char)tolower((unsigned char)copy[i]);
+  }
+
+  unsigned int mask = ERKAO_UNSAFE_NONE;
+  bool sawToken = false;
+
+  char* cursor = copy;
+  while (*cursor != '\0') {
+    while (*cursor == ',' || isspace((unsigned char)*cursor)) cursor++;
+    if (*cursor == '\0') break;
+
+    char* tokenStart = cursor;
+    while (*cursor != '\0' && *cursor != ',') cursor++;
+    char* tokenEnd = cursor;
+    while (tokenEnd > tokenStart && isspace((unsigned char)tokenEnd[-1])) tokenEnd--;
+    *tokenEnd = '\0';
+
+    if (tokenStart[0] != '\0') {
+      sawToken = true;
+      if (strcmp(tokenStart, "none") == 0) {
+        if (mask != ERKAO_UNSAFE_NONE) {
+          free(copy);
+          return false;
+        }
+        mask = ERKAO_UNSAFE_NONE;
+      } else if (strcmp(tokenStart, "all") == 0) {
+        if (mask != ERKAO_UNSAFE_NONE) {
+          free(copy);
+          return false;
+        }
+        mask = ERKAO_UNSAFE_ALL;
+      } else if (strcmp(tokenStart, "proc") == 0) {
+        mask |= ERKAO_UNSAFE_PROC;
+      } else if (strcmp(tokenStart, "ffi") == 0) {
+        mask |= ERKAO_UNSAFE_FFI;
+      } else if (strcmp(tokenStart, "plugin") == 0 ||
+                 strcmp(tokenStart, "plugins") == 0) {
+        mask |= ERKAO_UNSAFE_PLUGINS;
+      } else {
+        free(copy);
+        return false;
+      }
+    }
+
+    if (*cursor == ',') cursor++;
+  }
+
+  free(copy);
+  if (!sawToken) return false;
+  *outMask = mask;
+  return true;
+}
+
 static void printHelp(const char* exe) {
   fprintf(stdout,
           "Usage:\n"
@@ -492,6 +568,7 @@ static void printHelp(const char* exe) {
           "  --bytecode     Print bytecode before running.\n"
           "  --disasm       Alias for --bytecode.\n"
           "  --trace        Print source locations as they execute.\n"
+          "  --allow-unsafe Enable unsafe features (none|proc|ffi|plugins|all, comma-separated).\n"
           "  --module-path  Add a module search path.\n"
           "  --check        Check formatting without writing changes.\n"
           "  --config       Tooling config file for fmt/lint.\n"
@@ -723,7 +800,39 @@ static int runFileCommand(VM* vm, const char* exe, int argc, const char** argv, 
       index += 2;
       continue;
     }
+    const char* inlineUnsafe = NULL;
+    if (optionWithValue(argv[index], "--allow-unsafe", &inlineUnsafe)) {
+      const char* value = inlineUnsafe;
+      if (!value) {
+        if (index + 1 >= argc) {
+          fprintf(stderr, "Missing value for --allow-unsafe.\n");
+          printHelp(exe);
+          return 64;
+        }
+        value = argv[index + 1];
+        index += 2;
+      } else {
+        index += 1;
+      }
+      unsigned int mask = ERKAO_UNSAFE_NONE;
+      if (!parseUnsafePolicyValue(value, &mask)) {
+        fprintf(stderr,
+                "Invalid value for --allow-unsafe: %s (expected none|proc|ffi|plugins|all)\n",
+                value);
+        return 64;
+      }
+      vmConfigureUnsafeFeatures(vm, mask);
+      continue;
+    }
     break;
+  }
+
+  if (index < argc && argv[index][0] == '-' && argv[index][1] != '\0' &&
+      strcmp(argv[index], "--") != 0 &&
+      !isFlag(argv[index], "--help", "-h")) {
+    fprintf(stderr, "Unknown option: %s\n", argv[index]);
+    printHelp(exe);
+    return 64;
   }
 
   if (index >= argc || isFlag(argv[index], "--help", "-h")) {
@@ -750,6 +859,30 @@ static int runTypecheckCommand(VM* vm, const char* exe, int argc, const char** a
       index += 2;
       continue;
     }
+    const char* inlineUnsafe = NULL;
+    if (optionWithValue(argv[index], "--allow-unsafe", &inlineUnsafe)) {
+      const char* value = inlineUnsafe;
+      if (!value) {
+        if (index + 1 >= argc) {
+          fprintf(stderr, "Missing value for --allow-unsafe.\n");
+          printHelp(exe);
+          return 64;
+        }
+        value = argv[index + 1];
+        index += 2;
+      } else {
+        index += 1;
+      }
+      unsigned int mask = ERKAO_UNSAFE_NONE;
+      if (!parseUnsafePolicyValue(value, &mask)) {
+        fprintf(stderr,
+                "Invalid value for --allow-unsafe: %s (expected none|proc|ffi|plugins|all)\n",
+                value);
+        return 64;
+      }
+      vmConfigureUnsafeFeatures(vm, mask);
+      continue;
+    }
     break;
   }
 
@@ -765,6 +898,55 @@ static int runTypecheckCommand(VM* vm, const char* exe, int argc, const char** a
     return 64;
   }
   return typecheckFile(vm, path);
+}
+
+static int runReplCommand(VM* vm, const char* exe, int argc, const char** argv, int startIndex) {
+  int index = startIndex;
+  while (index < argc) {
+    if (isFlag(argv[index], "--module-path", "-M")) {
+      if (index + 1 >= argc) {
+        fprintf(stderr, "Missing value for --module-path.\n");
+        printHelp(exe);
+        return 64;
+      }
+      vmAddModulePath(vm, argv[index + 1]);
+      index += 2;
+      continue;
+    }
+    const char* inlineUnsafe = NULL;
+    if (optionWithValue(argv[index], "--allow-unsafe", &inlineUnsafe)) {
+      const char* value = inlineUnsafe;
+      if (!value) {
+        if (index + 1 >= argc) {
+          fprintf(stderr, "Missing value for --allow-unsafe.\n");
+          printHelp(exe);
+          return 64;
+        }
+        value = argv[index + 1];
+        index += 2;
+      } else {
+        index += 1;
+      }
+      unsigned int mask = ERKAO_UNSAFE_NONE;
+      if (!parseUnsafePolicyValue(value, &mask)) {
+        fprintf(stderr,
+                "Invalid value for --allow-unsafe: %s (expected none|proc|ffi|plugins|all)\n",
+                value);
+        return 64;
+      }
+      vmConfigureUnsafeFeatures(vm, mask);
+      continue;
+    }
+    if (isFlag(argv[index], "--help", "-h")) {
+      printHelp(exe);
+      return 0;
+    }
+    fprintf(stderr, "Unexpected arguments for 'repl': %s\n", argv[index]);
+    printHelp(exe);
+    return 64;
+  }
+  repl(vm);
+  return 0;
 }
 
 int main(int argc, const char** argv) {
@@ -794,28 +976,32 @@ int main(int argc, const char** argv) {
   if (argc == 1) {
     repl(&vm);
   } else if (strcmp(argv[1], "repl") == 0) {
-    if (argc > 2) {
-      fprintf(stderr, "Unexpected arguments for 'repl'.\n");
-      printHelp(exe);
-      result = 64;
-    } else {
-      repl(&vm);
-    }
+    result = runReplCommand(&vm, exe, argc, argv, 2);
   } else if (strcmp(argv[1], "typecheck") == 0) {
     result = runTypecheckCommand(&vm, exe, argc, argv, 2);
   } else if (strcmp(argv[1], "run") == 0) {
     result = runFileCommand(&vm, exe, argc, argv, 2);
   } else {
     int index = 1;
-    while (index < argc && isDebugFlag(argv[index])) {
-      index++;
+    while (index < argc) {
+      if (isDebugFlag(argv[index]) || isTraceFlag(argv[index])) {
+        index++;
+        continue;
+      }
+      if (isFlag(argv[index], "--module-path", "-M")) {
+        if (index + 1 >= argc) break;
+        index += 2;
+        continue;
+      }
+      const char* inlineUnsafe = NULL;
+      if (optionWithValue(argv[index], "--allow-unsafe", &inlineUnsafe)) {
+        index += inlineUnsafe ? 1 : 2;
+        continue;
+      }
+      break;
     }
     if (index < argc && strcmp(argv[index], "run") == 0) {
       result = runFileCommand(&vm, exe, argc, argv, index + 1);
-    } else if (argv[1][0] == '-' && argv[1][1] != '\0') {
-      fprintf(stderr, "Unknown option: %s\n", argv[1]);
-      printHelp(exe);
-      result = 64;
     } else {
       result = runFileCommand(&vm, exe, argc, argv, 1);
     }

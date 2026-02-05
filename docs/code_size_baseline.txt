@@ -1,0 +1,12 @@
+# Baseline for scripts/check-code-size.py
+# Auto-generated entries represent accepted existing debt.
+# Format:
+#   file:<path>
+#   func:<path>:<name>:<start_line>
+
+file:src/frontend/singlepass_parse.c
+file:src/runtime/exec.c
+file:src/typecheck/singlepass_types.c
+func:src/frontend/singlepass_parse.c:switchStatement:1674
+func:src/runtime/eval.c:evaluate:269
+func:src/runtime/exec.c:runWithTarget:868

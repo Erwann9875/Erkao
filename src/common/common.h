@@ -20,6 +20,40 @@
 #define FREE_ARRAY(type, pointer, oldCount) \
   do { (void)(oldCount); free(pointer); } while (0)
 
+static inline bool erkaoMulSize(size_t a, size_t b, size_t* out) {
+  if (!out) return false;
+  if (a == 0 || b == 0) {
+    *out = 0;
+    return true;
+  }
+  if (a > SIZE_MAX / b) {
+    return false;
+  }
+  *out = a * b;
+  return true;
+}
+
+static inline void* erkaoAllocArray(size_t count, size_t elemSize) {
+  size_t total = 0;
+  if (!erkaoMulSize(count, elemSize, &total)) return NULL;
+  return malloc(total);
+}
+
+static inline void* erkaoReallocArray(void* pointer, size_t count, size_t elemSize) {
+  size_t total = 0;
+  if (!erkaoMulSize(count, elemSize, &total)) return NULL;
+  return realloc(pointer, total);
+}
+
+static inline char* erkaoDupN(const char* source, size_t length) {
+  if (!source) return NULL;
+  char* out = (char*)erkaoAllocArray(length + 1, sizeof(char));
+  if (!out) return NULL;
+  memcpy(out, source, length);
+  out[length] = '\0';
+  return out;
+}
+
 static inline void printErrorContext(const char* source, int line, int column, int length) {
   if (!source || line <= 0 || column <= 0) return;
 

@@ -49,6 +49,14 @@ typedef struct {
   bool owns;
 } FfiHandle;
 
+typedef enum {
+  ERKAO_UNSAFE_NONE = 0,
+  ERKAO_UNSAFE_PROC = 1 << 0,
+  ERKAO_UNSAFE_FFI = 1 << 1,
+  ERKAO_UNSAFE_PLUGINS = 1 << 2,
+  ERKAO_UNSAFE_ALL = ERKAO_UNSAFE_PROC | ERKAO_UNSAFE_FFI | ERKAO_UNSAFE_PLUGINS
+} ErkaoUnsafeFeature;
+
 struct Env {
   struct Env* enclosing;
   ObjMap* values;
@@ -119,6 +127,8 @@ struct VM {
   int debugTraceLine;
   int debugTraceColumn;
   bool typecheck;
+  bool unsafePolicyConfigured;
+  unsigned int unsafeFeatureMask;
   char** modulePaths;
   int modulePathCount;
   int modulePathCapacity;
@@ -133,6 +143,7 @@ void vmFree(VM* vm);
 void vmSetArgs(VM* vm, int argc, const char** argv);
 void vmAddModulePath(VM* vm, const char* path);
 void vmSetProjectRoot(VM* vm, const char* path);
+void vmConfigureUnsafeFeatures(VM* vm, unsigned int featureMask);
 void defineNative(VM* vm, const char* name, NativeFn function, int arity);
 void defineGlobal(VM* vm, const char* name, Value value);
 

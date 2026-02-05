@@ -1,0 +1,3 @@
+tests/64_plugin_policy_bypass_blocked.ek: RuntimeError: plugin.load is disabled. Use --allow-unsafe=plugins or set ERKAO_ALLOW_PLUGINS=1.
+Stack trace (most recent call last):
+  #0 <script> (tests/64_plugin_policy_bypass_blocked.ek:3:12) -> '('

@@ -91,11 +91,7 @@ static bool parseSizeValue(const char* value, size_t* out) {
 }
 
 static char* copyCString(const char* src) {
-  size_t length = strlen(src);
-  char* out = (char*)malloc(length + 1);
-  if (!out) return NULL;
-  memcpy(out, src, length + 1);
-  return out;
+  return erkaoDupN(src, strlen(src));
 }
 
 static char* resolveGlobalPackagesDir(void) {
@@ -174,6 +170,12 @@ void vmSetProjectRoot(VM* vm, const char* path) {
   }
   free(vm->projectRoot);
   vm->projectRoot = copy;
+}
+
+void vmConfigureUnsafeFeatures(VM* vm, unsigned int featureMask) {
+  if (!vm) return;
+  vm->unsafeFeatureMask = featureMask & ERKAO_UNSAFE_ALL;
+  vm->unsafePolicyConfigured = true;
 }
 
 static void loadEnvModulePaths(VM* vm) {
@@ -328,6 +330,8 @@ void vmInit(VM* vm) {
   vm->debugTraceLine = -1;
   vm->debugTraceColumn = -1;
   vm->typecheck = false;
+  vm->unsafePolicyConfigured = false;
+  vm->unsafeFeatureMask = ERKAO_UNSAFE_NONE;
   vm->modulePaths = NULL;
   vm->modulePathCount = 0;
   vm->modulePathCapacity = 0;

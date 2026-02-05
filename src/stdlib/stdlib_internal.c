@@ -239,7 +239,10 @@ static bool envTruthy(const char* name) {
   return false;
 }
 
-bool stdlibUnsafeEnabled(const char* featureEnv) {
+bool stdlibUnsafeEnabled(VM* vm, unsigned int featureFlag, const char* featureEnv) {
+  if (vm && vm->unsafePolicyConfigured) {
+    return (vm->unsafeFeatureMask & featureFlag) != 0;
+  }
   if (envTruthy("ERKAO_ALLOW_UNSAFE")) return true;
   if (!featureEnv || featureEnv[0] == '\0') return false;
   return envTruthy(featureEnv);

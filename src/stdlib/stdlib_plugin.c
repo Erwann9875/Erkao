@@ -3,9 +3,9 @@
 
 static Value nativePluginLoad(VM* vm, int argc, Value* args) {
   (void)argc;
-  if (!stdlibUnsafeEnabled("ERKAO_ALLOW_PLUGINS")) {
+  if (!stdlibUnsafeEnabled(vm, ERKAO_UNSAFE_PLUGINS, "ERKAO_ALLOW_PLUGINS")) {
     return runtimeErrorValue(vm,
-                             "plugin.load is disabled. Set ERKAO_ALLOW_PLUGINS=1 to enable.");
+                             "plugin.load is disabled. Use --allow-unsafe=plugins or set ERKAO_ALLOW_PLUGINS=1.");
   }
   if (!isObjType(args[0], OBJ_STRING)) {
     return runtimeErrorValue(vm, "plugin.load expects a path string.");

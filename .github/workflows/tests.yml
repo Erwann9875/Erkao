@@ -10,6 +10,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -18,6 +20,16 @@ jobs:
 
       - name: Check architecture contract
         run: python ./scripts/check-architecture.py
+
+      - name: Check file/function size limits
+        run: python ./scripts/check-code-size.py
+
+      - name: Check design-note requirement for critical module changes
+        if: github.event_name == 'pull_request'
+        run: |
+          python ./scripts/check-design-note.py \
+            --base "${{ github.event.pull_request.base.sha }}" \
+            --head "${{ github.sha }}"
 
   tests:
     needs: architecture
@@ -133,6 +145,50 @@ jobs:
           UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
         run: bash ./scripts/unix/run-tests.sh --exe build-sanitize/erkao
 
+  coverage:
+    needs: architecture
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install coverage tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev
+          python -m pip install --upgrade pip gcovr
+
+      - name: Configure (coverage)
+        run: >
+          cmake -S . -B build-coverage
+          -DERKAO_GRAPHICS=OFF
+          -DERKAO_WERROR=ON
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_C_FLAGS="--coverage -O0"
+          -DCMAKE_EXE_LINKER_FLAGS="--coverage"
+
+      - name: Build (coverage)
+        run: cmake --build build-coverage
+
+      - name: Setup scripts (Linux)
+        run: bash ./scripts/unix/setup.sh
+
+      - name: Run tests (coverage)
+        env:
+          ERKAO_HTTP_TEST: "1"
+        run: bash ./scripts/unix/run-tests.sh --exe build-coverage/erkao
+
+      - name: Collect coverage
+        run: gcovr --root . --filter src --json coverage.json
+
+      - name: Enforce critical module coverage thresholds
+        run: python ./scripts/check-critical-coverage.py --coverage-json coverage.json --min-line-coverage 5.0
+
   static-analysis:
     needs: architecture
     runs-on: ubuntu-latest
@@ -198,3 +254,5 @@ jobs:
           ./build-fuzz/erkao_fuzz_lexer -max_total_time=20 -timeout=2
           ./build-fuzz/erkao_fuzz_parser -max_total_time=20 -timeout=2
           ./build-fuzz/erkao_fuzz_runtime -max_total_time=20 -timeout=2
+          ./build-fuzz/erkao_fuzz_import -max_total_time=20 -timeout=2
+          ./build-fuzz/erkao_fuzz_http -max_total_time=20 -timeout=2

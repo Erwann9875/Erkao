@@ -1,0 +1,2 @@
+import "escape@1.0.0/bad" as bad;
+print(bad);

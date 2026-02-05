@@ -44,6 +44,7 @@ set(ERKAO_CORE_SOURCES
   src/stdlib/stdlib_time.c
   src/stdlib/stdlib_vec.c
   src/stdlib/stdlib_http.c
+  src/stdlib/http_internal.c
   src/stdlib/stdlib_proc.c
   src/stdlib/stdlib_env.c
   src/stdlib/stdlib_di.c
@@ -267,4 +268,20 @@ if(ERKAO_FUZZ)
   target_link_options(erkao_fuzz_runtime PRIVATE ${ERKAO_FUZZ_FLAGS})
   erkao_apply_warnings(erkao_fuzz_runtime)
   erkao_link_libs(erkao_fuzz_runtime)
+
+  add_executable(erkao_fuzz_import fuzz/fuzz_import.c ${ERKAO_CORE_SOURCES})
+  target_include_directories(erkao_fuzz_import PRIVATE ${ERKAO_INCLUDE_DIRS})
+  target_compile_definitions(erkao_fuzz_import PRIVATE ERKAO_HAS_GRAPHICS=0 ERKAO_FUZZING=1)
+  target_compile_options(erkao_fuzz_import PRIVATE ${ERKAO_FUZZ_FLAGS})
+  target_link_options(erkao_fuzz_import PRIVATE ${ERKAO_FUZZ_FLAGS})
+  erkao_apply_warnings(erkao_fuzz_import)
+  erkao_link_libs(erkao_fuzz_import)
+
+  add_executable(erkao_fuzz_http fuzz/fuzz_http.c ${ERKAO_CORE_SOURCES})
+  target_include_directories(erkao_fuzz_http PRIVATE ${ERKAO_INCLUDE_DIRS})
+  target_compile_definitions(erkao_fuzz_http PRIVATE ERKAO_HAS_GRAPHICS=0 ERKAO_FUZZING=1)
+  target_compile_options(erkao_fuzz_http PRIVATE ${ERKAO_FUZZ_FLAGS})
+  target_link_options(erkao_fuzz_http PRIVATE ${ERKAO_FUZZ_FLAGS})
+  erkao_apply_warnings(erkao_fuzz_http)
+  erkao_link_libs(erkao_fuzz_http)
 endif()

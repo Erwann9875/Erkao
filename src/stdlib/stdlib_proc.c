@@ -3,6 +3,7 @@
 #include <ctype.h>
 #include <limits.h>
 #include <stdlib.h>
+#include <string.h>
 
 #ifdef _WIN32
 #include <process.h>
@@ -28,9 +29,9 @@ static bool procLooksLikeProgramPath(const char* text) {
 }
 
 static Value nativeProcRun(VM* vm, int argc, Value* args) {
-  if (!stdlibUnsafeEnabled("ERKAO_ALLOW_PROC")) {
+  if (!stdlibUnsafeEnabled(vm, ERKAO_UNSAFE_PROC, "ERKAO_ALLOW_PROC")) {
     return runtimeErrorValue(vm,
-                             "proc.run is disabled. Set ERKAO_ALLOW_PROC=1 to enable.");
+                             "proc.run is disabled. Use --allow-unsafe=proc or set ERKAO_ALLOW_PROC=1.");
   }
   if (argc < 1 || argc > 2) {
     return runtimeErrorValue(vm, "proc.run expects (program[, args]).");
@@ -53,10 +54,11 @@ static Value nativeProcRun(VM* vm, int argc, Value* args) {
   }
 
   int extra = procArgs ? procArgs->count : 0;
-  char** argv = (char**)calloc((size_t)extra + 2, sizeof(char*));
+  char** argv = (char**)erkaoAllocArray((size_t)extra + 2, sizeof(char*));
   if (!argv) {
     return runtimeErrorValue(vm, "proc.run out of memory.");
   }
+  memset(argv, 0, sizeof(char*) * ((size_t)extra + 2));
   argv[0] = program->chars;
   for (int i = 0; i < extra; i++) {
     if (!isObjType(procArgs->items[i], OBJ_STRING)) {

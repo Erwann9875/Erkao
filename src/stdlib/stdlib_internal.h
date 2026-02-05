@@ -48,6 +48,6 @@ void stringListAddWithLength(StringList* list, const char* value, size_t length)
 void stringListSort(StringList* list);
 
 bool numberIsFinite(double value);
-bool stdlibUnsafeEnabled(const char* featureEnv);
+bool stdlibUnsafeEnabled(VM* vm, unsigned int featureFlag, const char* featureEnv);
 
 #endif

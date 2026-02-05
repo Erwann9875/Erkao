@@ -1,0 +1,5 @@
+tests/65_import_package_escape.ek:1:1: RuntimeError at 'import': Failed to resolve import path.
+  import "escape@1.0.0/bad" as bad;
+  ^~~~~~
+Stack trace (most recent call last):
+  #0 <script> (tests/65_import_package_escape.ek:1:1) -> 'import'

@@ -188,6 +188,11 @@ Run the snapshot (golden) tests from the repo root:
 Golden files in `tests/*.out` are the behavior baseline. Keep them unchanged during
 refactors unless a behavior change is explicitly intentional.
 
+Per-test metadata directives (first lines of `.ek` files):
+
+- `// @args: ...` appends CLI args (for example `// @args: --allow-unsafe=ffi`).
+- `// @env: NAME=value` sets process env for that test invocation.
+
 OS-specific wrappers are also available:
 
 ```powershell
@@ -309,6 +314,30 @@ Refresh the current violation allowlist (only when intentionally updating baseli
 
 ```sh
 python ./scripts/check-architecture.py --update-allowlist
+```
+
+Code-size guardrail (file/function limits with zero-new-issues policy):
+
+```sh
+python ./scripts/check-code-size.py
+```
+
+To refresh accepted existing debt only:
+
+```sh
+python ./scripts/check-code-size.py --update-baseline
+```
+
+Ownership and review standards:
+
+- Ownership conventions: `docs/ownership.md`
+- Review checklist: `docs/review_checklist.md`
+- Design notes for non-trivial critical changes: `docs/design-notes/`
+
+Critical-module coverage check (used by CI):
+
+```sh
+python ./scripts/check-critical-coverage.py --coverage-json coverage.json --min-line-coverage 5
 ```
 
 ## Language quick tour
@@ -709,6 +738,8 @@ See `examples/plugins/hello_plugin.c` and `examples/plugins/hello_plugin.ek`.
 - `ERKAO_MAX_FRAMES` caps call stack depth (max `64`).
 - `ERKAO_MAX_STACK` caps value stack slots (max `16384`).
 - Unsafe features are disabled by default:
+  - `--allow-unsafe=none|proc|ffi|plugins|all` sets runtime unsafe policy explicitly.
+    - CLI policy takes precedence over env toggles when provided.
   - `ERKAO_ALLOW_PROC=1` enables `proc.run`.
   - `ERKAO_ALLOW_FFI=1` enables `ffi.open`/`ffi.call`.
   - `ERKAO_ALLOW_PLUGINS=1` enables `plugin.load`.

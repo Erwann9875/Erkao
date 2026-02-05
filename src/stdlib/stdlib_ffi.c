@@ -48,9 +48,9 @@ static bool ffiGetHandle(VM* vm, Value handleValue, int* outId, FfiHandle** outH
 }
 
 static Value nativeFfiOpen(VM* vm, int argc, Value* args) {
-  if (!stdlibUnsafeEnabled("ERKAO_ALLOW_FFI")) {
+  if (!stdlibUnsafeEnabled(vm, ERKAO_UNSAFE_FFI, "ERKAO_ALLOW_FFI")) {
     return runtimeErrorValue(vm,
-                             "ffi is disabled. Set ERKAO_ALLOW_FFI=1 to enable.");
+                             "ffi is disabled. Use --allow-unsafe=ffi or set ERKAO_ALLOW_FFI=1.");
   }
   if (argc != 1 || (!IS_NULL(args[0]) && !isObjType(args[0], OBJ_STRING))) {
     return runtimeErrorValue(vm, "ffi.open expects a path string or null.");
@@ -126,9 +126,9 @@ static Value nativeFfiClose(VM* vm, int argc, Value* args) {
 }
 
 static Value nativeFfiCall(VM* vm, int argc, Value* args) {
-  if (!stdlibUnsafeEnabled("ERKAO_ALLOW_FFI")) {
+  if (!stdlibUnsafeEnabled(vm, ERKAO_UNSAFE_FFI, "ERKAO_ALLOW_FFI")) {
     return runtimeErrorValue(vm,
-                             "ffi is disabled. Set ERKAO_ALLOW_FFI=1 to enable.");
+                             "ffi is disabled. Use --allow-unsafe=ffi or set ERKAO_ALLOW_FFI=1.");
   }
   if (argc < 2) {
     return runtimeErrorValue(vm, "ffi.call expects (handle, name, ...args).");

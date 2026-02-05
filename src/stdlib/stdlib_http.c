@@ -1,5 +1,6 @@
 #include "stdlib_internal.h"
 #include "gc.h"
+#include "http_internal.h"
 
 #include <errno.h>
 #include <math.h>
@@ -591,24 +592,6 @@ static bool httpPortFromValue(VM* vm, Value value, int* outPort) {
   return true;
 }
 
-static bool httpFindHeaderEnd(const char* data, size_t length, size_t* outIndex) {
-  if (length < 2) return false;
-  for (size_t i = 3; i < length; i++) {
-    if (data[i - 3] == '\r' && data[i - 2] == '\n' &&
-        data[i - 1] == '\r' && data[i] == '\n') {
-      *outIndex = i + 1;
-      return true;
-    }
-  }
-  for (size_t i = 1; i < length; i++) {
-    if (data[i - 1] == '\n' && data[i] == '\n') {
-      *outIndex = i + 1;
-      return true;
-    }
-  }
-  return false;
-}
-
 static bool httpReadHeaders(ErkaoSocket client, ByteBuffer* buffer, size_t* headerEnd) {
   char chunk[1024];
   while (buffer->length < HTTP_MAX_REQUEST_BYTES) {
@@ -620,90 +603,15 @@ static bool httpReadHeaders(ErkaoSocket client, ByteBuffer* buffer, size_t* head
     if (buffer->failed) {
       return false;
     }
-    if (httpFindHeaderEnd(buffer->data, buffer->length, headerEnd)) {
+    if (erkaoHttpFindHeaderEnd(buffer->data, buffer->length, headerEnd)) {
       return true;
     }
   }
   return false;
 }
 
-static bool httpParseRequestLine(const char* data, size_t headerEnd,
-                                 const char** method, size_t* methodLen,
-                                 const char** path, size_t* pathLen) {
-  if (!data || headerEnd == 0) return false;
-  const char* lineEnd = memchr(data, '\n', headerEnd);
-  if (!lineEnd) return false;
-  const char* lineEndClean = lineEnd;
-  if (lineEndClean > data && lineEndClean[-1] == '\r') {
-    lineEndClean--;
-  }
-  const char* space1 = memchr(data, ' ', (size_t)(lineEndClean - data));
-  if (!space1) return false;
-  const char* space2 = memchr(space1 + 1, ' ', (size_t)(lineEndClean - (space1 + 1)));
-  if (!space2) return false;
-  if (space1 == data || space2 == space1 + 1) return false;
-  *method = data;
-  *methodLen = (size_t)(space1 - data);
-  *path = space1 + 1;
-  *pathLen = (size_t)(space2 - (space1 + 1));
-  return true;
-}
-
-static bool httpStringEqualsIgnoreCaseN(const char* left, int leftLen, const char* right) {
-  int rightLen = (int)strlen(right);
-  if (leftLen != rightLen) return false;
-  for (int i = 0; i < leftLen; i++) {
-    unsigned char a = (unsigned char)left[i];
-    unsigned char b = (unsigned char)right[i];
-    if (tolower(a) != tolower(b)) return false;
-  }
-  return true;
-}
-
-static bool httpHeaderTokenChar(char c) {
-  if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
-    return true;
-  }
-  switch (c) {
-    case '!':
-    case '#':
-    case '$':
-    case '%':
-    case '&':
-    case '\'':
-    case '*':
-    case '+':
-    case '-':
-    case '.':
-    case '^':
-    case '_':
-    case '`':
-    case '|':
-    case '~':
-      return true;
-    default:
-      return false;
-  }
-}
-
-static bool httpHeaderNameSafe(const char* name) {
-  if (!name || name[0] == '\0') return false;
-  for (const char* c = name; *c; c++) {
-    if (!httpHeaderTokenChar(*c)) return false;
-  }
-  return true;
-}
-
-static bool httpHeaderValueSafe(const char* value) {
-  if (!value) return false;
-  for (const char* c = value; *c; c++) {
-    if (*c == '\r' || *c == '\n') return false;
-  }
-  return true;
-}
-
 static bool httpAppendHeader(ByteBuffer* buffer, const char* name, const char* value) {
-  if (!httpHeaderNameSafe(name) || !httpHeaderValueSafe(value)) return false;
+  if (!erkaoHttpHeaderNameSafe(name) || !erkaoHttpHeaderValueSafe(value)) return false;
   bufferAppendN(buffer, name, strlen(name));
   bufferAppendN(buffer, ": ", 2);
   bufferAppendN(buffer, value, strlen(value));
@@ -743,10 +651,10 @@ static bool httpAppendHeadersFromMap(ByteBuffer* buffer, ObjMap* headers, bool* 
     if (!isObjType(entry->value, OBJ_STRING)) continue;
     ObjString* key = entry->key;
     ObjString* value = (ObjString*)AS_OBJ(entry->value);
-    if (!httpHeaderNameSafe(key->chars) || !httpHeaderValueSafe(value->chars)) {
+    if (!erkaoHttpHeaderNameSafe(key->chars) || !erkaoHttpHeaderValueSafe(value->chars)) {
       continue;
     }
-    if (httpStringEqualsIgnoreCaseN(key->chars, key->length, "Content-Type")) {
+    if (erkaoHttpStringEqualsIgnoreCaseN(key->chars, key->length, "Content-Type")) {
       if (hasContentType) *hasContentType = true;
     }
     if (!httpAppendHeader(buffer, key->chars, value->chars)) return false;
@@ -891,7 +799,7 @@ static long httpGetContentLength(const char* headers, size_t headerEnd) {
     if (!lineEnd) break;
     size_t lineLen = (size_t)(lineEnd - cursor);
     if (lineLen > 0 && cursor[lineLen - 1] == '\r') lineLen--;
-    if (lineLen > clLen && httpStringEqualsIgnoreCaseN(cursor, (int)clLen, clHeader)) {
+    if (lineLen > clLen && erkaoHttpStringEqualsIgnoreCaseN(cursor, (int)clLen, clHeader)) {
       const char* value = cursor + clLen;
       while (*value == ' ' && value < lineEnd) value++;
       long length = strtol(value, NULL, 10);
@@ -1139,7 +1047,7 @@ static Value nativeHttpServe(VM* vm, int argc, Value* args) {
     size_t methodLen = 0;
     const char* path = NULL;
     size_t pathLen = 0;
-    if (!httpParseRequestLine(request.data, headerEnd, &method, &methodLen, &path, &pathLen)) {
+    if (!erkaoHttpParseRequestLine(request.data, headerEnd, &method, &methodLen, &path, &pathLen)) {
       httpSendResponse(client, 400, "bad request", strlen("bad request"), NULL, corsConfig);
       bufferFree(&request);
       erkaoCloseSocket(client);
