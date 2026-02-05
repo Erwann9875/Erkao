@@ -6,5 +6,10 @@
 ObjFunction* compileSinglePassLegacy(VM* vm, const TokenArray* tokens,
                                      const char* source, const char* path,
                                      bool* hadError);
+ObjFunction* compileSinglePassLegacyUnoptimized(VM* vm, const TokenArray* tokens,
+                                                const char* source,
+                                                const char* path,
+                                                bool* hadError);
+void compileSinglePassLegacyOptimize(VM* vm, ObjFunction* function);
 
 #endif

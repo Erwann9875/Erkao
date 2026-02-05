@@ -3434,9 +3434,14 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
   return function;
 }
 
-ObjFunction* compileSinglePassLegacy(VM* vm, const TokenArray* tokens,
-                                     const char* source, const char* path,
-                                     bool* hadError) {
+ObjFunction* compileSinglePassLegacyUnoptimized(VM* vm, const TokenArray* tokens,
+                                                const char* source,
+                                                const char* path,
+                                                bool* hadError) {
+  bool localHadError = false;
+  bool* hadErrorOut = hadError ? hadError : &localHadError;
+  *hadErrorOut = false;
+
   initRules();
 
   Chunk* chunk = (Chunk*)malloc(sizeof(Chunk));
@@ -3490,7 +3495,7 @@ ObjFunction* compileSinglePassLegacy(VM* vm, const TokenArray* tokens,
   vm->compiler = NULL;
   gTypeRegistry = NULL;
 
-  *hadError = c.hadError;
+  *hadErrorOut = c.hadError;
   if (c.hadError) {
     compilerEnumsFree(&c);
     compilerStructsFree(&c);
@@ -3498,11 +3503,29 @@ ObjFunction* compileSinglePassLegacy(VM* vm, const TokenArray* tokens,
     typeRegistryFree(&registry);
     return NULL;
   }
-  optimizeChunk(vm, chunk);
   compilerEnumsFree(&c);
   compilerStructsFree(&c);
   typeCheckerFree(&typecheck);
   typeRegistryFree(&registry);
+  return function;
+}
+
+void compileSinglePassLegacyOptimize(VM* vm, ObjFunction* function) {
+  if (!vm || !function || !function->chunk) return;
+  optimizeChunk(vm, function->chunk);
+}
+
+ObjFunction* compileSinglePassLegacy(VM* vm, const TokenArray* tokens,
+                                     const char* source, const char* path,
+                                     bool* hadError) {
+  bool localHadError = false;
+  bool* hadErrorOut = hadError ? hadError : &localHadError;
+  *hadErrorOut = false;
+
+  ObjFunction* function = compileSinglePassLegacyUnoptimized(vm, tokens, source,
+                                                             path, hadErrorOut);
+  if (!function || *hadErrorOut) return function;
+  compileSinglePassLegacyOptimize(vm, function);
   return function;
 }
 

@@ -32,6 +32,8 @@ Lowering currently preserves behavior by delegating to the legacy compiler:
 - `compileSinglePassLegacy(...)` in `src/frontend/singlepass_parse.c`
 - `lowerEmitBytecode(...)` in `src/bytecode/pipeline_lower.c` is the backend
   seam invoked by pipeline orchestration.
+- top-level `optimizeChunk(...)` is now owned by lower stage (phase 6 migration),
+  using `compileSinglePassLegacyUnoptimized(...)` + explicit optimize call.
 
 ## Next refactor targets
 
