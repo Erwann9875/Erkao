@@ -1,0 +1,84 @@
+{
+  "generated_at": "2026-02-05T20:24:18.576995+00:00",
+  "version": 1,
+  "violations": [
+    {
+      "from": "src/bytecode/chunk.h",
+      "from_layer": "backend",
+      "to": "src/runtime/value.h",
+      "to_layer": "runtime"
+    },
+    {
+      "from": "src/bytecode/disasm.c",
+      "from_layer": "backend",
+      "to": "src/runtime/value.h",
+      "to_layer": "runtime"
+    },
+    {
+      "from": "src/bytecode/program.c",
+      "from_layer": "backend",
+      "to": "src/runtime/interpreter.h",
+      "to_layer": "runtime"
+    },
+    {
+      "from": "src/bytecode/program.h",
+      "from_layer": "backend",
+      "to": "src/runtime/value.h",
+      "to_layer": "runtime"
+    },
+    {
+      "from": "src/bytecode/singlepass.h",
+      "from_layer": "backend",
+      "to": "src/runtime/value.h",
+      "to_layer": "runtime"
+    },
+    {
+      "from": "src/frontend/singlepass_parse.c",
+      "from_layer": "frontend",
+      "to": "src/bytecode/singlepass_internal.h",
+      "to_layer": "backend"
+    },
+    {
+      "from": "src/frontend/singlepass_parse.c",
+      "from_layer": "frontend",
+      "to": "src/runtime/interpreter.h",
+      "to_layer": "runtime"
+    },
+    {
+      "from": "src/frontend/singlepass_patterns.c",
+      "from_layer": "frontend",
+      "to": "src/bytecode/singlepass_internal.h",
+      "to_layer": "backend"
+    },
+    {
+      "from": "src/runtime/value.h",
+      "from_layer": "runtime",
+      "to": "src/frontend/lexer.h",
+      "to_layer": "frontend"
+    },
+    {
+      "from": "src/runtime/vm.c",
+      "from_layer": "runtime",
+      "to": "src/db/db.h",
+      "to_layer": "stdlib"
+    },
+    {
+      "from": "src/runtime/vm.c",
+      "from_layer": "runtime",
+      "to": "src/plugins/plugin.h",
+      "to_layer": "stdlib"
+    },
+    {
+      "from": "src/runtime/vm.c",
+      "from_layer": "runtime",
+      "to": "src/stdlib/erkao_stdlib.h",
+      "to_layer": "stdlib"
+    },
+    {
+      "from": "src/typecheck/singlepass_types.c",
+      "from_layer": "sema",
+      "to": "src/bytecode/singlepass_internal.h",
+      "to_layer": "backend"
+    }
+  ]
+}

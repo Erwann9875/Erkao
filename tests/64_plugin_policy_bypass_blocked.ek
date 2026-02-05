@@ -1,0 +1,3 @@
+// @args: --allow-unsafe=ffi
+env.set("ERKAO_ALLOW_UNSAFE", "1");
+plugin.load("dummy");

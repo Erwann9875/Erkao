@@ -114,6 +114,8 @@ Backward-compatible shorthand:
 ## Docs
 
 - `docs/cookbook.md` (recipes + build-a-game/app guides)
+- `docs/adr/0001-layered-architecture-contract.md` (layer contract + migration)
+- `docs/compiler_pipeline.md` (parse/sema/lower pipeline seams)
 
 ## VS Code extension (syntax + LSP)
 
@@ -182,6 +184,14 @@ Run the snapshot (golden) tests from the repo root:
 ```sh
 ./scripts/run-tests.sh
 ```
+
+Golden files in `tests/*.out` are the behavior baseline. Keep them unchanged during
+refactors unless a behavior change is explicitly intentional.
+
+Per-test metadata directives (first lines of `.ek` files):
+
+- `// @args: ...` appends CLI args (for example `// @args: --allow-unsafe=ffi`).
+- `// @env: NAME=value` sets process env for that test invocation.
 
 OS-specific wrappers are also available:
 
@@ -276,6 +286,58 @@ Run the microbenchmarks from the repo root:
 
 ```sh
 ./scripts/unix/run-bench.sh --repeat 3
+```
+
+Benchmark helper files named `bench_*.ek` are ignored by the runner.
+
+Freeze/update the benchmark baseline:
+
+```sh
+python ./scripts/check-bench.py --update-baseline --repeat 5
+```
+
+Check current performance against the committed baseline:
+
+```sh
+python ./scripts/check-bench.py --repeat 5 --max-regression-pct 8 --min-slack-ms 20
+```
+
+## Architecture contract
+
+Validate include dependencies against the layered contract:
+
+```sh
+python ./scripts/check-architecture.py
+```
+
+Refresh the current violation allowlist (only when intentionally updating baseline debt):
+
+```sh
+python ./scripts/check-architecture.py --update-allowlist
+```
+
+Code-size guardrail (file/function limits with zero-new-issues policy):
+
+```sh
+python ./scripts/check-code-size.py
+```
+
+To refresh accepted existing debt only:
+
+```sh
+python ./scripts/check-code-size.py --update-baseline
+```
+
+Ownership and review standards:
+
+- Ownership conventions: `docs/ownership.md`
+- Review checklist: `docs/review_checklist.md`
+- Design notes for non-trivial critical changes: `docs/design-notes/`
+
+Critical-module coverage check (used by CI):
+
+```sh
+python ./scripts/check-critical-coverage.py --coverage-json coverage.json --min-line-coverage 5
 ```
 
 ## Language quick tour
@@ -498,7 +560,7 @@ See `examples/packages_semver.ek` for a full example.
 - `math.clamp(value, min, max)`
 - `math.PI`
 - `math.E`
-- `random.seed(value)`
+- `random.seed(value)` (deterministic mode) / `random.seed(null)` (OS-secure RNG mode)
 - `random.int(max)` / `random.int(min, max)`
 - `random.float()` / `random.float(min, max)`
 - `random.choice(array)`
@@ -539,9 +601,9 @@ See `examples/packages_semver.ek` for a full example.
 - `os.tmp()`
 - `http.get(url)`
 - `http.post(url, body)`
-- `http.request(method, url, body)`
+- `http.request(method, url, body?)`
 - `http.serve(port, routes)`
-- `proc.run(cmd)`
+- `proc.run(program, args?)`
 - `time.now()`
 - `time.sleep(seconds)`
 - `time.format(timestamp, format, utc?)`
@@ -667,6 +729,7 @@ See `examples/plugins/hello_plugin.c` and `examples/plugins/hello_plugin.ek`.
   - A function that receives a request object `{ method, path, headers, body }` and returns a string or response map
 - `http.serve(port, routes, cors)` accepts an optional third parameter for CORS config: `{ origin: "*", methods: "GET, POST", headers: "Content-Type" }`
 - `http.serve` logs requests as `[IP] [YYYY-MM-DD HH:MM:SS] Called /path`.
+- `http.serve` enforces request/header size limits and socket timeouts (slow requests are rejected).
 - HTTP tests run by default and use the built-in HTTP server; set `ERKAO_HTTP_TEST=0` to skip.
 - `ERKAO_PATH` adds module search paths (separated by `;` on Windows, `:` elsewhere).
 - `ERKAO_PACKAGES` overrides the global packages directory.
@@ -674,3 +737,10 @@ See `examples/plugins/hello_plugin.c` and `examples/plugins/hello_plugin.ek`.
 - `ERKAO_MAX_HEAP` sets a heap limit in bytes (supports `K`, `M`, `G` suffixes).
 - `ERKAO_MAX_FRAMES` caps call stack depth (max `64`).
 - `ERKAO_MAX_STACK` caps value stack slots (max `16384`).
+- Unsafe features are disabled by default:
+  - `--allow-unsafe=none|proc|ffi|plugins|all` sets runtime unsafe policy explicitly.
+    - CLI policy takes precedence over env toggles when provided.
+  - `ERKAO_ALLOW_PROC=1` enables `proc.run`.
+  - `ERKAO_ALLOW_FFI=1` enables `ffi.open`/`ffi.call`.
+  - `ERKAO_ALLOW_PLUGINS=1` enables `plugin.load`.
+  - `ERKAO_ALLOW_UNSAFE=1` enables all unsafe features.

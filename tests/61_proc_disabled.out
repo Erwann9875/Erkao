@@ -1,0 +1,3 @@
+tests/61_proc_disabled.ek: RuntimeError: proc.run is disabled. Use --allow-unsafe=proc or set ERKAO_ALLOW_PROC=1.
+Stack trace (most recent call last):
+  #0 <script> (tests/61_proc_disabled.ek:1:9) -> '('

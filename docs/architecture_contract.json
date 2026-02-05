@@ -1,0 +1,117 @@
+{
+  "version": 1,
+  "layers": [
+    "foundation",
+    "frontend",
+    "sema",
+    "backend",
+    "runtime",
+    "stdlib",
+    "app",
+    "external"
+  ],
+  "module_layers": [
+    {
+      "prefix": "src/common/",
+      "layer": "foundation"
+    },
+    {
+      "prefix": "src/diagnostics/",
+      "layer": "foundation"
+    },
+    {
+      "prefix": "src/platform/",
+      "layer": "foundation"
+    },
+    {
+      "prefix": "src/frontend/",
+      "layer": "frontend"
+    },
+    {
+      "prefix": "src/typecheck/",
+      "layer": "sema"
+    },
+    {
+      "prefix": "src/bytecode/",
+      "layer": "backend"
+    },
+    {
+      "prefix": "src/runtime/",
+      "layer": "runtime"
+    },
+    {
+      "prefix": "src/gc/",
+      "layer": "runtime"
+    },
+    {
+      "prefix": "src/stdlib/",
+      "layer": "stdlib"
+    },
+    {
+      "prefix": "src/db/",
+      "layer": "stdlib"
+    },
+    {
+      "prefix": "src/graphics/",
+      "layer": "stdlib"
+    },
+    {
+      "prefix": "src/plugins/",
+      "layer": "stdlib"
+    },
+    {
+      "prefix": "src/tooling/",
+      "layer": "app"
+    },
+    {
+      "prefix": "src/cli/",
+      "layer": "app"
+    },
+    {
+      "prefix": "include/",
+      "layer": "external"
+    }
+  ],
+  "allowed_dependencies": {
+    "foundation": [
+      "foundation",
+      "external"
+    ],
+    "frontend": [
+      "foundation",
+      "frontend",
+      "external"
+    ],
+    "sema": [
+      "foundation",
+      "frontend",
+      "sema",
+      "external"
+    ],
+    "backend": [
+      "foundation",
+      "frontend",
+      "sema",
+      "backend",
+      "external"
+    ],
+    "runtime": [
+      "foundation",
+      "backend",
+      "runtime",
+      "external"
+    ],
+    "stdlib": [
+      "foundation",
+      "runtime",
+      "stdlib",
+      "external"
+    ],
+    "app": [
+      "*"
+    ],
+    "external": [
+      "external"
+    ]
+  }
+}

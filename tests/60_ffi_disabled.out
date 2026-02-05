@@ -1,0 +1,3 @@
+tests/60_ffi_disabled.ek: RuntimeError: ffi is disabled. Use --allow-unsafe=ffi or set ERKAO_ALLOW_FFI=1.
+Stack trace (most recent call last):
+  #0 <script> (tests/60_ffi_disabled.ek:2:9) -> '('

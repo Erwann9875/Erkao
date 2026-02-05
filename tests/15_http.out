@@ -5,6 +5,9 @@ ok
 200
 {"count":2,"message":"hello"}
 200
+safe
+false
+200
 posted
 404
 not found

@@ -1,0 +1,3 @@
+tests/66_proc_shell_rejected.ek: RuntimeError: proc.run executes a program directly (no shell). Pass arguments using an array.
+Stack trace (most recent call last):
+  #0 <script> (tests/66_proc_shell_rejected.ek:2:9) -> '('

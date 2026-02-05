@@ -86,6 +86,32 @@ cleanup() {
 }
 trap cleanup EXIT
 
+test_args=()
+test_env=()
+read_test_metadata() {
+  local test_file="$1"
+  test_args=()
+  test_env=()
+
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^[[:space:]]*//[[:space:]]*@args:[[:space:]]*(.+)$ ]]; then
+      local args_text="${BASH_REMATCH[1]}"
+      local parsed=()
+      read -r -a parsed <<<"$args_text"
+      if [ "${#parsed[@]}" -gt 0 ]; then
+        test_args+=("${parsed[@]}")
+      fi
+      continue
+    fi
+    if [[ "$line" =~ ^[[:space:]]*//[[:space:]]*@env:[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+      local key="${BASH_REMATCH[1]}"
+      local value="${BASH_REMATCH[2]}"
+      test_env+=("${key}=${value}")
+      continue
+    fi
+  done < <(head -n 12 "$test_file")
+}
+
 if [ "$http_test_enabled" -eq 1 ]; then
   server_path="$TESTS_DIR/http_server.ek"
   if [ ! -f "$server_path" ]; then
@@ -207,7 +233,18 @@ for test in "${tests[@]}"; do
     command="typecheck"
   fi
 
-  output="$("$EXE" "$command" "$test_rel" 2>&1 || true)"
+  read_test_metadata "$test"
+  cmd=("$EXE" "$command")
+  if [ "${#test_args[@]}" -gt 0 ]; then
+    cmd+=("${test_args[@]}")
+  fi
+  cmd+=("$test_rel")
+
+  if [ "${#test_env[@]}" -gt 0 ]; then
+    output="$(env "${test_env[@]}" "${cmd[@]}" 2>&1 || true)"
+  else
+    output="$("${cmd[@]}" 2>&1 || true)"
+  fi
   output="$(printf "%s" "$output" | tr -d '\r')"
   output="$(printf "%s" "$output" | sed -e 's/[[:space:]]*$//')"
 

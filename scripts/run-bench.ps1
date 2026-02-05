@@ -19,7 +19,9 @@ if (-not (Test-Path -LiteralPath $BenchDir)) {
   exit 1
 }
 
-$files = Get-ChildItem -LiteralPath $BenchDir -Filter "*.ek" -File | Sort-Object Name
+$files = Get-ChildItem -LiteralPath $BenchDir -Filter "*.ek" -File |
+  Where-Object { $_.BaseName -notlike "bench_*" } |
+  Sort-Object Name
 if (-not $files -or $files.Count -eq 0) {
   Write-Host "No benchmark files found in $BenchDir"
   exit 0

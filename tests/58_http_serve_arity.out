@@ -1,0 +1,3 @@
+tests/58_http_serve_arity.ek: RuntimeError: http.serve expects (port, routes[, cors]).
+Stack trace (most recent call last):
+  #0 <script> (tests/58_http_serve_arity.ek:1:11) -> '('

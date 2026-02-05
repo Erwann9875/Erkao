@@ -63,6 +63,12 @@ fi
 
 files=()
 while IFS= read -r file; do
+  base="$(basename "$file")"
+  case "$base" in
+    bench_*)
+      continue
+      ;;
+  esac
   files+=("$file")
 done < <(find "$BENCH_DIR" -type f -name "*.ek" | sort)
 

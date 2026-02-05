@@ -1,0 +1,25 @@
+#ifndef ERKAO_INTERPRETER_INTERNAL_H
+#define ERKAO_INTERPRETER_INTERNAL_H
+
+#include "interpreter.h"
+
+Env* newEnv(VM* vm, Env* enclosing);
+bool envGetByName(Env* env, ObjString* name, Value* out);
+bool envAssignByName(Env* env, ObjString* name, Value value);
+void envDefine(Env* env, ObjString* name, Value value);
+void envDefineConst(Env* env, ObjString* name, Value value);
+bool envIsConst(Env* env, ObjString* name);
+
+void runtimeError(VM* vm, Token token, const char* message);
+bool runtimeOutOfMemory(VM* vm, const char* context);
+ObjArray* captureStackTrace(VM* vm, const char* fallbackPath);
+bool isTruthy(Value value);
+bool isString(Value value);
+ObjString* asString(Value value);
+
+char* resolveImportPath(VM* vm, const char* currentPath, const char* importPath);
+bool hasExtension(const char* path);
+ObjFunction* loadModuleFunction(VM* vm, Token keyword, const char* path);
+bool vmCallValue(VM* vm, Value callee, int argc, Value* args, Value* out);
+
+#endif

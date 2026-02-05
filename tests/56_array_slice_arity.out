@@ -1,0 +1,3 @@
+tests/56_array_slice_arity.ek: RuntimeError: array.slice expects (array[, start[, end]]).
+Stack trace (most recent call last):
+  #0 <script> (tests/56_array_slice_arity.ek:1:12) -> '('

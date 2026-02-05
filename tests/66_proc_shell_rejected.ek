@@ -1,0 +1,2 @@
+// @args: --allow-unsafe=proc
+proc.run("echo hi && whoami");

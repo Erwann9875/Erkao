@@ -87,6 +87,35 @@ function Wait-HttpServerPort {
   return $null
 }
 
+function Get-TestMetadata {
+  param([string]$Path)
+
+  $meta = @{
+    Args = @()
+    Env = @{}
+  }
+  if (-not (Test-Path -LiteralPath $Path)) {
+    return $meta
+  }
+
+  $lines = Get-Content -LiteralPath $Path -TotalCount 12 -ErrorAction SilentlyContinue
+  foreach ($line in $lines) {
+    if ($line -match '^\s*//\s*@args:\s*(.+?)\s*$') {
+      $argsText = $Matches[1].Trim()
+      if ($argsText.Length -gt 0) {
+        $meta.Args = $argsText -split '\s+'
+      }
+      continue
+    }
+    if ($line -match '^\s*//\s*@env:\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)\s*$') {
+      $meta.Env[$Matches[1]] = $Matches[2]
+      continue
+    }
+  }
+
+  return $meta
+}
+
 if (-not (Test-Path -LiteralPath $Exe)) {
   Write-Error "Executable not found: $Exe"
   exit 1
@@ -203,21 +232,38 @@ try {
       if ($test.BaseName -like "*_typecheck*") {
         $command = "typecheck"
       }
+      $meta = Get-TestMetadata -Path $test.FullName
 
       $output = & {
         $ErrorActionPreference = "Continue"
         if ($null -ne $PSNativeCommandUseErrorActionPreference) {
           $PSNativeCommandUseErrorActionPreference = $false
         }
-        & $Exe $command $relativeTest 2>&1 |
-          ForEach-Object {
-            if ($_ -is [System.Management.Automation.ErrorRecord]) {
-              $_.Exception.Message
-            } else {
-              $_
-            }
-          } |
-          Out-String
+        $rawOutput = @()
+        $restore = @{}
+        foreach ($key in $meta.Env.Keys) {
+          $restore[$key] = [Environment]::GetEnvironmentVariable($key, "Process")
+          [Environment]::SetEnvironmentVariable($key, $meta.Env[$key], "Process")
+        }
+        try {
+          $invokeArgs = @($command)
+          if ($meta.Args.Count -gt 0) {
+            $invokeArgs += $meta.Args
+          }
+          $invokeArgs += $relativeTest
+          $rawOutput = & $Exe @invokeArgs 2>&1
+        } finally {
+          foreach ($key in $meta.Env.Keys) {
+            [Environment]::SetEnvironmentVariable($key, $restore[$key], "Process")
+          }
+        }
+        $rawOutput | ForEach-Object {
+          if ($_ -is [System.Management.Automation.ErrorRecord]) {
+            $_.Exception.Message
+          } else {
+            $_
+          }
+        } | Out-String
       }
       $output = $output -replace "`r`n", "`n"
       $output = $output.TrimEnd()

@@ -14,40 +14,79 @@ option(ERKAO_DB_MYSQL "Enable MySQL driver" ON)
 option(ERKAO_DB_MONGO "Enable MongoDB driver" ON)
 
 set(ERKAO_CORE_SOURCES
-  src/lexer.c
-  src/singlepass.c
-  src/singlepass_parse.c
-  src/singlepass_patterns.c
-  src/singlepass_types.c
-  src/value.c
-  src/chunk.c
-  src/disasm.c
-  src/vm.c
-  src/runtime.c
-  src/exec.c
-  src/imports.c
-  src/stdlib.c
-  src/db.c
-  src/db_postgres.c
-  src/db_mysql.c
-  src/db_mongo.c
-  src/package.c
-  src/gc_core.c
-  src/gc_trace.c
-  src/gc_young.c
-  src/gc_sweep.c
-  src/program.c
-  src/plugin.c
-  src/tooling.c
+  src/frontend/lexer.c
+  src/frontend/pipeline_frontend.c
+  src/bytecode/singlepass.c
+  src/bytecode/pipeline_lower.c
+  src/bytecode/compiler_pipeline.c
+  src/frontend/singlepass_parse.c
+  src/frontend/singlepass_patterns.c
+  src/typecheck/pipeline_sema.c
+  src/typecheck/singlepass_types.c
+  src/runtime/value.c
+  src/bytecode/chunk.c
+  src/bytecode/disasm.c
+  src/runtime/vm.c
+  src/runtime/runtime.c
+  src/runtime/exec.c
+  src/runtime/imports.c
+  src/stdlib/stdlib_internal.c
+  src/stdlib/stdlib_core.c
+  src/stdlib/stdlib_fs.c
+  src/stdlib/stdlib_path.c
+  src/stdlib/stdlib_json.c
+  src/stdlib/stdlib_yaml.c
+  src/stdlib/stdlib_math.c
+  src/stdlib/stdlib_random.c
+  src/stdlib/stdlib_str.c
+  src/stdlib/stdlib_array.c
+  src/stdlib/stdlib_os.c
+  src/stdlib/stdlib_time.c
+  src/stdlib/stdlib_vec.c
+  src/stdlib/stdlib_http.c
+  src/stdlib/http_internal.c
+  src/stdlib/stdlib_proc.c
+  src/stdlib/stdlib_env.c
+  src/stdlib/stdlib_di.c
+  src/stdlib/stdlib_ffi.c
+  src/stdlib/stdlib_plugin.c
+  src/stdlib/stdlib_registry.c
+  src/db/db.c
+  src/db/db_postgres.c
+  src/db/db_mysql.c
+  src/db/db_mongo.c
+  src/platform/platform.c
+  src/tooling/package.c
+  src/gc/gc_core.c
+  src/gc/gc_trace.c
+  src/gc/gc_young.c
+  src/gc/gc_sweep.c
+  src/bytecode/program.c
+  src/plugins/plugin.c
+  src/tooling/tooling.c
 )
 
 add_executable(erkao
-  src/main.c
+  src/cli/main.c
   ${ERKAO_CORE_SOURCES}
 )
 
 set(ERKAO_INCLUDE_DIRS
   ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/cli
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/common
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/diagnostics
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/frontend
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/typecheck
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/bytecode
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/gc
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/stdlib
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/db
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/graphics
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/plugins
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tooling
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/platform
   ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
@@ -91,7 +130,7 @@ if(ERKAO_GRAPHICS)
   if(TARGET SDL2::SDL2 AND TARGET SDL2_image::SDL2_image AND TARGET SDL2_ttf::SDL2_ttf AND TARGET SDL2_mixer::SDL2_mixer)
     message(STATUS "SDL2 found - graphics module enabled")
     
-    target_sources(erkao PRIVATE src/graphics.c)
+    target_sources(erkao PRIVATE src/graphics/graphics.c)
     target_compile_definitions(erkao PRIVATE ERKAO_HAS_GRAPHICS=1)
     
     target_link_libraries(erkao 
@@ -124,7 +163,7 @@ endif()
 
 function(erkao_link_libs target)
   if(WIN32)
-    target_link_libraries(${target} winhttp ws2_32)
+    target_link_libraries(${target} winhttp ws2_32 bcrypt)
   else()
     find_package(CURL REQUIRED)
     if(TARGET CURL::libcurl)
@@ -229,4 +268,20 @@ if(ERKAO_FUZZ)
   target_link_options(erkao_fuzz_runtime PRIVATE ${ERKAO_FUZZ_FLAGS})
   erkao_apply_warnings(erkao_fuzz_runtime)
   erkao_link_libs(erkao_fuzz_runtime)
+
+  add_executable(erkao_fuzz_import fuzz/fuzz_import.c ${ERKAO_CORE_SOURCES})
+  target_include_directories(erkao_fuzz_import PRIVATE ${ERKAO_INCLUDE_DIRS})
+  target_compile_definitions(erkao_fuzz_import PRIVATE ERKAO_HAS_GRAPHICS=0 ERKAO_FUZZING=1)
+  target_compile_options(erkao_fuzz_import PRIVATE ${ERKAO_FUZZ_FLAGS})
+  target_link_options(erkao_fuzz_import PRIVATE ${ERKAO_FUZZ_FLAGS})
+  erkao_apply_warnings(erkao_fuzz_import)
+  erkao_link_libs(erkao_fuzz_import)
+
+  add_executable(erkao_fuzz_http fuzz/fuzz_http.c ${ERKAO_CORE_SOURCES})
+  target_include_directories(erkao_fuzz_http PRIVATE ${ERKAO_INCLUDE_DIRS})
+  target_compile_definitions(erkao_fuzz_http PRIVATE ERKAO_HAS_GRAPHICS=0 ERKAO_FUZZING=1)
+  target_compile_options(erkao_fuzz_http PRIVATE ${ERKAO_FUZZ_FLAGS})
+  target_link_options(erkao_fuzz_http PRIVATE ${ERKAO_FUZZ_FLAGS})
+  erkao_apply_warnings(erkao_fuzz_http)
+  erkao_link_libs(erkao_fuzz_http)
 endif()
