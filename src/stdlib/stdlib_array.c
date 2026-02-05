@@ -1,6 +1,9 @@
 #include "stdlib_internal.h"
 
 static Value nativeArraySlice(VM* vm, int argc, Value* args) {
+  if (argc < 1 || argc > 3) {
+    return runtimeErrorValue(vm, "array.slice expects (array[, start[, end]]).");
+  }
   if (!isObjType(args[0], OBJ_ARRAY)) {
     return runtimeErrorValue(vm, "array.slice expects an array.");
   }

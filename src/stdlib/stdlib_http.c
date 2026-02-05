@@ -256,13 +256,15 @@ static Value nativeHttpPost(VM* vm, int argc, Value* args) {
 }
 
 static Value nativeHttpRequest(VM* vm, int argc, Value* args) {
-  (void)argc;
+  if (argc < 2 || argc > 3) {
+    return runtimeErrorValue(vm, "http.request expects (method, url[, body]).");
+  }
   if (!isObjType(args[0], OBJ_STRING) || !isObjType(args[1], OBJ_STRING)) {
-    return runtimeErrorValue(vm, "http.request expects (method, url, body).");
+    return runtimeErrorValue(vm, "http.request expects (method, url[, body]).");
   }
   const char* body = NULL;
   size_t bodyLength = 0;
-  if (!IS_NULL(args[2])) {
+  if (argc >= 3 && !IS_NULL(args[2])) {
     if (!isObjType(args[2], OBJ_STRING)) {
       return runtimeErrorValue(vm, "http.request expects body to be a string or null.");
     }
@@ -379,13 +381,15 @@ static Value nativeHttpPost(VM* vm, int argc, Value* args) {
 }
 
 static Value nativeHttpRequest(VM* vm, int argc, Value* args) {
-  (void)argc;
+  if (argc < 2 || argc > 3) {
+    return runtimeErrorValue(vm, "http.request expects (method, url[, body]).");
+  }
   if (!isObjType(args[0], OBJ_STRING) || !isObjType(args[1], OBJ_STRING)) {
-    return runtimeErrorValue(vm, "http.request expects (method, url, body).");
+    return runtimeErrorValue(vm, "http.request expects (method, url[, body]).");
   }
   const char* body = NULL;
   size_t bodyLength = 0;
-  if (!IS_NULL(args[2])) {
+  if (argc >= 3 && !IS_NULL(args[2])) {
     if (!isObjType(args[2], OBJ_STRING)) {
       return runtimeErrorValue(vm, "http.request expects body to be a string or null.");
     }
@@ -885,6 +889,9 @@ static bool httpResponseFromValue(VM* vm, Value value, int* statusOut,
 }
 
 static Value nativeHttpServe(VM* vm, int argc, Value* args) {
+  if (argc < 2 || argc > 3) {
+    return runtimeErrorValue(vm, "http.serve expects (port, routes[, cors]).");
+  }
   int portValue = 0;
   if (!httpPortFromValue(vm, args[0], &portValue)) return NULL_VAL;
   if (!isObjType(args[1], OBJ_MAP)) {
@@ -893,8 +900,14 @@ static Value nativeHttpServe(VM* vm, int argc, Value* args) {
 
   ObjMap* routes = (ObjMap*)AS_OBJ(args[1]);
   ObjMap* corsConfig = NULL;
-  if (argc >= 3 && isObjType(args[2], OBJ_MAP)) {
-    corsConfig = (ObjMap*)AS_OBJ(args[2]);
+  if (argc >= 3) {
+    if (IS_NULL(args[2])) {
+      corsConfig = NULL;
+    } else if (isObjType(args[2], OBJ_MAP)) {
+      corsConfig = (ObjMap*)AS_OBJ(args[2]);
+    } else {
+      return runtimeErrorValue(vm, "http.serve expects cors to be a map or null.");
+    }
   }
   int requestedPort = portValue;
 

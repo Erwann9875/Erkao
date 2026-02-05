@@ -1,0 +1,3 @@
+tests/59_http_serve_cors_type.ek: RuntimeError: http.serve expects cors to be a map or null.
+Stack trace (most recent call last):
+  #0 <script> (tests/59_http_serve_cors_type.ek:1:11) -> '('

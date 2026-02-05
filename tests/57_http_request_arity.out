@@ -1,0 +1,3 @@
+tests/57_http_request_arity.ek: RuntimeError: http.request expects (method, url[, body]).
+Stack trace (most recent call last):
+  #0 <script> (tests/57_http_request_arity.ek:1:13) -> '('
