@@ -143,23 +143,6 @@ static Value nativeEnvArgs(VM* vm, int argc, Value* args) {
   return OBJ_VAL(vm->args);
 }
 
-static ObjMap* diGetMapField(VM* vm, ObjMap* container, const char* field, const char* message) {
-  ObjString* key = copyString(vm, field);
-  Value value;
-  if (!mapGet(container, key, &value) || !isObjType(value, OBJ_MAP)) {
-    runtimeErrorValue(vm, message);
-    return NULL;
-  }
-  return (ObjMap*)AS_OBJ(value);
-}
-
-static bool diIsCallable(Value value) {
-  return isObjType(value, OBJ_NATIVE) ||
-         isObjType(value, OBJ_FUNCTION) ||
-         isObjType(value, OBJ_CLASS);
-}
-
-
 void stdlib_register_env(VM* vm, ObjInstance* module) {
   moduleAdd(vm, module, "args", nativeEnvArgs, 0);
   moduleAdd(vm, module, "get", nativeEnvGet, 1);
