@@ -34,6 +34,9 @@ Lowering currently preserves behavior by delegating to the legacy compiler:
   seam invoked by pipeline orchestration.
 - top-level `optimizeChunk(...)` is now owned by lower stage (phase 6 migration),
   using `compileSinglePassLegacyUnoptimized(...)` + explicit optimize call.
+- top-level implicit return bytecode (`OP_NULL`, `OP_RETURN`) is now emitted by
+  lower stage (phase 7 migration), via
+  `compileSinglePassLegacyBody(...)` + `compileSinglePassLegacyFinalize(...)`.
 
 ## Next refactor targets
 

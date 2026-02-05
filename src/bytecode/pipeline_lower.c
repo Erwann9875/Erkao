@@ -52,7 +52,7 @@ ObjFunction* lowerEmitBytecode(VM* vm, const LowerUnit* lower, bool* hadError) {
     return NULL;
   }
 
-  ObjFunction* function = compileSinglePassLegacyUnoptimized(
+  ObjFunction* function = compileSinglePassLegacyBody(
       vm,
       lower->sema.frontend.tokens,
       lower->sema.frontend.source,
@@ -60,6 +60,7 @@ ObjFunction* lowerEmitBytecode(VM* vm, const LowerUnit* lower, bool* hadError) {
       hadErrorOut);
   if (!function || *hadErrorOut) return function;
 
+  compileSinglePassLegacyFinalize(function);
   compileSinglePassLegacyOptimize(vm, function);
   return function;
 }

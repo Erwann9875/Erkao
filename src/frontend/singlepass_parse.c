@@ -3434,10 +3434,9 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
   return function;
 }
 
-ObjFunction* compileSinglePassLegacyUnoptimized(VM* vm, const TokenArray* tokens,
-                                                const char* source,
-                                                const char* path,
-                                                bool* hadError) {
+ObjFunction* compileSinglePassLegacyBody(VM* vm, const TokenArray* tokens,
+                                         const char* source, const char* path,
+                                         bool* hadError) {
   bool localHadError = false;
   bool* hadErrorOut = hadError ? hadError : &localHadError;
   *hadErrorOut = false;
@@ -3489,9 +3488,6 @@ ObjFunction* compileSinglePassLegacyUnoptimized(VM* vm, const TokenArray* tokens
     declaration(&c);
   }
 
-  emitByte(&c, OP_NULL, noToken());
-  emitByte(&c, OP_RETURN, noToken());
-
   vm->compiler = NULL;
   gTypeRegistry = NULL;
 
@@ -3510,6 +3506,24 @@ ObjFunction* compileSinglePassLegacyUnoptimized(VM* vm, const TokenArray* tokens
   return function;
 }
 
+void compileSinglePassLegacyFinalize(ObjFunction* function) {
+  if (!function || !function->chunk) return;
+  Token token = noToken();
+  writeChunk(function->chunk, OP_NULL, token);
+  writeChunk(function->chunk, OP_RETURN, token);
+}
+
+ObjFunction* compileSinglePassLegacyUnoptimized(VM* vm, const TokenArray* tokens,
+                                                const char* source,
+                                                const char* path,
+                                                bool* hadError) {
+  ObjFunction* function = compileSinglePassLegacyBody(vm, tokens, source, path,
+                                                      hadError);
+  if (!function || (hadError && *hadError)) return function;
+  compileSinglePassLegacyFinalize(function);
+  return function;
+}
+
 void compileSinglePassLegacyOptimize(VM* vm, ObjFunction* function) {
   if (!vm || !function || !function->chunk) return;
   optimizeChunk(vm, function->chunk);
@@ -3522,8 +3536,8 @@ ObjFunction* compileSinglePassLegacy(VM* vm, const TokenArray* tokens,
   bool* hadErrorOut = hadError ? hadError : &localHadError;
   *hadErrorOut = false;
 
-  ObjFunction* function = compileSinglePassLegacyUnoptimized(vm, tokens, source,
-                                                             path, hadErrorOut);
+  ObjFunction* function = compileSinglePassLegacyUnoptimized(
+      vm, tokens, source, path, hadErrorOut);
   if (!function || *hadErrorOut) return function;
   compileSinglePassLegacyOptimize(vm, function);
   return function;
