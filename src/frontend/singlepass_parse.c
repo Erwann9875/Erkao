@@ -3434,25 +3434,26 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
   return function;
 }
 
-  ObjFunction* compile(VM* vm, const TokenArray* tokens, const char* source,
-                       const char* path, bool* hadError) {
-    initRules();
+ObjFunction* compileSinglePassLegacy(VM* vm, const TokenArray* tokens,
+                                     const char* source, const char* path,
+                                     bool* hadError) {
+  initRules();
 
-    Chunk* chunk = (Chunk*)malloc(sizeof(Chunk));
+  Chunk* chunk = (Chunk*)malloc(sizeof(Chunk));
   if (!chunk) { fprintf(stderr, "Out of memory.\n"); exit(1); }
   initChunk(chunk);
 
   ObjFunction* function = newFunction(vm, NULL, 0, 0, false, NULL, chunk, NULL, NULL);
 
-    Compiler c;
-    TypeChecker typecheck;
-    TypeRegistry registry;
-    typeRegistryInit(&registry);
-    typeCheckerInit(&typecheck, NULL, vm->typecheck);
-    c.vm = vm;
-    c.tokens = tokens;
-    c.source = source;
-    c.path = path;
+  Compiler c;
+  TypeChecker typecheck;
+  TypeRegistry registry;
+  typeRegistryInit(&registry);
+  typeCheckerInit(&typecheck, NULL, vm->typecheck);
+  c.vm = vm;
+  c.tokens = tokens;
+  c.source = source;
+  c.path = path;
   c.current = 0;
   c.panicMode = false;
   c.hadError = false;
@@ -3467,17 +3468,17 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
   c.yieldName = -1;
   c.yieldFlagName = -1;
   c.breakContext = NULL;
-    c.enclosing = NULL;
-    c.typecheck = &typecheck;
-    c.enums = NULL;
+  c.enclosing = NULL;
+  c.typecheck = &typecheck;
+  c.enums = NULL;
   c.enumCount = 0;
   c.enumCapacity = 0;
   c.structs = NULL;
   c.structCount = 0;
   c.structCapacity = 0;
-    vm->compiler = &c;
-    gTypeRegistry = &registry;
-    typeDefineStdlib(&c);
+  vm->compiler = &c;
+  gTypeRegistry = &registry;
+  typeDefineStdlib(&c);
 
   while (!isAtEnd(&c)) {
     declaration(&c);
@@ -3486,8 +3487,8 @@ static ObjFunction* compileFunction(Compiler* c, Token name, bool isInitializer,
   emitByte(&c, OP_NULL, noToken());
   emitByte(&c, OP_RETURN, noToken());
 
-    vm->compiler = NULL;
-    gTypeRegistry = NULL;
+  vm->compiler = NULL;
+  gTypeRegistry = NULL;
 
   *hadError = c.hadError;
   if (c.hadError) {

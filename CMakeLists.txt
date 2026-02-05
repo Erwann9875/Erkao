@@ -15,9 +15,12 @@ option(ERKAO_DB_MONGO "Enable MongoDB driver" ON)
 
 set(ERKAO_CORE_SOURCES
   src/frontend/lexer.c
+  src/frontend/pipeline_frontend.c
   src/bytecode/singlepass.c
+  src/bytecode/compiler_pipeline.c
   src/frontend/singlepass_parse.c
   src/frontend/singlepass_patterns.c
+  src/typecheck/pipeline_sema.c
   src/typecheck/singlepass_types.c
   src/runtime/value.c
   src/bytecode/chunk.c

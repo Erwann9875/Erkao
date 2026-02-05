@@ -1,0 +1,10 @@
+#ifndef ERKAO_SINGLEPASS_LEGACY_H
+#define ERKAO_SINGLEPASS_LEGACY_H
+
+#include "singlepass.h"
+
+ObjFunction* compileSinglePassLegacy(VM* vm, const TokenArray* tokens,
+                                     const char* source, const char* path,
+                                     bool* hadError);
+
+#endif

@@ -115,6 +115,7 @@ Backward-compatible shorthand:
 
 - `docs/cookbook.md` (recipes + build-a-game/app guides)
 - `docs/adr/0001-layered-architecture-contract.md` (layer contract + migration)
+- `docs/compiler_pipeline.md` (parse/sema/lower pipeline seams)
 
 ## VS Code extension (syntax + LSP)
 
