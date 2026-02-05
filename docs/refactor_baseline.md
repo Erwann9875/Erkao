@@ -10,6 +10,14 @@ This file freezes the starting point for the large refactor.
   - `./scripts/run-tests.sh` (Unix)
 - Current status at freeze time: `55/55` snapshot tests passing.
 
+Architecture baseline:
+
+- Contract: `docs/architecture_contract.json`
+- ADR: `docs/adr/0001-layered-architecture-contract.md`
+- Current allowed violations: `docs/architecture_violations.json`
+- Verification command:
+  - `python ./scripts/check-architecture.py`
+
 ## Performance baseline
 
 - Baseline file: `bench/baseline.json`

@@ -114,6 +114,7 @@ Backward-compatible shorthand:
 ## Docs
 
 - `docs/cookbook.md` (recipes + build-a-game/app guides)
+- `docs/adr/0001-layered-architecture-contract.md` (layer contract + migration)
 
 ## VS Code extension (syntax + LSP)
 
@@ -293,6 +294,20 @@ Check current performance against the committed baseline:
 
 ```sh
 python ./scripts/check-bench.py --repeat 5 --max-regression-pct 8 --min-slack-ms 20
+```
+
+## Architecture contract
+
+Validate include dependencies against the layered contract:
+
+```sh
+python ./scripts/check-architecture.py
+```
+
+Refresh the current violation allowlist (only when intentionally updating baseline debt):
+
+```sh
+python ./scripts/check-architecture.py --update-allowlist
 ```
 
 ## Language quick tour
