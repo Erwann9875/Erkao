@@ -26,8 +26,7 @@ static char* joinPathWithSep(const char* left, const char* right, char sep) {
   size_t total = leftLen + (needsSep ? 1 : 0) + rightLen;
   char* buffer = (char*)malloc(total + 1);
   if (!buffer) {
-    fprintf(stderr, "Out of memory.\n");
-    exit(1);
+    return NULL;
   }
   memcpy(buffer, left, leftLen);
   size_t offset = leftLen;
@@ -83,8 +82,7 @@ static char* globRootFromPattern(const char* pattern, char sep, int* outIndex) {
         (pattern[2] == '\\' || pattern[2] == '/')) {
       char* root = (char*)malloc(4);
       if (!root) {
-        fprintf(stderr, "Out of memory.\n");
-        exit(1);
+        return NULL;
       }
       root[0] = pattern[0];
       root[1] = ':';
@@ -96,8 +94,7 @@ static char* globRootFromPattern(const char* pattern, char sep, int* outIndex) {
     if (pattern[0] == '\\' || pattern[0] == '/') {
       char* root = (char*)malloc(2);
       if (!root) {
-        fprintf(stderr, "Out of memory.\n");
-        exit(1);
+        return NULL;
       }
       root[0] = sep;
       root[1] = '\0';
@@ -119,17 +116,8 @@ static void globSplitSegments(const char* pattern, int start, StringList* segmen
     while (*cursor && *cursor != '/' && *cursor != '\\') cursor++;
     size_t length = (size_t)(cursor - begin);
     if (length > 0) {
-      if (segments->capacity < segments->count + 1) {
-        int oldCap = segments->capacity;
-        segments->capacity = oldCap == 0 ? 8 : oldCap * 2;
-        segments->items = (char**)realloc(segments->items,
-                                          sizeof(char*) * (size_t)segments->capacity);
-        if (!segments->items) {
-          fprintf(stderr, "Out of memory.\n");
-          exit(1);
-        }
-      }
-      segments->items[segments->count++] = copyCString(begin, length);
+      stringListAddWithLength(segments, begin, length);
+      if (segments->failed) return;
     }
   }
 }
@@ -162,6 +150,11 @@ static bool globListDir(const char* path, StringList* out, const char** error) {
       continue;
     }
     stringListAdd(out, data.cFileName);
+    if (out->failed) {
+      FindClose(handle);
+      *error = "fs.glob out of memory.";
+      return false;
+    }
   } while (FindNextFileA(handle, &data));
   FindClose(handle);
 #else
@@ -176,6 +169,11 @@ static bool globListDir(const char* path, StringList* out, const char** error) {
       continue;
     }
     stringListAdd(out, entry->d_name);
+    if (out->failed) {
+      closedir(dir);
+      *error = "fs.glob out of memory.";
+      return false;
+    }
   }
   closedir(dir);
 #endif
@@ -189,6 +187,9 @@ static void globWalk(const char* base, char sep, StringList* segments,
   if (index >= segments->count) {
     if (pathExists(base)) {
       stringListAdd(matches, base);
+      if (matches->failed) {
+        *error = "fs.glob out of memory.";
+      }
     }
     return;
   }
@@ -204,6 +205,10 @@ static void globWalk(const char* base, char sep, StringList* segments,
     }
     for (int i = 0; i < entries.count; i++) {
       char* next = joinPathWithSep(base, entries.items[i], sep);
+      if (!next) {
+        *error = "fs.glob out of memory.";
+        break;
+      }
       if (pathIsDir(next)) {
         globWalk(next, sep, segments, index, matches, error);
       }
@@ -223,9 +228,18 @@ static void globWalk(const char* base, char sep, StringList* segments,
     for (int i = 0; i < entries.count; i++) {
       if (!globMatchSegment(segment, entries.items[i])) continue;
       char* next = joinPathWithSep(base, entries.items[i], sep);
+      if (!next) {
+        *error = "fs.glob out of memory.";
+        break;
+      }
       if (index == segments->count - 1) {
         if (pathExists(next)) {
           stringListAdd(matches, next);
+          if (matches->failed) {
+            *error = "fs.glob out of memory.";
+            free(next);
+            break;
+          }
         }
       } else if (pathIsDir(next)) {
         globWalk(next, sep, segments, index + 1, matches, error);
@@ -238,9 +252,16 @@ static void globWalk(const char* base, char sep, StringList* segments,
   }
 
   char* next = joinPathWithSep(base, segment, sep);
+  if (!next) {
+    *error = "fs.glob out of memory.";
+    return;
+  }
   if (index == segments->count - 1) {
     if (pathExists(next)) {
       stringListAdd(matches, next);
+      if (matches->failed) {
+        *error = "fs.glob out of memory.";
+      }
     }
   } else if (pathIsDir(next)) {
     globWalk(next, sep, segments, index + 1, matches, error);
@@ -279,6 +300,7 @@ static Value nativeFsReadText(VM* vm, int argc, Value* args) {
 
   ObjString* result = copyStringWithLength(vm, buffer, (int)read);
   free(buffer);
+  if (!result) return NULL_VAL;
   return OBJ_VAL(result);
 }
 
@@ -336,6 +358,7 @@ static Value nativeFsCwd(VM* vm, int argc, Value* args) {
   }
   ObjString* result = copyString(vm, buffer);
   free(buffer);
+  if (!result) return NULL_VAL;
   return OBJ_VAL(result);
 #else
   char* buffer = getcwd(NULL, 0);
@@ -344,6 +367,7 @@ static Value nativeFsCwd(VM* vm, int argc, Value* args) {
   }
   ObjString* result = copyString(vm, buffer);
   free(buffer);
+  if (!result) return NULL_VAL;
   return OBJ_VAL(result);
 #endif
 }
@@ -372,6 +396,10 @@ static Value nativeFsListDir(VM* vm, int argc, Value* args) {
   }
 
   ObjArray* array = newArray(vm);
+  if (!array) {
+    FindClose(handle);
+    return runtimeErrorValue(vm, "fs.listDir out of memory.");
+  }
   do {
     if (strcmp(data.cFileName, ".") == 0 || strcmp(data.cFileName, "..") == 0) {
       continue;
@@ -388,6 +416,10 @@ static Value nativeFsListDir(VM* vm, int argc, Value* args) {
   }
 
   ObjArray* array = newArray(vm);
+  if (!array) {
+    closedir(dir);
+    return runtimeErrorValue(vm, "fs.listDir out of memory.");
+  }
   struct dirent* entry;
   while ((entry = readdir(dir)) != NULL) {
     if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
@@ -464,8 +496,18 @@ static Value nativeFsGlob(VM* vm, int argc, Value* args) {
   } else {
     int start = 0;
     char* root = globRootFromPattern(patternText, sep, &start);
+    if (!root) {
+      stringListFree(&matches);
+      return runtimeErrorValue(vm, "fs.glob out of memory.");
+    }
     StringList segments;
     globSplitSegments(patternText, start, &segments);
+    if (segments.failed) {
+      stringListFree(&segments);
+      free(root);
+      stringListFree(&matches);
+      return runtimeErrorValue(vm, "fs.glob out of memory.");
+    }
 
     const char* error = NULL;
     globWalk(root, sep, &segments, 0, &matches, &error);
@@ -479,6 +521,10 @@ static Value nativeFsGlob(VM* vm, int argc, Value* args) {
 
   stringListSort(&matches);
   ObjArray* array = newArrayWithCapacity(vm, matches.count);
+  if (!array) {
+    stringListFree(&matches);
+    return runtimeErrorValue(vm, "fs.glob out of memory.");
+  }
   for (int i = 0; i < matches.count; i++) {
     arrayWrite(array, OBJ_VAL(copyString(vm, matches.items[i])));
   }

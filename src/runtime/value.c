@@ -1,6 +1,6 @@
 #include "value.h"
 #include "chunk.h"
-#include "interpreter.h"
+#include "interpreter_internal.h"
 #include "gc.h"
 #include "program.h"
 
@@ -34,13 +34,17 @@ static MapEntryValue* mapFindEntry(MapEntryValue* entries, int capacity, ObjStri
 static MapEntryValue* mapFindEntryByToken(MapEntryValue* entries, int capacity,
                                           Token key, uint32_t keyHash);
 static int mapCapacityForCount(int count);
-static void adjustMapCapacity(ObjMap* map, int capacity);
+static bool adjustMapCapacity(ObjMap* map, int capacity);
+
+static void reportOutOfMemory(VM* vm, const char* context) {
+  runtimeOutOfMemory(vm, context ? context : "Out of memory.");
+}
 
 static Obj* allocateObject(VM* vm, size_t size, ObjType type, ObjGen generation) {
   Obj* object = (Obj*)malloc(size);
   if (!object) {
-    fprintf(stderr, "Out of memory.\n");
-    exit(1);
+    reportOutOfMemory(vm, "Out of memory while allocating object.");
+    return NULL;
   }
   object->type = type;
   object->marked = false;
@@ -62,6 +66,10 @@ static Obj* allocateObject(VM* vm, size_t size, ObjType type, ObjGen generation)
 static ObjString* allocateString(VM* vm, char* chars, int length) {
   size_t size = sizeof(ObjString) + (size_t)length + 1;
   ObjString* string = (ObjString*)allocateObject(vm, size, OBJ_STRING, OBJ_GEN_OLD);
+  if (!string) {
+    free(chars);
+    return NULL;
+  }
   string->length = length;
   string->chars = chars;
   string->hash = hashBytes(chars, length);
@@ -76,14 +84,15 @@ ObjString* copyStringWithLength(VM* vm, const char* chars, int length) {
 
   char* heap = (char*)malloc((size_t)length + 1);
   if (!heap) {
-    fprintf(stderr, "Out of memory.\n");
-    exit(1);
+    reportOutOfMemory(vm, "Out of memory while allocating string bytes.");
+    return NULL;
   }
   if (length > 0) {
     memcpy(heap, chars, (size_t)length);
   }
   heap[length] = '\0';
   ObjString* string = allocateString(vm, heap, length);
+  if (!string) return NULL;
   if (vm && vm->strings) {
     mapSet(vm->strings, string, OBJ_VAL(string));
   }
@@ -103,6 +112,7 @@ ObjString* takeStringWithLength(VM* vm, char* chars, int length) {
   }
   chars[length] = '\0';
   ObjString* string = allocateString(vm, chars, length);
+  if (!string) return NULL;
   if (vm && vm->strings) {
     mapSet(vm->strings, string, OBJ_VAL(string));
   }
@@ -122,6 +132,7 @@ ObjFunction* newFunction(VM* vm, ObjString* name, int arity, int minArity,
                          Env* closure, Program* program) {
   ObjFunction* function = (ObjFunction*)allocateObject(vm, sizeof(ObjFunction), OBJ_FUNCTION,
                                                       OBJ_GEN_OLD);
+  if (!function) return NULL;
   function->arity = arity;
   function->minArity = minArity;
   function->isInitializer = isInitializer;
@@ -137,12 +148,15 @@ ObjFunction* newFunction(VM* vm, ObjString* name, int arity, int minArity,
 
 ObjFunction* cloneFunction(VM* vm, ObjFunction* proto, Env* closure) {
   Chunk* chunk = cloneChunk(proto->chunk);
+  if (!chunk) return NULL;
   ObjString** params = NULL;
   if (proto->arity > 0) {
     params = (ObjString**)malloc(sizeof(ObjString*) * (size_t)proto->arity);
     if (!params) {
-      fprintf(stderr, "Out of memory.\n");
-      exit(1);
+      freeChunk(chunk);
+      free(chunk);
+      reportOutOfMemory(vm, "Out of memory while cloning function parameters.");
+      return NULL;
     }
     for (int i = 0; i < proto->arity; i++) {
       params[i] = proto->params[i];
@@ -154,6 +168,7 @@ ObjFunction* cloneFunction(VM* vm, ObjFunction* proto, Env* closure) {
 
 ObjNative* newNative(VM* vm, NativeFn function, int arity, ObjString* name) {
   ObjNative* native = (ObjNative*)allocateObject(vm, sizeof(ObjNative), OBJ_NATIVE, OBJ_GEN_OLD);
+  if (!native) return NULL;
   native->function = function;
   native->arity = arity;
   native->name = name;
@@ -164,6 +179,7 @@ ObjNative* newNative(VM* vm, NativeFn function, int arity, ObjString* name) {
 ObjEnumCtor* newEnumCtor(VM* vm, ObjString* enumName, ObjString* variantName, int arity) {
   ObjEnumCtor* ctor = (ObjEnumCtor*)allocateObject(vm, sizeof(ObjEnumCtor),
                                                   OBJ_ENUM_CTOR, OBJ_GEN_OLD);
+  if (!ctor) return NULL;
   ctor->enumName = enumName;
   ctor->variantName = variantName;
   ctor->arity = arity;
@@ -189,6 +205,7 @@ ObjMap* newEnumVariant(VM* vm, ObjString* enumName, ObjString* variantName, int 
 
 ObjClass* newClass(VM* vm, ObjString* name, ObjMap* methods) {
   ObjClass* klass = (ObjClass*)allocateObject(vm, sizeof(ObjClass), OBJ_CLASS, OBJ_GEN_OLD);
+  if (!klass) return NULL;
   klass->name = name;
   klass->methods = methods;
   klass->isStruct = false;
@@ -202,6 +219,7 @@ ObjClass* newClass(VM* vm, ObjString* name, ObjMap* methods) {
 ObjInstance* newInstance(VM* vm, ObjClass* klass) {
   ObjInstance* instance = (ObjInstance*)allocateObject(vm, sizeof(ObjInstance), OBJ_INSTANCE,
                                                        OBJ_GEN_YOUNG);
+  if (!instance) return NULL;
   instance->klass = klass;
   instance->fields = newMap(vm);
   return instance;
@@ -210,6 +228,7 @@ ObjInstance* newInstance(VM* vm, ObjClass* klass) {
 ObjInstance* newInstanceWithFields(VM* vm, ObjClass* klass, ObjMap* fields) {
   ObjInstance* instance = (ObjInstance*)allocateObject(vm, sizeof(ObjInstance), OBJ_INSTANCE,
                                                        OBJ_GEN_YOUNG);
+  if (!instance) return NULL;
   instance->klass = klass;
   instance->fields = fields;
   return instance;
@@ -221,6 +240,7 @@ ObjArray* newArray(VM* vm) {
 
 ObjArray* newArrayWithCapacity(VM* vm, int capacity) {
   ObjArray* array = (ObjArray*)allocateObject(vm, sizeof(ObjArray), OBJ_ARRAY, OBJ_GEN_YOUNG);
+  if (!array) return NULL;
   array->vm = vm;
   array->items = NULL;
   array->count = 0;
@@ -228,8 +248,8 @@ ObjArray* newArrayWithCapacity(VM* vm, int capacity) {
   if (capacity > 0) {
     array->items = (Value*)malloc(sizeof(Value) * (size_t)capacity);
     if (!array->items) {
-      fprintf(stderr, "Out of memory.\n");
-      exit(1);
+      reportOutOfMemory(vm, "Out of memory while allocating array items.");
+      return array;
     }
     array->capacity = capacity;
     size_t oldSize = array->obj.size;
@@ -248,6 +268,7 @@ ObjMap* newMap(VM* vm) {
 
 ObjMap* newMapWithCapacity(VM* vm, int capacity) {
   ObjMap* map = (ObjMap*)allocateObject(vm, sizeof(ObjMap), OBJ_MAP, OBJ_GEN_YOUNG);
+  if (!map) return NULL;
   map->vm = vm;
   map->entries = NULL;
   map->count = 0;
@@ -262,16 +283,24 @@ ObjMap* newMapWithCapacity(VM* vm, int capacity) {
 ObjBoundMethod* newBoundMethod(VM* vm, Value receiver, ObjFunction* method) {
   ObjBoundMethod* bound = (ObjBoundMethod*)allocateObject(vm, sizeof(ObjBoundMethod),
                                                          OBJ_BOUND_METHOD, OBJ_GEN_YOUNG);
+  if (!bound) return NULL;
   bound->receiver = receiver;
   bound->method = method;
   return bound;
 }
 
 void arrayWrite(ObjArray* array, Value value) {
+  if (!array) return;
   if (array->capacity < array->count + 1) {
     int oldCapacity = array->capacity;
     array->capacity = GROW_CAPACITY(oldCapacity);
-    array->items = GROW_ARRAY(Value, array->items, oldCapacity, array->capacity);
+    Value* resized = GROW_ARRAY(Value, array->items, oldCapacity, array->capacity);
+    if (!resized) {
+      array->capacity = oldCapacity;
+      reportOutOfMemory(array->vm, "Out of memory while growing array.");
+      return;
+    }
+    array->items = resized;
     size_t oldSize = array->obj.size;
     size_t extra = sizeof(Value) * (size_t)(array->capacity - oldCapacity);
     size_t newSize = oldSize + extra;
@@ -287,12 +316,14 @@ void arrayWrite(ObjArray* array, Value value) {
 }
 
 bool arrayGet(ObjArray* array, int index, Value* out) {
+  if (!array || !out) return false;
   if (index < 0 || index >= array->count) return false;
   *out = array->items[index];
   return true;
 }
 
 bool arraySet(ObjArray* array, int index, Value value) {
+  if (!array) return false;
   if (index < 0) return false;
   if (index < array->count) {
     array->items[index] = value;
@@ -351,11 +382,11 @@ static int mapCapacityForCount(int count) {
   return capacity;
 }
 
-static void adjustMapCapacity(ObjMap* map, int capacity) {
+static bool adjustMapCapacity(ObjMap* map, int capacity) {
   MapEntryValue* entries = (MapEntryValue*)malloc(sizeof(MapEntryValue) * (size_t)capacity);
   if (!entries) {
-    fprintf(stderr, "Out of memory.\n");
-    exit(1);
+    reportOutOfMemory(map ? map->vm : NULL, "Out of memory while growing map.");
+    return false;
   }
   for (int i = 0; i < capacity; i++) {
     entries[i].key = NULL;
@@ -387,9 +418,11 @@ static void adjustMapCapacity(ObjMap* map, int capacity) {
   if (map->vm) {
     gcTrackResize(map->vm, (Obj*)map, oldSize, newSize);
   }
+  return true;
 }
 
 bool mapGet(ObjMap* map, ObjString* key, Value* out) {
+  if (!map || !key || !out) return false;
   if (map->count == 0 || map->capacity == 0) return false;
   MapEntryValue* entry = mapFindEntry(map->entries, map->capacity, key);
   if (!entry->key) return false;
@@ -398,6 +431,7 @@ bool mapGet(ObjMap* map, ObjString* key, Value* out) {
 }
 
 bool mapGetIndex(ObjMap* map, ObjString* key, Value* out, int* outIndex) {
+  if (!map || !key) return false;
   if (map->count == 0 || map->capacity == 0) return false;
   MapEntryValue* entry = mapFindEntry(map->entries, map->capacity, key);
   if (!entry->key) return false;
@@ -407,6 +441,7 @@ bool mapGetIndex(ObjMap* map, ObjString* key, Value* out, int* outIndex) {
 }
 
 bool mapGetByToken(ObjMap* map, Token key, Value* out) {
+  if (!map || !out) return false;
   if (map->count == 0 || map->capacity == 0) return false;
   uint32_t tokenHash = hashBytes(key.start, key.length);
   MapEntryValue* entry = mapFindEntryByToken(map->entries, map->capacity, key, tokenHash);
@@ -420,9 +455,12 @@ void mapSet(ObjMap* map, ObjString* key, Value value) {
 }
 
 int mapSetIndex(ObjMap* map, ObjString* key, Value value) {
+  if (!map || !key) return -1;
   if ((map->count + 1) > (int)(map->capacity * MAP_MAX_LOAD)) {
     int capacity = map->capacity < 8 ? 8 : map->capacity * 2;
-    adjustMapCapacity(map, capacity);
+    if (!adjustMapCapacity(map, capacity)) {
+      return -1;
+    }
   }
 
   MapEntryValue* entry = mapFindEntry(map->entries, map->capacity, key);
@@ -440,6 +478,7 @@ int mapSetIndex(ObjMap* map, ObjString* key, Value value) {
 }
 
 bool mapSetByTokenIfExists(ObjMap* map, Token key, Value value) {
+  if (!map) return false;
   if (map->count == 0 || map->capacity == 0) return false;
   uint32_t tokenHash = hashBytes(key.start, key.length);
   MapEntryValue* entry = mapFindEntryByToken(map->entries, map->capacity, key, tokenHash);
@@ -452,6 +491,7 @@ bool mapSetByTokenIfExists(ObjMap* map, Token key, Value value) {
 }
 
 bool mapSetIfExists(ObjMap* map, ObjString* key, Value value) {
+  if (!map || !key) return false;
   if (map->count == 0 || map->capacity == 0) return false;
   MapEntryValue* entry = mapFindEntry(map->entries, map->capacity, key);
   if (!entry->key) return false;
@@ -463,11 +503,11 @@ bool mapSetIfExists(ObjMap* map, ObjString* key, Value value) {
 }
 
 int mapCount(ObjMap* map) {
-  return map->count;
+  return map ? map->count : 0;
 }
 
 bool isObjType(Value value, ObjType type) {
-  return IS_OBJ(value) && AS_OBJ(value)->type == type;
+  return IS_OBJ(value) && AS_OBJ(value) && AS_OBJ(value)->type == type;
 }
 
 static const char* objTypeName(ObjType type) {
@@ -491,6 +531,7 @@ const char* valueTypeName(Value value) {
     case VAL_BOOL: return "bool";
     case VAL_NUMBER: return "number";
     case VAL_OBJ:
+      if (!AS_OBJ(value)) return "object";
       return objTypeName(AS_OBJ(value)->type);
     default:
       return "unknown";
@@ -506,6 +547,7 @@ bool valuesEqual(Value a, Value b) {
     case VAL_OBJ: {
       Obj* objA = AS_OBJ(a);
       Obj* objB = AS_OBJ(b);
+      if (!objA || !objB) return objA == objB;
       if (objA->type != objB->type) return false;
       if (objA->type == OBJ_STRING) {
         return stringsEqual((ObjString*)objA, (ObjString*)objB);
@@ -531,7 +573,11 @@ void printValue(Value value) {
       printf("%g", AS_NUMBER(value));
       break;
     case VAL_OBJ:
-      printObject(value);
+      if (!AS_OBJ(value)) {
+        printf("<null-obj>");
+      } else {
+        printObject(value);
+      }
       break;
   }
 }
@@ -614,39 +660,44 @@ typedef struct {
   char* data;
   int length;
   int capacity;
+  bool failed;
 } StringBuilder;
 
 static void sbInit(StringBuilder* sb) {
   sb->data = NULL;
   sb->length = 0;
   sb->capacity = 0;
+  sb->failed = false;
 }
 
 static void sbEnsure(StringBuilder* sb, int needed) {
-  if (sb->capacity >= needed) return;
+  if (sb->failed || sb->capacity >= needed) return;
   int newCap = sb->capacity == 0 ? 64 : sb->capacity;
   while (newCap < needed) {
     newCap *= 2;
   }
   char* next = (char*)realloc(sb->data, (size_t)newCap);
   if (!next) {
-    fprintf(stderr, "Out of memory.\n");
-    exit(1);
+    sb->failed = true;
+    return;
   }
   sb->data = next;
   sb->capacity = newCap;
 }
 
 static void sbAppendN(StringBuilder* sb, const char* text, int length) {
-  if (length <= 0) return;
+  if (sb->failed || length <= 0) return;
   sbEnsure(sb, sb->length + length + 1);
+  if (sb->failed) return;
   memcpy(sb->data + sb->length, text, (size_t)length);
   sb->length += length;
   sb->data[sb->length] = '\0';
 }
 
 static void sbAppendChar(StringBuilder* sb, char c) {
+  if (sb->failed) return;
   sbEnsure(sb, sb->length + 2);
+  if (sb->failed) return;
   sb->data[sb->length++] = c;
   sb->data[sb->length] = '\0';
 }
@@ -677,6 +728,10 @@ static void appendMap(StringBuilder* sb, ObjMap* map) {
 }
 
 static void appendObject(StringBuilder* sb, Obj* obj) {
+  if (!obj) {
+    sbAppendN(sb, "<null-obj>", 10);
+    return;
+  }
   switch (obj->type) {
     case OBJ_STRING: {
       ObjString* string = (ObjString*)obj;
@@ -780,5 +835,10 @@ ObjString* stringifyValue(VM* vm, Value value) {
   StringBuilder sb;
   sbInit(&sb);
   appendValue(&sb, value);
+  if (sb.failed) {
+    free(sb.data);
+    reportOutOfMemory(vm, "Out of memory while stringifying value.");
+    return NULL;
+  }
   return takeStringWithLength(vm, sb.data, sb.length);
 }

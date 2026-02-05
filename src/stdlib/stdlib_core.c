@@ -31,6 +31,10 @@ static Value nativeFmt(VM* vm, int argc, Value* args) {
     if (c == '{') {
       if (i + 1 < format->length && format->chars[i + 1] == '{') {
         bufferAppendChar(&buffer, '{');
+        if (buffer.failed) {
+          bufferFree(&buffer);
+          return runtimeErrorValue(vm, "fmt out of memory.");
+        }
         i++;
         continue;
       }
@@ -40,7 +44,15 @@ static Value nativeFmt(VM* vm, int argc, Value* args) {
           return runtimeErrorValue(vm, "fmt expects a value for '{}'.");
         }
         ObjString* text = stringifyValue(vm, args[argIndex++]);
+        if (!text) {
+          bufferFree(&buffer);
+          return NULL_VAL;
+        }
         bufferAppendN(&buffer, text->chars, (size_t)text->length);
+        if (buffer.failed) {
+          bufferFree(&buffer);
+          return runtimeErrorValue(vm, "fmt out of memory.");
+        }
         i++;
         continue;
       }
@@ -50,6 +62,10 @@ static Value nativeFmt(VM* vm, int argc, Value* args) {
     if (c == '}') {
       if (i + 1 < format->length && format->chars[i + 1] == '}') {
         bufferAppendChar(&buffer, '}');
+        if (buffer.failed) {
+          bufferFree(&buffer);
+          return runtimeErrorValue(vm, "fmt out of memory.");
+        }
         i++;
         continue;
       }
@@ -57,11 +73,16 @@ static Value nativeFmt(VM* vm, int argc, Value* args) {
       return runtimeErrorValue(vm, "fmt expects '}' to be escaped as '}}'.");
     }
     bufferAppendChar(&buffer, c);
+    if (buffer.failed) {
+      bufferFree(&buffer);
+      return runtimeErrorValue(vm, "fmt out of memory.");
+    }
   }
 
   ObjString* result = copyStringWithLength(vm, buffer.data ? buffer.data : "",
                                            (int)buffer.length);
   bufferFree(&buffer);
+  if (!result) return NULL_VAL;
   return OBJ_VAL(result);
 }
 

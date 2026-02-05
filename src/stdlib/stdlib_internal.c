@@ -84,10 +84,11 @@ void bufferInit(ByteBuffer* buffer) {
   buffer->data = NULL;
   buffer->length = 0;
   buffer->capacity = 0;
+  buffer->failed = false;
 }
 
 void bufferEnsure(ByteBuffer* buffer, size_t needed) {
-  if (buffer->capacity >= needed) return;
+  if (buffer->failed || buffer->capacity >= needed) return;
   size_t oldCapacity = buffer->capacity;
   size_t newCapacity = oldCapacity == 0 ? 128 : oldCapacity;
   while (newCapacity < needed) {
@@ -95,22 +96,26 @@ void bufferEnsure(ByteBuffer* buffer, size_t needed) {
   }
   char* next = (char*)realloc(buffer->data, newCapacity);
   if (!next) {
-    fprintf(stderr, "Out of memory.\n");
-    exit(1);
+    buffer->failed = true;
+    return;
   }
   buffer->data = next;
   buffer->capacity = newCapacity;
 }
 
 void bufferAppendN(ByteBuffer* buffer, const char* data, size_t length) {
+  if (buffer->failed) return;
   bufferEnsure(buffer, buffer->length + length + 1);
+  if (buffer->failed) return;
   memcpy(buffer->data + buffer->length, data, length);
   buffer->length += length;
   buffer->data[buffer->length] = '\0';
 }
 
 void bufferAppendChar(ByteBuffer* buffer, char c) {
+  if (buffer->failed) return;
   bufferEnsure(buffer, buffer->length + 2);
+  if (buffer->failed) return;
   buffer->data[buffer->length++] = c;
   buffer->data[buffer->length] = '\0';
 }
@@ -120,6 +125,7 @@ void bufferFree(ByteBuffer* buffer) {
   buffer->data = NULL;
   buffer->length = 0;
   buffer->capacity = 0;
+  buffer->failed = false;
 }
 
 char* copyCString(const char* src, size_t length) {
@@ -130,6 +136,7 @@ void stringListInit(StringList* list) {
   list->items = NULL;
   list->count = 0;
   list->capacity = 0;
+  list->failed = false;
 }
 
 void stringListFree(StringList* list) {
@@ -141,29 +148,45 @@ void stringListFree(StringList* list) {
 }
 
 void stringListAdd(StringList* list, const char* value) {
+  if (list->failed) return;
   if (list->capacity < list->count + 1) {
     int oldCapacity = list->capacity;
-    list->capacity = oldCapacity == 0 ? 8 : oldCapacity * 2;
-    list->items = (char**)realloc(list->items, sizeof(char*) * (size_t)list->capacity);
-    if (!list->items) {
-      fprintf(stderr, "Out of memory.\n");
-      exit(1);
+    int newCapacity = oldCapacity == 0 ? 8 : oldCapacity * 2;
+    char** resized = (char**)realloc(list->items, sizeof(char*) * (size_t)newCapacity);
+    if (!resized) {
+      list->failed = true;
+      return;
     }
+    list->items = resized;
+    list->capacity = newCapacity;
   }
-  list->items[list->count++] = copyCString(value, strlen(value));
+  char* item = copyCString(value, strlen(value));
+  if (!item) {
+    list->failed = true;
+    return;
+  }
+  list->items[list->count++] = item;
 }
 
 void stringListAddWithLength(StringList* list, const char* value, size_t length) {
+  if (list->failed) return;
   if (list->capacity < list->count + 1) {
     int oldCapacity = list->capacity;
-    list->capacity = oldCapacity == 0 ? 8 : oldCapacity * 2;
-    list->items = (char**)realloc(list->items, sizeof(char*) * (size_t)list->capacity);
-    if (!list->items) {
-      fprintf(stderr, "Out of memory.\n");
-      exit(1);
+    int newCapacity = oldCapacity == 0 ? 8 : oldCapacity * 2;
+    char** resized = (char**)realloc(list->items, sizeof(char*) * (size_t)newCapacity);
+    if (!resized) {
+      list->failed = true;
+      return;
     }
+    list->items = resized;
+    list->capacity = newCapacity;
   }
-  list->items[list->count++] = copyCString(value, length);
+  char* item = copyCString(value, length);
+  if (!item) {
+    list->failed = true;
+    return;
+  }
+  list->items[list->count++] = item;
 }
 
 static int stringListCompare(const void* a, const void* b) {

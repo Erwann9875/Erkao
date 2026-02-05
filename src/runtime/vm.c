@@ -93,10 +93,7 @@ static bool parseSizeValue(const char* value, size_t* out) {
 static char* copyCString(const char* src) {
   size_t length = strlen(src);
   char* out = (char*)malloc(length + 1);
-  if (!out) {
-    fprintf(stderr, "Out of memory.\n");
-    exit(1);
-  }
+  if (!out) return NULL;
   memcpy(out, src, length + 1);
   return out;
 }
@@ -116,10 +113,7 @@ static char* resolveGlobalPackagesDir(void) {
     if (drive && path) {
       size_t length = strlen(drive) + strlen(path);
       homeBuffer = (char*)malloc(length + 1);
-      if (!homeBuffer) {
-        fprintf(stderr, "Out of memory.\n");
-        exit(1);
-      }
+      if (!homeBuffer) return NULL;
       strcpy(homeBuffer, drive);
       strcat(homeBuffer, path);
       home = homeBuffer;
@@ -131,10 +125,7 @@ static char* resolveGlobalPackagesDir(void) {
   const char* suffix = "\\.erkao\\packages";
   size_t length = strlen(home) + strlen(suffix);
   char* path = (char*)malloc(length + 1);
-  if (!path) {
-    fprintf(stderr, "Out of memory.\n");
-    exit(1);
-  }
+  if (!path) return NULL;
   strcpy(path, home);
   strcat(path, suffix);
   free(homeBuffer);
@@ -145,10 +136,7 @@ static char* resolveGlobalPackagesDir(void) {
   const char* suffix = "/.erkao/packages";
   size_t length = strlen(home) + strlen(suffix);
   char* path = (char*)malloc(length + 1);
-  if (!path) {
-    fprintf(stderr, "Out of memory.\n");
-    exit(1);
-  }
+  if (!path) return NULL;
   strcpy(path, home);
   strcat(path, suffix);
   return path;
@@ -160,20 +148,32 @@ void vmAddModulePath(VM* vm, const char* path) {
   if (vm->modulePathCapacity < vm->modulePathCount + 1) {
     int oldCapacity = vm->modulePathCapacity;
     vm->modulePathCapacity = oldCapacity == 0 ? 4 : oldCapacity * 2;
-    vm->modulePaths = (char**)realloc(vm->modulePaths,
-                                      sizeof(char*) * (size_t)vm->modulePathCapacity);
-    if (!vm->modulePaths) {
-      fprintf(stderr, "Out of memory.\n");
-      exit(1);
+    char** resized = (char**)realloc(
+        vm->modulePaths, sizeof(char*) * (size_t)vm->modulePathCapacity);
+    if (!resized) {
+      vm->modulePathCapacity = oldCapacity;
+      runtimeOutOfMemory(vm, "Out of memory while growing module path list.");
+      return;
     }
+    vm->modulePaths = resized;
   }
-  vm->modulePaths[vm->modulePathCount++] = copyCString(path);
+  char* copy = copyCString(path);
+  if (!copy) {
+    runtimeOutOfMemory(vm, "Out of memory while copying module path.");
+    return;
+  }
+  vm->modulePaths[vm->modulePathCount++] = copy;
 }
 
 void vmSetProjectRoot(VM* vm, const char* path) {
   if (!vm || !path || path[0] == '\0') return;
+  char* copy = copyCString(path);
+  if (!copy) {
+    runtimeOutOfMemory(vm, "Out of memory while setting project root.");
+    return;
+  }
   free(vm->projectRoot);
-  vm->projectRoot = copyCString(path);
+  vm->projectRoot = copy;
 }
 
 static void loadEnvModulePaths(VM* vm) {
@@ -192,13 +192,14 @@ static void loadEnvModulePaths(VM* vm) {
       if (length > 0) {
         char* entry = (char*)malloc(length + 1);
         if (!entry) {
-          fprintf(stderr, "Out of memory.\n");
-          exit(1);
+          runtimeOutOfMemory(vm, "Out of memory while parsing ERKAO_PATH.");
+          return;
         }
         memcpy(entry, start, length);
         entry[length] = '\0';
         vmAddModulePath(vm, entry);
         free(entry);
+        if (vm->hadError) return;
       }
       if (*cursor == '\0') break;
       start = cursor + 1;
@@ -210,12 +211,17 @@ static void loadEnvModulePaths(VM* vm) {
 Env* newEnv(VM* vm, Env* enclosing) {
   Env* env = (Env*)malloc(sizeof(Env));
   if (!env) {
-    fprintf(stderr, "Out of memory.\n");
-    exit(1);
+    runtimeOutOfMemory(vm, "Out of memory while creating environment.");
+    return NULL;
   }
   env->enclosing = enclosing;
   env->values = newMap(vm);
   env->consts = newMap(vm);
+  if (!env->values || !env->consts) {
+    free(env);
+    runtimeOutOfMemory(vm, "Out of memory while allocating environment maps.");
+    return NULL;
+  }
   env->next = vm->envs;
   env->marked = false;
   vm->envs = env;
@@ -259,12 +265,15 @@ bool envIsConst(Env* env, ObjString* name) {
 
 void defineNative(VM* vm, const char* name, NativeFn function, int arity) {
   ObjString* nameObj = copyString(vm, name);
+  if (!nameObj) return;
   ObjNative* native = newNative(vm, function, arity, nameObj);
+  if (!native) return;
   envDefine(vm->globals, nameObj, OBJ_VAL(native));
 }
 
 void defineGlobal(VM* vm, const char* name, Value value) {
   ObjString* nameObj = copyString(vm, name);
+  if (!nameObj) return;
   envDefine(vm->globals, nameObj, value);
 }
 
@@ -324,15 +333,23 @@ void vmInit(VM* vm) {
   vm->modulePathCapacity = 0;
   vm->projectRoot = NULL;
   vm->globalPackagesDir = resolveGlobalPackagesDir();
+  if (!vm->globalPackagesDir) {
+    runtimeOutOfMemory(vm, "Out of memory while resolving packages directory.");
+    vm->globalPackagesDir = copyCString(".");
+  }
   vm->dbState = NULL;
   vm->frameCount = 0;
   vm->stackTop = vm->stack;
   vm->tryCount = 0;
   vm->globals = newEnv(vm, NULL);
+  if (!vm->globals) return;
   vm->env = vm->globals;
   vm->args = newArray(vm);
+  if (!vm->args) return;
   vm->modules = newMap(vm);
+  if (!vm->modules) return;
   vm->strings = newMap(vm);
+  if (!vm->strings) return;
 
   {
     const char* value = getenv("ERKAO_INSTR_BUDGET");
@@ -366,6 +383,7 @@ void vmInit(VM* vm) {
   }
 
   loadEnvModulePaths(vm);
+  if (vm->hadError) return;
   defineStdlib(vm);
 }
 
@@ -447,9 +465,12 @@ void vmFree(VM* vm) {
 
 void vmSetArgs(VM* vm, int argc, const char** argv) {
   ObjArray* array = newArrayWithCapacity(vm, argc);
+  if (!array) return;
   for (int i = 0; i < argc; i++) {
     ObjString* arg = copyString(vm, argv[i]);
+    if (!arg) return;
     arrayWrite(array, OBJ_VAL(arg));
+    if (vm->hadError) return;
   }
   vm->args = array;
 }

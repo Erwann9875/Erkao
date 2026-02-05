@@ -11,6 +11,7 @@ void envDefineConst(Env* env, ObjString* name, Value value);
 bool envIsConst(Env* env, ObjString* name);
 
 void runtimeError(VM* vm, Token token, const char* message);
+bool runtimeOutOfMemory(VM* vm, const char* context);
 ObjArray* captureStackTrace(VM* vm, const char* fallbackPath);
 bool isTruthy(Value value);
 bool isString(Value value);

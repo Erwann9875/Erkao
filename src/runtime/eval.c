@@ -64,6 +64,9 @@ static bool callFunction(VM* vm, ObjFunction* function, Value receiver,
   }
 
   Env* env = newEnv(vm, function->closure);
+  if (!env) {
+    return false;
+  }
   if (hasReceiver) {
     ObjString* thisName = copyString(vm, "this");
     envDefine(env, thisName, receiver);
@@ -183,8 +186,8 @@ static Value concatenateStrings(VM* vm, ObjString* a, ObjString* b) {
   int length = a->length + b->length;
   char* buffer = (char*)malloc((size_t)length + 1);
   if (!buffer) {
-    fprintf(stderr, "Out of memory.\n");
-    exit(1);
+    runtimeOutOfMemory(vm, "Out of memory while concatenating strings.");
+    return NULL_VAL;
   }
   memcpy(buffer, a->chars, (size_t)a->length);
   memcpy(buffer + a->length, b->chars, (size_t)b->length);
@@ -399,8 +402,8 @@ Value evaluate(VM* vm, Expr* expr) {
       if (argCount > 0) {
         args = (Value*)malloc(sizeof(Value) * (size_t)argCount);
         if (!args) {
-          fprintf(stderr, "Out of memory.\n");
-          exit(1);
+          runtimeOutOfMemory(vm, "Out of memory while preparing call arguments.");
+          return NULL_VAL;
         }
         for (int i = 0; i < argCount; i++) {
           args[i] = evaluate(vm, expr->as.call.args.items[i]);

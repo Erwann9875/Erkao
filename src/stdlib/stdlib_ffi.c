@@ -20,11 +20,12 @@ static int ffiStoreHandle(VM* vm, void* handle, bool owns) {
   if (vm->ffiCapacity < vm->ffiCount + 1) {
     int oldCap = vm->ffiCapacity;
     vm->ffiCapacity = GROW_CAPACITY(oldCap);
-    vm->ffiHandles = GROW_ARRAY(FfiHandle, vm->ffiHandles, oldCap, vm->ffiCapacity);
-    if (!vm->ffiHandles) {
-      fprintf(stderr, "Out of memory.\n");
-      exit(1);
+    FfiHandle* resized = GROW_ARRAY(FfiHandle, vm->ffiHandles, oldCap, vm->ffiCapacity);
+    if (!resized) {
+      vm->ffiCapacity = oldCap;
+      return -1;
     }
+    vm->ffiHandles = resized;
   }
   vm->ffiHandles[vm->ffiCount].handle = handle;
   vm->ffiHandles[vm->ffiCount].owns = owns;
@@ -89,6 +90,14 @@ static Value nativeFfiOpen(VM* vm, int argc, Value* args) {
   }
 
   int id = ffiStoreHandle(vm, handle, owns);
+  if (id < 0) {
+#ifdef _WIN32
+    if (owns) FreeLibrary((HMODULE)handle);
+#else
+    if (owns) dlclose(handle);
+#endif
+    return runtimeErrorValue(vm, "ffi.open out of memory.");
+  }
   ObjMap* out = newMap(vm);
   ObjString* key = copyString(vm, "_ffi");
   mapSet(out, key, NUMBER_VAL((double)id));

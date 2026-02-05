@@ -42,21 +42,23 @@ static void popTryFramesForFrame(VM* vm, int frameIndex) {
   }
 }
 
-static void ensureDeferCapacity(VM* vm) {
+static bool ensureDeferCapacity(VM* vm) {
   if (vm->deferCapacity < vm->deferCount + 1) {
     int oldCap = vm->deferCapacity;
     vm->deferCapacity = GROW_CAPACITY(oldCap);
-    vm->defers = GROW_ARRAY(DeferEntry, vm->defers, oldCap, vm->deferCapacity);
-    if (!vm->defers) {
-      fprintf(stderr, "Out of memory.\n");
-      exit(1);
+    DeferEntry* resized = GROW_ARRAY(DeferEntry, vm->defers, oldCap, vm->deferCapacity);
+    if (!resized) {
+      vm->deferCapacity = oldCap;
+      return runtimeOutOfMemory(vm, "Out of memory while growing defer list.");
     }
+    vm->defers = resized;
   }
+  return true;
 }
 
-static void deferPush(VM* vm, int frameIndex, int scopeDepth,
+static bool deferPush(VM* vm, int frameIndex, int scopeDepth,
                       Value callee, int argCount, Value* args) {
-  ensureDeferCapacity(vm);
+  if (!ensureDeferCapacity(vm)) return false;
   DeferEntry* entry = &vm->defers[vm->deferCount++];
   entry->frameIndex = frameIndex;
   entry->scopeDepth = scopeDepth;
@@ -66,11 +68,12 @@ static void deferPush(VM* vm, int frameIndex, int scopeDepth,
   if (argCount > 0) {
     entry->args = (Value*)malloc(sizeof(Value) * (size_t)argCount);
     if (!entry->args) {
-      fprintf(stderr, "Out of memory.\n");
-      exit(1);
+      vm->deferCount--;
+      return runtimeOutOfMemory(vm, "Out of memory while storing defer arguments.");
     }
     memcpy(entry->args, args, sizeof(Value) * (size_t)argCount);
   }
+  return true;
 }
 
 static bool runDeferredEntry(VM* vm, DeferEntry* entry) {
@@ -135,7 +138,9 @@ static ObjString* errorMessageForValue(VM* vm, Value value) {
   if (isString(value)) {
     return asString(value);
   }
-  return stringifyValue(vm, value);
+  ObjString* string = stringifyValue(vm, value);
+  if (string) return string;
+  return copyString(vm, "<error>");
 }
 
 static Value wrapErrorValue(VM* vm, Value value) {
@@ -279,8 +284,8 @@ static Value concatenateStrings(VM* vm, ObjString* a, ObjString* b) {
   int length = a->length + b->length;
   char* buffer = (char*)malloc((size_t)length + 1);
   if (!buffer) {
-    fprintf(stderr, "Out of memory.\n");
-    exit(1);
+    runtimeOutOfMemory(vm, "Out of memory while concatenating strings.");
+    return NULL_VAL;
   }
   memcpy(buffer, a->chars, (size_t)a->length);
   memcpy(buffer + a->length, b->chars, (size_t)b->length);
@@ -343,8 +348,16 @@ static bool beginModuleImport(VM* vm, CallFrame** frame, ObjString* pathString,
   }
 
   ObjString* key = copyStringWithLength(vm, resolvedPath, pathToken.length);
+  if (!key) {
+    free(resolvedPath);
+    return false;
+  }
 
   Env* moduleEnv = newEnv(vm, vm->globals);
+  if (!moduleEnv) {
+    free(resolvedPath);
+    return false;
+  }
   Env* previousEnv = vm->env;
   vm->env = moduleEnv;
   ObjFunction* moduleFunction =
@@ -500,6 +513,7 @@ static bool callFunction(VM* vm, ObjFunction* function, Value receiver,
   frame->modulePrivate = NULL;
 
   Env* env = newEnv(vm, function->closure);
+  if (!env) return false;
   if (hasReceiver) {
     ObjString* thisName = copyString(vm, "this");
     envDefine(env, thisName, receiver);
@@ -1404,7 +1418,9 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
           break;
         }
         if (isString(a) && isString(b)) {
-          push(vm, concatenateStrings(vm, asString(a), asString(b)));
+          Value concatenated = concatenateStrings(vm, asString(a), asString(b));
+          if (vm->hadError) return false;
+          push(vm, concatenated);
           break;
         }
         runtimeError(vm, currentToken(frame), "Operands must be two numbers or two strings.");
@@ -1457,6 +1473,7 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
       case OP_STRINGIFY: {
         Value value = pop(vm);
         ObjString* string = stringifyValue(vm, value);
+        if (!string) return false;
         push(vm, OBJ_VAL(string));
         break;
       }
@@ -1508,7 +1525,8 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
         push(vm, errorValue);
         ObjString* message = errorMessageForValue(vm, errorValue);
         char buffer[256];
-        snprintf(buffer, sizeof(buffer), "Uncaught throw: %s", message->chars);
+        const char* messageText = (message && message->chars) ? message->chars : "<error>";
+        snprintf(buffer, sizeof(buffer), "Uncaught throw: %s", messageText);
         pop(vm);
         runtimeError(vm, token, buffer);
         return false;
@@ -1551,7 +1569,9 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
           args[i] = pop(vm);
         }
         Value callee = pop(vm);
-        deferPush(vm, vm->frameCount - 1, frame->scopeDepth, callee, argCount, args);
+        if (!deferPush(vm, vm->frameCount - 1, frame->scopeDepth, callee, argCount, args)) {
+          return false;
+        }
         break;
       }
       case OP_CALL: {
@@ -1704,6 +1724,7 @@ static bool runWithTarget(VM* vm, int targetFrameCount) {
       }
       case OP_BEGIN_SCOPE:
         vm->env = newEnv(vm, vm->env);
+        if (!vm->env) return false;
         frame->scopeDepth++;
         break;
       case OP_END_SCOPE:

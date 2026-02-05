@@ -151,10 +151,18 @@ static Value nativePathNormalize(VM* vm, int argc, Value* args) {
         parts.items[parts.count] = NULL;
       } else if (!isAbs) {
         stringListAdd(&parts, "..");
+        if (parts.failed) {
+          stringListFree(&parts);
+          return runtimeErrorValue(vm, "path.normalize out of memory.");
+        }
       }
       continue;
     }
     stringListAddWithLength(&parts, begin, length);
+    if (parts.failed) {
+      stringListFree(&parts);
+      return runtimeErrorValue(vm, "path.normalize out of memory.");
+    }
   }
 
   size_t total = 0;

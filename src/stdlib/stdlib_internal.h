@@ -7,6 +7,7 @@ typedef struct {
   char* data;
   size_t length;
   size_t capacity;
+  bool failed;
 } ByteBuffer;
 
 Value runtimeErrorValue(VM* vm, const char* message);
@@ -37,6 +38,7 @@ typedef struct {
   char** items;
   int count;
   int capacity;
+  bool failed;
 } StringList;
 
 void stringListInit(StringList* list);

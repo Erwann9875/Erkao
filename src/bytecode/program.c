@@ -34,16 +34,19 @@ static void programFree(VM* vm, Program* program) {
 Program* programCreate(VM* vm, char* source, const char* path, ObjFunction* function) {
   Program* program = (Program*)malloc(sizeof(Program));
   if (!program) {
-    fprintf(stderr, "Out of memory.\n");
-    exit(1);
+    if (vm) vm->hadError = true;
+    fprintf(stderr, "RuntimeError: Out of memory while creating program.\n");
+    return NULL;
   }
   program->source = source;
   if (path) {
     size_t length = strlen(path);
     program->path = (char*)malloc(length + 1);
     if (!program->path) {
-      fprintf(stderr, "Out of memory.\n");
-      exit(1);
+      if (vm) vm->hadError = true;
+      fprintf(stderr, "RuntimeError: Out of memory while copying program path.\n");
+      free(program);
+      return NULL;
     }
     memcpy(program->path, path, length + 1);
   } else {

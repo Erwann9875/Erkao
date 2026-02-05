@@ -100,6 +100,10 @@ static Value jsonParseString(VM* vm, JsonParser* parser, bool* ok) {
     }
     if (c != '\\') {
       bufferAppendChar(&buffer, c);
+      if (buffer.failed) {
+        bufferFree(&buffer);
+        return jsonFail(parser, ok, "json.parse out of memory.");
+      }
       continue;
     }
 
@@ -151,6 +155,10 @@ static Value jsonParseString(VM* vm, JsonParser* parser, bool* ok) {
         bufferFree(&buffer);
         return jsonFail(parser, ok, "json.parse invalid escape sequence.");
     }
+    if (buffer.failed) {
+      bufferFree(&buffer);
+      return jsonFail(parser, ok, "json.parse out of memory.");
+    }
   }
 
   if (!jsonMatch(parser, '"')) {
@@ -161,6 +169,9 @@ static Value jsonParseString(VM* vm, JsonParser* parser, bool* ok) {
   const char* text = buffer.data ? buffer.data : "";
   ObjString* result = copyStringWithLength(vm, text, (int)buffer.length);
   bufferFree(&buffer);
+  if (!result) {
+    return jsonFail(parser, ok, "json.parse out of memory.");
+  }
   return OBJ_VAL(result);
 }
 
@@ -215,6 +226,9 @@ static Value jsonParseNumber(VM* vm, JsonParser* parser, bool* ok) {
 
 static Value jsonParseArray(VM* vm, JsonParser* parser, bool* ok) {
   ObjArray* array = newArray(vm);
+  if (!array) {
+    return jsonFail(parser, ok, "json.parse out of memory.");
+  }
   parser->current++;
   jsonSkipWhitespace(parser);
   if (jsonMatch(parser, ']')) {
@@ -243,6 +257,9 @@ static Value jsonParseArray(VM* vm, JsonParser* parser, bool* ok) {
 
 static Value jsonParseObject(VM* vm, JsonParser* parser, bool* ok) {
   ObjMap* map = newMap(vm);
+  if (!map) {
+    return jsonFail(parser, ok, "json.parse out of memory.");
+  }
   parser->current++;
   jsonSkipWhitespace(parser);
   if (jsonMatch(parser, '}')) {
@@ -299,6 +316,10 @@ static bool jsonStringifyValue(VM* vm, ByteBuffer* buffer, Value value, int dept
 
 static bool jsonAppendEscapedString(ByteBuffer* buffer, ObjString* string, const char** error) {
   bufferAppendChar(buffer, '"');
+  if (buffer->failed) {
+    *error = "json.stringify out of memory.";
+    return false;
+  }
   for (int i = 0; i < string->length; i++) {
     unsigned char c = (unsigned char)string->chars[i];
     switch (c) {
@@ -339,6 +360,10 @@ static bool jsonAppendEscapedString(ByteBuffer* buffer, ObjString* string, const
     }
   }
   bufferAppendChar(buffer, '"');
+  if (buffer->failed) {
+    *error = "json.stringify out of memory.";
+    return false;
+  }
   return true;
 }
 
@@ -352,6 +377,10 @@ static bool jsonStringifyArray(VM* vm, ByteBuffer* buffer, ObjArray* array, int 
                                const char** error) {
   (void)vm;
   bufferAppendChar(buffer, '[');
+  if (buffer->failed) {
+    *error = "json.stringify out of memory.";
+    return false;
+  }
   for (int i = 0; i < array->count; i++) {
     if (i > 0) bufferAppendChar(buffer, ',');
     if (!jsonStringifyValue(vm, buffer, array->items[i], depth + 1, error)) {
@@ -359,6 +388,10 @@ static bool jsonStringifyArray(VM* vm, ByteBuffer* buffer, ObjArray* array, int 
     }
   }
   bufferAppendChar(buffer, ']');
+  if (buffer->failed) {
+    *error = "json.stringify out of memory.";
+    return false;
+  }
   return true;
 }
 
@@ -366,12 +399,16 @@ static bool jsonStringifyMap(VM* vm, ByteBuffer* buffer, ObjMap* map, int depth,
                              const char** error) {
   (void)vm;
   bufferAppendChar(buffer, '{');
+  if (buffer->failed) {
+    *error = "json.stringify out of memory.";
+    return false;
+  }
   if (map->count > 0) {
     MapEntryValue** entries =
         (MapEntryValue**)malloc(sizeof(MapEntryValue*) * (size_t)map->count);
     if (!entries) {
-      fprintf(stderr, "Out of memory.\n");
-      exit(1);
+      *error = "json.stringify out of memory.";
+      return false;
     }
 
     int count = 0;
@@ -399,6 +436,10 @@ static bool jsonStringifyMap(VM* vm, ByteBuffer* buffer, ObjMap* map, int depth,
     free(entries);
   }
   bufferAppendChar(buffer, '}');
+  if (buffer->failed) {
+    *error = "json.stringify out of memory.";
+    return false;
+  }
   return true;
 }
 
@@ -412,12 +453,20 @@ static bool jsonStringifyValue(VM* vm, ByteBuffer* buffer, Value value, int dept
   switch (value.type) {
     case VAL_NULL:
       bufferAppendN(buffer, "null", 4);
+      if (buffer->failed) {
+        *error = "json.stringify out of memory.";
+        return false;
+      }
       return true;
     case VAL_BOOL:
       if (AS_BOOL(value)) {
         bufferAppendN(buffer, "true", 4);
       } else {
         bufferAppendN(buffer, "false", 5);
+      }
+      if (buffer->failed) {
+        *error = "json.stringify out of memory.";
+        return false;
       }
       return true;
     case VAL_NUMBER: {
@@ -433,6 +482,10 @@ static bool jsonStringifyValue(VM* vm, ByteBuffer* buffer, Value value, int dept
         return false;
       }
       bufferAppendN(buffer, temp, (size_t)length);
+      if (buffer->failed) {
+        *error = "json.stringify out of memory.";
+        return false;
+      }
       return true;
     }
     case VAL_OBJ: {
@@ -496,6 +549,9 @@ static Value nativeJsonStringify(VM* vm, int argc, Value* args) {
   const char* text = buffer.data ? buffer.data : "";
   ObjString* result = copyStringWithLength(vm, text, (int)buffer.length);
   bufferFree(&buffer);
+  if (!result) {
+    return runtimeErrorValue(vm, "json.stringify out of memory.");
+  }
   return OBJ_VAL(result);
 }
 

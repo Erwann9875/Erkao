@@ -1,0 +1,6 @@
+# Static analysis issue baseline
+# Format (one entry per line):
+#   cppcheck:<path>:<line>:<severity>:<id>
+#   clang-tidy:<path>:<line>:<severity>:<check>
+#
+# Keep this list minimal. CI fails on any finding not listed here.

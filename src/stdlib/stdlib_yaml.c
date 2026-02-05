@@ -80,6 +80,10 @@ static void yamlTrimRight(char* text) {
 static bool yamlCollectLines(YamlParser* parser, const char* source) {
   size_t length = strlen(source);
   parser->buffer = copyCString(source, length);
+  if (!parser->buffer) {
+    parser->error = "yaml.parse out of memory.";
+    return false;
+  }
   parser->lines = NULL;
   parser->count = 0;
   parser->index = 0;
@@ -120,11 +124,12 @@ static bool yamlCollectLines(YamlParser* parser, const char* source) {
     if (parser->count >= capacity) {
       int oldCapacity = capacity;
       capacity = oldCapacity == 0 ? 16 : oldCapacity * 2;
-      parser->lines = (YamlLine*)realloc(parser->lines, sizeof(YamlLine) * (size_t)capacity);
-      if (!parser->lines) {
-        fprintf(stderr, "Out of memory.\n");
-        exit(1);
+      YamlLine* resized = (YamlLine*)realloc(parser->lines, sizeof(YamlLine) * (size_t)capacity);
+      if (!resized) {
+        parser->error = "yaml.parse out of memory.";
+        return false;
       }
+      parser->lines = resized;
     }
     parser->lines[parser->count].text = content;
     parser->lines[parser->count].indent = indent;
@@ -153,6 +158,12 @@ static ObjString* yamlParseString(VM* vm, const char* text, bool* ok, const char
           case '\\': bufferAppendChar(&buffer, '\\'); break;
           default: bufferAppendChar(&buffer, c); break;
         }
+        if (buffer.failed) {
+          bufferFree(&buffer);
+          *ok = false;
+          *error = "yaml.parse out of memory.";
+          return NULL;
+        }
         escaped = false;
         continue;
       }
@@ -164,9 +175,19 @@ static ObjString* yamlParseString(VM* vm, const char* text, bool* ok, const char
         ObjString* result = copyStringWithLength(vm, buffer.data ? buffer.data : "",
                                                  (int)buffer.length);
         bufferFree(&buffer);
+        if (!result) {
+          *ok = false;
+          *error = "yaml.parse out of memory.";
+        }
         return result;
       }
       bufferAppendChar(&buffer, c);
+      if (buffer.failed) {
+        bufferFree(&buffer);
+        *ok = false;
+        *error = "yaml.parse out of memory.";
+        return NULL;
+      }
     }
     bufferFree(&buffer);
     *ok = false;
@@ -181,15 +202,31 @@ static ObjString* yamlParseString(VM* vm, const char* text, bool* ok, const char
       if (c == '\'') {
         if (text[i + 1] == '\'') {
           bufferAppendChar(&buffer, '\'');
+          if (buffer.failed) {
+            bufferFree(&buffer);
+            *ok = false;
+            *error = "yaml.parse out of memory.";
+            return NULL;
+          }
           i++;
           continue;
         }
         ObjString* result = copyStringWithLength(vm, buffer.data ? buffer.data : "",
                                                  (int)buffer.length);
         bufferFree(&buffer);
+        if (!result) {
+          *ok = false;
+          *error = "yaml.parse out of memory.";
+        }
         return result;
       }
       bufferAppendChar(&buffer, c);
+      if (buffer.failed) {
+        bufferFree(&buffer);
+        *ok = false;
+        *error = "yaml.parse out of memory.";
+        return NULL;
+      }
     }
     bufferFree(&buffer);
     *ok = false;
@@ -203,7 +240,13 @@ static Value yamlParseScalar(VM* vm, const char* text, bool* ok, const char** er
   char* trimmed = yamlTrimLeft((char*)text);
   yamlTrimRight(trimmed);
   if (*trimmed == '\0') {
-    return OBJ_VAL(copyString(vm, ""));
+    ObjString* empty = copyString(vm, "");
+    if (!empty) {
+      *ok = false;
+      *error = "yaml.parse out of memory.";
+      return NULL_VAL;
+    }
+    return OBJ_VAL(empty);
   }
   if (strcmp(trimmed, "null") == 0 || strcmp(trimmed, "~") == 0) {
     return NULL_VAL;
@@ -217,6 +260,11 @@ static Value yamlParseScalar(VM* vm, const char* text, bool* ok, const char** er
   if (trimmed[0] == '"' || trimmed[0] == '\'') {
     ObjString* value = yamlParseString(vm, trimmed, ok, error);
     if (!*ok) return NULL_VAL;
+    if (!value) {
+      *ok = false;
+      *error = "yaml.parse out of memory.";
+      return NULL_VAL;
+    }
     return OBJ_VAL(value);
   }
 
@@ -226,6 +274,11 @@ static Value yamlParseScalar(VM* vm, const char* text, bool* ok, const char** er
     return NUMBER_VAL(number);
   }
   ObjString* str = copyString(vm, trimmed);
+  if (!str) {
+    *ok = false;
+    *error = "yaml.parse out of memory.";
+    return NULL_VAL;
+  }
   return OBJ_VAL(str);
 }
 
@@ -272,6 +325,11 @@ static Value yamlParseBlock(VM* vm, YamlParser* parser, int indent, bool* ok);
 
 static Value yamlParseList(VM* vm, YamlParser* parser, int indent, bool* ok) {
   ObjArray* array = newArray(vm);
+  if (!array) {
+    parser->error = "yaml.parse out of memory.";
+    *ok = false;
+    return NULL_VAL;
+  }
   while (parser->index < parser->count) {
     YamlLine* line = &parser->lines[parser->index];
     if (line->indent != indent) break;
@@ -310,6 +368,11 @@ static Value yamlParseList(VM* vm, YamlParser* parser, int indent, bool* ok) {
 
 static Value yamlParseMap(VM* vm, YamlParser* parser, int indent, bool* ok) {
   ObjMap* map = newMap(vm);
+  if (!map) {
+    parser->error = "yaml.parse out of memory.";
+    *ok = false;
+    return NULL_VAL;
+  }
   while (parser->index < parser->count) {
     YamlLine* line = &parser->lines[parser->index];
     if (line->indent != indent) break;
@@ -431,6 +494,7 @@ static bool yamlStringNeedsQuotes(const char* text) {
 
 static bool yamlAppendEscaped(ByteBuffer* buffer, ObjString* string) {
   bufferAppendChar(buffer, '"');
+  if (buffer->failed) return false;
   for (int i = 0; i < string->length; i++) {
     char c = string->chars[i];
     switch (c) {
@@ -443,7 +507,7 @@ static bool yamlAppendEscaped(ByteBuffer* buffer, ObjString* string) {
     }
   }
   bufferAppendChar(buffer, '"');
-  return true;
+  return !buffer->failed;
 }
 
 static bool yamlStringifyValue(VM* vm, ByteBuffer* buffer, Value value,
@@ -457,16 +521,32 @@ static bool yamlStringifyArray(VM* vm, ByteBuffer* buffer, ObjArray* array,
   }
   if (array->count == 0) {
     bufferAppendN(buffer, "[]", 2);
+    if (buffer->failed) {
+      *error = "yaml.stringify out of memory.";
+      return false;
+    }
     return true;
   }
   for (int i = 0; i < array->count; i++) {
     yamlAppendIndent(buffer, indent);
     bufferAppendN(buffer, "- ", 2);
+    if (buffer->failed) {
+      *error = "yaml.stringify out of memory.";
+      return false;
+    }
     Value item = array->items[i];
     if (isObjType(item, OBJ_ARRAY) || isObjType(item, OBJ_MAP)) {
+      if (buffer->length == 0) {
+        *error = "yaml.stringify failed.";
+        return false;
+      }
       buffer->length -= 1;
       buffer->data[buffer->length] = '\0';
       bufferAppendChar(buffer, '\n');
+      if (buffer->failed) {
+        *error = "yaml.stringify out of memory.";
+        return false;
+      }
       if (!yamlStringifyValue(vm, buffer, item, indent + 2, depth + 1, error)) {
         return false;
       }
@@ -477,6 +557,10 @@ static bool yamlStringifyArray(VM* vm, ByteBuffer* buffer, ObjArray* array,
     }
     if (i + 1 < array->count) {
       bufferAppendChar(buffer, '\n');
+      if (buffer->failed) {
+        *error = "yaml.stringify out of memory.";
+        return false;
+      }
     }
   }
   return true;
@@ -491,6 +575,10 @@ static bool yamlStringifyMap(VM* vm, ByteBuffer* buffer, ObjMap* map,
   int count = mapCount(map);
   if (count == 0) {
     bufferAppendN(buffer, "{}", 2);
+    if (buffer->failed) {
+      *error = "yaml.stringify out of memory.";
+      return false;
+    }
     return true;
   }
 
@@ -515,19 +603,38 @@ static bool yamlStringifyMap(VM* vm, ByteBuffer* buffer, ObjMap* map,
     }
     yamlAppendIndent(buffer, indent);
     if (yamlStringNeedsQuotes(key->chars)) {
-      yamlAppendEscaped(buffer, key);
+      if (!yamlAppendEscaped(buffer, key)) {
+        free(keys);
+        *error = "yaml.stringify out of memory.";
+        return false;
+      }
     } else {
       bufferAppendN(buffer, key->chars, (size_t)key->length);
+      if (buffer->failed) {
+        free(keys);
+        *error = "yaml.stringify out of memory.";
+        return false;
+      }
     }
     if (isObjType(value, OBJ_ARRAY) || isObjType(value, OBJ_MAP)) {
       bufferAppendChar(buffer, ':');
       bufferAppendChar(buffer, '\n');
+      if (buffer->failed) {
+        free(keys);
+        *error = "yaml.stringify out of memory.";
+        return false;
+      }
       if (!yamlStringifyValue(vm, buffer, value, indent + 2, depth + 1, error)) {
         free(keys);
         return false;
       }
     } else {
       bufferAppendN(buffer, ": ", 2);
+      if (buffer->failed) {
+        free(keys);
+        *error = "yaml.stringify out of memory.";
+        return false;
+      }
       if (!yamlStringifyValue(vm, buffer, value, 0, depth + 1, error)) {
         free(keys);
         return false;
@@ -535,6 +642,11 @@ static bool yamlStringifyMap(VM* vm, ByteBuffer* buffer, ObjMap* map,
     }
     if (i + 1 < keyCount) {
       bufferAppendChar(buffer, '\n');
+      if (buffer->failed) {
+        free(keys);
+        *error = "yaml.stringify out of memory.";
+        return false;
+      }
     }
   }
   free(keys);
@@ -550,6 +662,10 @@ static bool yamlStringifyValue(VM* vm, ByteBuffer* buffer, Value value,
   }
   if (IS_NULL(value)) {
     bufferAppendN(buffer, "null", 4);
+    if (buffer->failed) {
+      *error = "yaml.stringify out of memory.";
+      return false;
+    }
     return true;
   }
   if (IS_BOOL(value)) {
@@ -557,6 +673,10 @@ static bool yamlStringifyValue(VM* vm, ByteBuffer* buffer, Value value,
       bufferAppendN(buffer, "true", 4);
     } else {
       bufferAppendN(buffer, "false", 5);
+    }
+    if (buffer->failed) {
+      *error = "yaml.stringify out of memory.";
+      return false;
     }
     return true;
   }
@@ -570,14 +690,26 @@ static bool yamlStringifyValue(VM* vm, ByteBuffer* buffer, Value value,
     if (length < 0) length = 0;
     if (length >= (int)sizeof(num)) length = (int)sizeof(num) - 1;
     bufferAppendN(buffer, num, (size_t)length);
+    if (buffer->failed) {
+      *error = "yaml.stringify out of memory.";
+      return false;
+    }
     return true;
   }
   if (isObjType(value, OBJ_STRING)) {
     ObjString* str = (ObjString*)AS_OBJ(value);
     if (yamlStringNeedsQuotes(str->chars)) {
-      return yamlAppendEscaped(buffer, str);
+      if (!yamlAppendEscaped(buffer, str)) {
+        *error = "yaml.stringify out of memory.";
+        return false;
+      }
+      return true;
     }
     bufferAppendN(buffer, str->chars, (size_t)str->length);
+    if (buffer->failed) {
+      *error = "yaml.stringify out of memory.";
+      return false;
+    }
     return true;
   }
   if (isObjType(value, OBJ_ARRAY)) {
@@ -604,6 +736,9 @@ static Value nativeYamlStringify(VM* vm, int argc, Value* args) {
   ObjString* result = copyStringWithLength(vm, buffer.data ? buffer.data : "",
                                            (int)buffer.length);
   bufferFree(&buffer);
+  if (!result) {
+    return runtimeErrorValue(vm, "yaml.stringify out of memory.");
+  }
   return OBJ_VAL(result);
 }
 

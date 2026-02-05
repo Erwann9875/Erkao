@@ -65,8 +65,8 @@ static bool randomFillFromOs(void* buffer, size_t length) {
   return true;
 #else
   unsigned char* out = (unsigned char*)buffer;
-#ifdef __linux__
   size_t offset = 0;
+#ifdef __linux__
   while (offset < length) {
     ssize_t readBytes = getrandom(out + offset, length - offset, 0);
     if (readBytes > 0) {
@@ -82,7 +82,6 @@ static bool randomFillFromOs(void* buffer, size_t length) {
 #endif
   int fd = open("/dev/urandom", O_RDONLY);
   if (fd < 0) return false;
-  size_t offset = 0;
   while (offset < length) {
     ssize_t readBytes = read(fd, out + offset, length - offset);
     if (readBytes > 0) {

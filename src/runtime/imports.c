@@ -28,6 +28,10 @@ static char* copyCString(const char* src, size_t length) {
   return platform_strndup(src, length);
 }
 
+static void reportOutOfMemory(void) {
+  fprintf(stderr, "RuntimeError: Out of memory.\n");
+}
+
 typedef struct {
   char** parts;
   int count;
@@ -52,14 +56,21 @@ static void pathPartsPush(PathParts* parts, const char* start, size_t length) {
   if (parts->capacity < parts->count + 1) {
     int oldCapacity = parts->capacity;
     parts->capacity = oldCapacity == 0 ? 8 : oldCapacity * 2;
-    parts->parts = (char**)realloc(parts->parts,
-                                   sizeof(char*) * (size_t)parts->capacity);
-    if (!parts->parts) {
-      fprintf(stderr, "Out of memory.\n");
-      exit(1);
+    char** resized = (char**)realloc(parts->parts,
+                                     sizeof(char*) * (size_t)parts->capacity);
+    if (!resized) {
+      parts->capacity = oldCapacity;
+      reportOutOfMemory();
+      return;
     }
+    parts->parts = resized;
   }
-  parts->parts[parts->count++] = copyCString(start, length);
+  char* copy = copyCString(start, length);
+  if (!copy) {
+    reportOutOfMemory();
+    return;
+  }
+  parts->parts[parts->count++] = copy;
 }
 
 static void pathPartsPop(PathParts* parts) {
@@ -145,8 +156,9 @@ static char* normalizePath(const char* path) {
 
   char* buffer = (char*)malloc(total + 1);
   if (!buffer) {
-    fprintf(stderr, "Out of memory.\n");
-    exit(1);
+    pathPartsFree(&parts);
+    reportOutOfMemory();
+    return NULL;
   }
   size_t offset = 0;
   if (isAbs) {
@@ -246,8 +258,8 @@ static char* resolveModuleFile(const char* basePath) {
     size_t length = strlen(basePath);
     char* withExt = (char*)malloc(length + 4);
     if (!withExt) {
-      fprintf(stderr, "Out of memory.\n");
-      exit(1);
+      reportOutOfMemory();
+      return NULL;
     }
     memcpy(withExt, basePath, length);
     memcpy(withExt + length, ".ek", 4);
@@ -701,8 +713,8 @@ static char* findBestVersionInDir(const char* baseDir, const SemverRange* range)
   size_t length = strlen(baseDir);
   char* pattern = (char*)malloc(length + 3);
   if (!pattern) {
-    fprintf(stderr, "Out of memory.\n");
-    exit(1);
+    reportOutOfMemory();
+    return NULL;
   }
   memcpy(pattern, baseDir, length);
   pattern[length] = '\\';
@@ -763,8 +775,8 @@ static char* findLatestVersionInDir(const char* baseDir) {
   size_t length = strlen(baseDir);
   char* pattern = (char*)malloc(length + 3);
   if (!pattern) {
-    fprintf(stderr, "Out of memory.\n");
-    exit(1);
+    reportOutOfMemory();
+    return NULL;
   }
   memcpy(pattern, baseDir, length);
   pattern[length] = '\\';
@@ -876,15 +888,25 @@ static void packageMetaAddExport(PackageMeta* meta, const char* name, const char
   if (meta->capacity < meta->count + 1) {
     int oldCap = meta->capacity;
     meta->capacity = oldCap == 0 ? 4 : oldCap * 2;
-    meta->exports = (PackageExport*)realloc(meta->exports,
-                                            sizeof(PackageExport) * (size_t)meta->capacity);
-    if (!meta->exports) {
-      fprintf(stderr, "Out of memory.\n");
-      exit(1);
+    PackageExport* resized = (PackageExport*)realloc(
+        meta->exports, sizeof(PackageExport) * (size_t)meta->capacity);
+    if (!resized) {
+      meta->capacity = oldCap;
+      reportOutOfMemory();
+      return;
     }
+    meta->exports = resized;
   }
   meta->exports[meta->count].name = copyCString(name, strlen(name));
   meta->exports[meta->count].path = copyCString(path, strlen(path));
+  if (!meta->exports[meta->count].name || !meta->exports[meta->count].path) {
+    free(meta->exports[meta->count].name);
+    free(meta->exports[meta->count].path);
+    meta->exports[meta->count].name = NULL;
+    meta->exports[meta->count].path = NULL;
+    reportOutOfMemory();
+    return;
+  }
   meta->count++;
 }
 
@@ -1034,8 +1056,9 @@ char* resolveImportPath(VM* vm, const char* currentPath, const char* importPath)
         size_t length = strlen(base);
         resolved = (char*)malloc(length + 4);
         if (!resolved) {
-          fprintf(stderr, "Out of memory.\n");
-          exit(1);
+          free(base);
+          reportOutOfMemory();
+          return NULL;
         }
         memcpy(resolved, base, length);
         memcpy(resolved + length, ".ek", 4);
@@ -1203,6 +1226,10 @@ ObjFunction* loadModuleFunction(VM* vm, Token keyword, const char* path) {
   }
 
   Program* program = programCreate(vm, source, path, function);
+  if (!program) {
+    free(source);
+    return NULL;
+  }
   function->program = program;
   
   return function;

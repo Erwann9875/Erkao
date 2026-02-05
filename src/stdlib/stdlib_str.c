@@ -16,7 +16,9 @@ static Value nativeStrUpper(VM* vm, int argc, Value* args) {
     buffer[i] = (char)toupper((unsigned char)input->chars[i]);
   }
   buffer[input->length] = '\0';
-  return OBJ_VAL(takeStringWithLength(vm, buffer, input->length));
+  ObjString* result = takeStringWithLength(vm, buffer, input->length);
+  if (!result) return NULL_VAL;
+  return OBJ_VAL(result);
 }
 
 static Value nativeStrLower(VM* vm, int argc, Value* args) {
@@ -33,7 +35,9 @@ static Value nativeStrLower(VM* vm, int argc, Value* args) {
     buffer[i] = (char)tolower((unsigned char)input->chars[i]);
   }
   buffer[input->length] = '\0';
-  return OBJ_VAL(takeStringWithLength(vm, buffer, input->length));
+  ObjString* result = takeStringWithLength(vm, buffer, input->length);
+  if (!result) return NULL_VAL;
+  return OBJ_VAL(result);
 }
 
 static Value nativeStrTrim(VM* vm, int argc, Value* args) {
@@ -50,7 +54,9 @@ static Value nativeStrTrim(VM* vm, int argc, Value* args) {
   while (end > start && isspace((unsigned char)input->chars[end - 1])) {
     end--;
   }
-  return OBJ_VAL(copyStringWithLength(vm, input->chars + start, end - start));
+  ObjString* result = copyStringWithLength(vm, input->chars + start, end - start);
+  if (!result) return NULL_VAL;
+  return OBJ_VAL(result);
 }
 
 static Value nativeStrTrimStart(VM* vm, int argc, Value* args) {
@@ -63,7 +69,9 @@ static Value nativeStrTrimStart(VM* vm, int argc, Value* args) {
   while (start < input->length && isspace((unsigned char)input->chars[start])) {
     start++;
   }
-  return OBJ_VAL(copyStringWithLength(vm, input->chars + start, input->length - start));
+  ObjString* result = copyStringWithLength(vm, input->chars + start, input->length - start);
+  if (!result) return NULL_VAL;
+  return OBJ_VAL(result);
 }
 
 static Value nativeStrTrimEnd(VM* vm, int argc, Value* args) {
@@ -76,7 +84,9 @@ static Value nativeStrTrimEnd(VM* vm, int argc, Value* args) {
   while (end > 0 && isspace((unsigned char)input->chars[end - 1])) {
     end--;
   }
-  return OBJ_VAL(copyStringWithLength(vm, input->chars, end));
+  ObjString* result = copyStringWithLength(vm, input->chars, end);
+  if (!result) return NULL_VAL;
+  return OBJ_VAL(result);
 }
 
 static Value nativeStrStartsWith(VM* vm, int argc, Value* args) {
@@ -122,12 +132,17 @@ static Value nativeStrSplit(VM* vm, int argc, Value* args) {
   ObjString* sep = (ObjString*)AS_OBJ(args[1]);
 
   ObjArray* array = newArray(vm);
+  if (!array) {
+    return runtimeErrorValue(vm, "str.split out of memory.");
+  }
   if (sep->length == 0) {
     for (int i = 0; i < text->length; i++) {
       char chunk[2];
       chunk[0] = text->chars[i];
       chunk[1] = '\0';
-      arrayWrite(array, OBJ_VAL(copyStringWithLength(vm, chunk, 1)));
+      ObjString* piece = copyStringWithLength(vm, chunk, 1);
+      if (!piece) return NULL_VAL;
+      arrayWrite(array, OBJ_VAL(piece));
     }
     return OBJ_VAL(array);
   }
@@ -138,11 +153,15 @@ static Value nativeStrSplit(VM* vm, int argc, Value* args) {
     const char* found = strstr(current, sep->chars);
     if (!found) {
       int length = (int)(end - current);
-      arrayWrite(array, OBJ_VAL(copyStringWithLength(vm, current, length)));
+      ObjString* piece = copyStringWithLength(vm, current, length);
+      if (!piece) return NULL_VAL;
+      arrayWrite(array, OBJ_VAL(piece));
       break;
     }
     int length = (int)(found - current);
-    arrayWrite(array, OBJ_VAL(copyStringWithLength(vm, current, length)));
+    ObjString* piece = copyStringWithLength(vm, current, length);
+    if (!piece) return NULL_VAL;
+    arrayWrite(array, OBJ_VAL(piece));
     current = found + sep->length;
   }
 
@@ -152,7 +171,9 @@ static Value nativeStrSplit(VM* vm, int argc, Value* args) {
 static Value nativeStrBuilder(VM* vm, int argc, Value* args) {
   (void)argc;
   (void)args;
-  return OBJ_VAL(newArray(vm));
+  ObjArray* array = newArray(vm);
+  if (!array) return NULL_VAL;
+  return OBJ_VAL(array);
 }
 
 static Value nativeStrAppend(VM* vm, int argc, Value* args) {
@@ -196,15 +217,24 @@ static Value nativeStrBuild(VM* vm, int argc, Value* args) {
     ObjString* item = (ObjString*)AS_OBJ(array->items[i]);
     if (i > 0 && sepLength > 0) {
       bufferAppendN(&buffer, sepChars, (size_t)sepLength);
+      if (buffer.failed) {
+        bufferFree(&buffer);
+        return runtimeErrorValue(vm, "str.build out of memory.");
+      }
     }
     if (item->length > 0) {
       bufferAppendN(&buffer, item->chars, (size_t)item->length);
+      if (buffer.failed) {
+        bufferFree(&buffer);
+        return runtimeErrorValue(vm, "str.build out of memory.");
+      }
     }
   }
 
   ObjString* result = copyStringWithLength(vm, buffer.data ? buffer.data : "",
                                            (int)buffer.length);
   bufferFree(&buffer);
+  if (!result) return NULL_VAL;
   return OBJ_VAL(result);
 }
 
@@ -227,15 +257,24 @@ static Value nativeStrJoin(VM* vm, int argc, Value* args) {
     ObjString* item = (ObjString*)AS_OBJ(array->items[i]);
     if (i > 0 && sep->length > 0) {
       bufferAppendN(&buffer, sep->chars, (size_t)sep->length);
+      if (buffer.failed) {
+        bufferFree(&buffer);
+        return runtimeErrorValue(vm, "str.join out of memory.");
+      }
     }
     if (item->length > 0) {
       bufferAppendN(&buffer, item->chars, (size_t)item->length);
+      if (buffer.failed) {
+        bufferFree(&buffer);
+        return runtimeErrorValue(vm, "str.join out of memory.");
+      }
     }
   }
 
   ObjString* result = copyStringWithLength(vm, buffer.data ? buffer.data : "",
                                            (int)buffer.length);
   bufferFree(&buffer);
+  if (!result) return NULL_VAL;
   return OBJ_VAL(result);
 }
 
@@ -261,15 +300,28 @@ static Value nativeStrReplace(VM* vm, int argc, Value* args) {
   ByteBuffer buffer;
   bufferInit(&buffer);
   bufferAppendN(&buffer, text->chars, (size_t)(found - text->chars));
+  if (buffer.failed) {
+    bufferFree(&buffer);
+    return runtimeErrorValue(vm, "str.replace out of memory.");
+  }
   if (repl->length > 0) {
     bufferAppendN(&buffer, repl->chars, (size_t)repl->length);
+    if (buffer.failed) {
+      bufferFree(&buffer);
+      return runtimeErrorValue(vm, "str.replace out of memory.");
+    }
   }
   const char* tail = found + needle->length;
   bufferAppendN(&buffer, tail, (size_t)(text->chars + text->length - tail));
+  if (buffer.failed) {
+    bufferFree(&buffer);
+    return runtimeErrorValue(vm, "str.replace out of memory.");
+  }
 
   ObjString* result = copyStringWithLength(vm, buffer.data ? buffer.data : "",
                                            (int)buffer.length);
   bufferFree(&buffer);
+  if (!result) return NULL_VAL;
   return OBJ_VAL(result);
 }
 
@@ -297,17 +349,30 @@ static Value nativeStrReplaceAll(VM* vm, int argc, Value* args) {
   bufferInit(&buffer);
   while (found) {
     bufferAppendN(&buffer, cursor, (size_t)(found - cursor));
+    if (buffer.failed) {
+      bufferFree(&buffer);
+      return runtimeErrorValue(vm, "str.replaceAll out of memory.");
+    }
     if (repl->length > 0) {
       bufferAppendN(&buffer, repl->chars, (size_t)repl->length);
+      if (buffer.failed) {
+        bufferFree(&buffer);
+        return runtimeErrorValue(vm, "str.replaceAll out of memory.");
+      }
     }
     cursor = found + needle->length;
     found = strstr(cursor, needle->chars);
   }
   bufferAppendN(&buffer, cursor, (size_t)(text->chars + text->length - cursor));
+  if (buffer.failed) {
+    bufferFree(&buffer);
+    return runtimeErrorValue(vm, "str.replaceAll out of memory.");
+  }
 
   ObjString* result = copyStringWithLength(vm, buffer.data ? buffer.data : "",
                                            (int)buffer.length);
   bufferFree(&buffer);
+  if (!result) return NULL_VAL;
   return OBJ_VAL(result);
 }
 
@@ -322,7 +387,9 @@ static Value nativeStrRepeat(VM* vm, int argc, Value* args) {
     return runtimeErrorValue(vm, "str.repeat expects a non-negative count.");
   }
   if (count == 0 || text->length == 0) {
-    return OBJ_VAL(copyString(vm, ""));
+    ObjString* empty = copyString(vm, "");
+    if (!empty) return NULL_VAL;
+    return OBJ_VAL(empty);
   }
   if (text->length > 0 && count > INT_MAX / text->length) {
     return runtimeErrorValue(vm, "str.repeat result too large.");
@@ -338,7 +405,9 @@ static Value nativeStrRepeat(VM* vm, int argc, Value* args) {
     cursor += text->length;
   }
   buffer[total] = '\0';
-  return OBJ_VAL(takeStringWithLength(vm, buffer, total));
+  ObjString* result = takeStringWithLength(vm, buffer, total);
+  if (!result) return NULL_VAL;
+  return OBJ_VAL(result);
 }
 
 

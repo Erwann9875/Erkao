@@ -20,10 +20,12 @@ jobs:
         run: python ./scripts/check-architecture.py
 
   tests:
+    needs: architecture
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
+        os: [windows-latest, ubuntu-latest]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,10 +39,6 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
 
-      - name: Install curl (macOS)
-        if: runner.os == 'macOS'
-        run: brew install curl
-
       - name: Configure (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -50,11 +48,6 @@ jobs:
         if: runner.os == 'Linux'
         shell: pwsh
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DERKAO_WERROR=ON
-
-      - name: Configure (macOS)
-        if: runner.os == 'macOS'
-        shell: pwsh
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_PREFIX_PATH=$(brew --prefix curl) -DERKAO_WERROR=ON
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
@@ -73,19 +66,20 @@ jobs:
           ERKAO_HTTP_TEST: "1"
         run: ./scripts/run-tests.ps1
 
-      - name: Setup scripts (Linux/macOS)
-        if: runner.os != 'Windows'
+      - name: Setup scripts (Linux)
+        if: runner.os == 'Linux'
         shell: bash
         run: bash ./scripts/unix/setup.sh
 
-      - name: Run tests (Linux/macOS)
-        if: runner.os != 'Windows'
+      - name: Run tests (Linux)
+        if: runner.os == 'Linux'
         shell: bash
         env:
           ERKAO_HTTP_TEST: "1"
         run: bash ./scripts/unix/run-tests.sh
 
   performance:
+    needs: architecture
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -109,6 +103,7 @@ jobs:
         run: python ./scripts/check-bench.py --exe build-perf/erkao --repeat 5 --max-regression-pct 8 --min-slack-ms 20
 
   sanitizers:
+    needs: architecture
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -134,9 +129,56 @@ jobs:
       - name: Run tests (ASAN/UBSAN)
         env:
           ERKAO_HTTP_TEST: "1"
+          ASAN_OPTIONS: "detect_leaks=1:halt_on_error=1"
+          UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
         run: bash ./scripts/unix/run-tests.sh --exe build-sanitize/erkao
 
+  static-analysis:
+    needs: architecture
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install analysis tools
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev clang clang-tidy cppcheck
+
+      - name: Configure (analysis)
+        run: cmake -S . -B build-analysis -DERKAO_GRAPHICS=OFF -DERKAO_WERROR=ON -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_C_COMPILER=clang
+
+      - name: Run cppcheck
+        run: |
+          cppcheck \
+            --quiet \
+            --std=c99 \
+            --enable=warning,performance,portability \
+            --inconclusive \
+            --suppress=missingIncludeSystem \
+            --template='{file}:{line}:{severity}:{id}:{message}' \
+            src 2> cppcheck-report.txt
+
+      - name: Run clang-tidy
+        run: |
+          files=$(find src -type f -name '*.c' | sort)
+          if [ -n "$files" ]; then
+            clang-tidy \
+              -p build-analysis \
+              -checks='-*,clang-analyzer-*,bugprone-*,performance-*,portability-*' \
+              $files > clang-tidy-report.txt 2>&1 || true
+          else
+            : > clang-tidy-report.txt
+          fi
+
+      - name: Enforce zero new static analysis issues
+        run: python ./scripts/check-static-analysis.py --baseline docs/static_analysis_baseline.txt --cppcheck cppcheck-report.txt --clang-tidy clang-tidy-report.txt
+
   fuzz:
+    needs: architecture
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

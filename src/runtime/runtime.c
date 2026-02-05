@@ -160,6 +160,20 @@ void runtimeError(VM* vm, Token token, const char* message) {
   vm->hadError = true;
 }
 
+bool runtimeOutOfMemory(VM* vm, const char* context) {
+  const char* message = context && context[0] != '\0'
+      ? context
+      : "Out of memory.";
+  if (!vm) {
+    fprintf(stderr, "RuntimeError: %s\n", message);
+    return false;
+  }
+  Token token;
+  memset(&token, 0, sizeof(Token));
+  runtimeError(vm, token, message);
+  return false;
+}
+
 bool isTruthy(Value value) {
   if (IS_NULL(value)) return false;
   if (IS_BOOL(value)) return AS_BOOL(value);

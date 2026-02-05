@@ -29,10 +29,7 @@ static wchar_t* utf8ToWide(const char* chars, int length) {
   if (needed <= 0) return NULL;
   int alloc = length == -1 ? needed : needed + 1;
   wchar_t* buffer = (wchar_t*)malloc(sizeof(wchar_t) * (size_t)alloc);
-  if (!buffer) {
-    fprintf(stderr, "Out of memory.\n");
-    exit(1);
-  }
+  if (!buffer) return NULL;
   MultiByteToWideChar(CP_UTF8, 0, chars, length, buffer, needed);
   if (length != -1) {
     buffer[needed] = L'\0';
@@ -42,10 +39,7 @@ static wchar_t* utf8ToWide(const char* chars, int length) {
 
 static wchar_t* wideSubstring(const wchar_t* start, DWORD length) {
   wchar_t* buffer = (wchar_t*)malloc(sizeof(wchar_t) * ((size_t)length + 1));
-  if (!buffer) {
-    fprintf(stderr, "Out of memory.\n");
-    exit(1);
-  }
+  if (!buffer) return NULL;
   if (length > 0) {
     wmemcpy(buffer, start, length);
   }
@@ -58,10 +52,7 @@ static char* wideToUtf8(const wchar_t* chars, int length, int* outLength) {
   if (needed <= 0) return NULL;
   int alloc = length == -1 ? needed : needed + 1;
   char* buffer = (char*)malloc((size_t)alloc);
-  if (!buffer) {
-    fprintf(stderr, "Out of memory.\n");
-    exit(1);
-  }
+  if (!buffer) return NULL;
   WideCharToMultiByte(CP_UTF8, 0, chars, length, buffer, needed, NULL, NULL);
   if (length == -1) {
     buffer[needed - 1] = '\0';
@@ -77,6 +68,9 @@ static Value httpRequest(VM* vm, const char* method, ObjString* url,
                          const char* body, size_t bodyLength, const char* message) {
   Value result = NULL_VAL;
   bool ok = false;
+  ByteBuffer bodyBuffer;
+  bufferInit(&bodyBuffer);
+  wchar_t* headerWide = NULL;
 
   wchar_t* wideUrl = utf8ToWide(url->chars, -1);
   if (!wideUrl) return runtimeErrorValue(vm, message);
@@ -95,6 +89,10 @@ static Value httpRequest(VM* vm, const char* method, ObjString* url,
   }
 
   wchar_t* host = wideSubstring(parts.lpszHostName, parts.dwHostNameLength);
+  if (!host) {
+    free(wideUrl);
+    return runtimeErrorValue(vm, message);
+  }
   DWORD pathLength = parts.dwUrlPathLength + parts.dwExtraInfoLength;
   wchar_t* path = NULL;
   if (pathLength == 0) {
@@ -102,8 +100,9 @@ static Value httpRequest(VM* vm, const char* method, ObjString* url,
   } else {
     path = (wchar_t*)malloc(sizeof(wchar_t) * ((size_t)pathLength + 1));
     if (!path) {
-      fprintf(stderr, "Out of memory.\n");
-      exit(1);
+      free(wideUrl);
+      free(host);
+      return runtimeErrorValue(vm, message);
     }
     if (parts.dwUrlPathLength > 0) {
       wmemcpy(path, parts.lpszUrlPath, parts.dwUrlPathLength);
@@ -112,6 +111,11 @@ static Value httpRequest(VM* vm, const char* method, ObjString* url,
       wmemcpy(path + parts.dwUrlPathLength, parts.lpszExtraInfo, parts.dwExtraInfoLength);
     }
     path[pathLength] = L'\0';
+  }
+  if (!path) {
+    free(wideUrl);
+    free(host);
+    return runtimeErrorValue(vm, message);
   }
 
   wchar_t* wideMethod = utf8ToWide(method, -1);
@@ -156,24 +160,19 @@ static Value httpRequest(VM* vm, const char* method, ObjString* url,
                       WINHTTP_NO_HEADER_INDEX);
 
   DWORD headerSize = 0;
-  wchar_t* headerWide = NULL;
-  if (!WinHttpQueryHeaders(request, WINHTTP_QUERY_RAW_HEADERS_CRLF,
+    if (!WinHttpQueryHeaders(request, WINHTTP_QUERY_RAW_HEADERS_CRLF,
                            WINHTTP_HEADER_NAME_BY_INDEX, NULL, &headerSize,
                            WINHTTP_NO_HEADER_INDEX)) {
     if (GetLastError() == ERROR_INSUFFICIENT_BUFFER && headerSize > 0) {
       headerWide = (wchar_t*)malloc(headerSize);
       if (!headerWide) {
-        fprintf(stderr, "Out of memory.\n");
-        exit(1);
+        goto request_cleanup;
       }
       WinHttpQueryHeaders(request, WINHTTP_QUERY_RAW_HEADERS_CRLF,
                           WINHTTP_HEADER_NAME_BY_INDEX, headerWide, &headerSize,
                           WINHTTP_NO_HEADER_INDEX);
     }
   }
-
-  ByteBuffer bodyBuffer;
-  bufferInit(&bodyBuffer);
 
   for (;;) {
     DWORD available = 0;
@@ -182,8 +181,7 @@ static Value httpRequest(VM* vm, const char* method, ObjString* url,
 
     char* chunk = (char*)malloc(available);
     if (!chunk) {
-      fprintf(stderr, "Out of memory.\n");
-      exit(1);
+      goto request_cleanup;
     }
     DWORD read = 0;
     if (!WinHttpReadData(request, chunk, available, &read)) {
@@ -192,11 +190,18 @@ static Value httpRequest(VM* vm, const char* method, ObjString* url,
     }
     if (read > 0) {
       bufferAppendN(&bodyBuffer, chunk, read);
+      if (bodyBuffer.failed) {
+        free(chunk);
+        goto request_cleanup;
+      }
     }
     free(chunk);
   }
 
   ObjMap* response = newMap(vm);
+  if (!response) {
+    goto request_cleanup;
+  }
   mapSet(response, copyString(vm, "status"), NUMBER_VAL((double)status));
   mapSet(response, copyString(vm, "body"),
          OBJ_VAL(copyStringWithLength(vm,
@@ -214,15 +219,20 @@ static Value httpRequest(VM* vm, const char* method, ObjString* url,
       mapSet(response, copyString(vm, "headers"), OBJ_VAL(copyString(vm, "")));
     }
     free(headerWide);
+    headerWide = NULL;
   } else {
     mapSet(response, copyString(vm, "headers"), OBJ_VAL(copyString(vm, "")));
   }
 
-  bufferFree(&bodyBuffer);
   result = OBJ_VAL(response);
   ok = true;
 
 request_cleanup:
+  if (headerWide) {
+    free(headerWide);
+    headerWide = NULL;
+  }
+  bufferFree(&bodyBuffer);
   WinHttpCloseHandle(request);
   WinHttpCloseHandle(connect);
   WinHttpCloseHandle(session);
@@ -292,6 +302,7 @@ static size_t httpWriteCallback(char* contents, size_t size, size_t nmemb, void*
   size_t total = size * nmemb;
   ByteBuffer* buffer = (ByteBuffer*)userp;
   bufferAppendN(buffer, contents, total);
+  if (buffer->failed) return 0;
   return total;
 }
 
@@ -336,7 +347,7 @@ static Value httpRequest(VM* vm, const char* method, ObjString* url,
   }
 
   CURLcode code = curl_easy_perform(curl);
-  if (code != CURLE_OK) {
+  if (code != CURLE_OK || bodyBuffer.failed || headerBuffer.failed) {
     curl_easy_cleanup(curl);
     bufferFree(&bodyBuffer);
     bufferFree(&headerBuffer);
@@ -347,6 +358,12 @@ static Value httpRequest(VM* vm, const char* method, ObjString* url,
   curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
 
   ObjMap* response = newMap(vm);
+  if (!response) {
+    curl_easy_cleanup(curl);
+    bufferFree(&bodyBuffer);
+    bufferFree(&headerBuffer);
+    return runtimeErrorValue(vm, message);
+  }
   mapSet(response, copyString(vm, "status"), NUMBER_VAL((double)status));
   mapSet(response, copyString(vm, "body"),
          OBJ_VAL(copyStringWithLength(vm,
@@ -600,6 +617,9 @@ static bool httpReadHeaders(ErkaoSocket client, ByteBuffer* buffer, size_t* head
       return false;
     }
     bufferAppendN(buffer, chunk, (size_t)received);
+    if (buffer->failed) {
+      return false;
+    }
     if (httpFindHeaderEnd(buffer->data, buffer->length, headerEnd)) {
       return true;
     }
@@ -688,6 +708,7 @@ static bool httpAppendHeader(ByteBuffer* buffer, const char* name, const char* v
   bufferAppendN(buffer, ": ", 2);
   bufferAppendN(buffer, value, strlen(value));
   bufferAppendN(buffer, "\r\n", 2);
+  if (buffer->failed) return false;
   return true;
 }
 
@@ -755,6 +776,10 @@ static bool httpSendResponse(ErkaoSocket client, int status, const char* body,
                            "HTTP/1.1 %d %s\r\n", status, statusText);
   if (statusLen < 0) statusLen = 0;
   bufferAppendN(&response, statusLine, (size_t)statusLen);
+  if (response.failed) {
+    bufferFree(&response);
+    return false;
+  }
 
   bool hasContentType = false;
   if (!httpAppendHeadersFromMap(&response, headers, &hasContentType)) {
@@ -803,9 +828,17 @@ static bool httpSendResponse(ErkaoSocket client, int status, const char* body,
     return false;
   }
   bufferAppendN(&response, "\r\n", 2);
+  if (response.failed) {
+    bufferFree(&response);
+    return false;
+  }
 
   if (bodyLength > 0 && body) {
     bufferAppendN(&response, body, bodyLength);
+    if (response.failed) {
+      bufferFree(&response);
+      return false;
+    }
   }
 
   bool ok = httpSendAll(client,
@@ -918,6 +951,7 @@ static bool httpReadBody(ErkaoSocket client, ByteBuffer* buffer, size_t headerEn
     int received = recv(client, chunk, (int)toRead, 0);
     if (received <= 0) return false;
     bufferAppendN(buffer, chunk, (size_t)received);
+    if (buffer->failed) return false;
     remaining -= (size_t)received;
   }
   return remaining == 0;
@@ -1121,8 +1155,11 @@ static Value nativeHttpServe(VM* vm, int argc, Value* args) {
       size_t methodKeyLen = methodLen + 1 + pathLen;
       methodKey = (char*)malloc(methodKeyLen + 1);
       if (!methodKey) {
-        fprintf(stderr, "Out of memory.\n");
-        exit(1);
+        (void)httpSendResponse(client, 500, "internal error",
+                               strlen("internal error"), NULL, corsConfig);
+        bufferFree(&request);
+        erkaoCloseSocket(client);
+        continue;
       }
       memcpy(methodKey, method, methodLen);
       methodKey[methodLen] = ' ';
