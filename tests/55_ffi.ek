@@ -1,4 +1,5 @@
 import * as ffi from "ffi";
 
+env.set("ERKAO_ALLOW_FFI", "1");
 let lib = ffi.open(null);
 print("ffi", ffi.call(lib, "erkao_ffi_add", 2, 3));

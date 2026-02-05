@@ -13,6 +13,11 @@ let jsonRes = http.get(base + "/json");
 print(jsonRes["status"]);
 print(jsonRes["body"]);
 
+let headerInjectRes = http.get(base + "/header-inject");
+print(headerInjectRes["status"]);
+print(headerInjectRes["body"]);
+print(str.contains(headerInjectRes["headers"], "Injected:"));
+
 let postRes = http.post(base + "/submit", "ignored");
 print(postRes["status"]);
 print(postRes["body"]);

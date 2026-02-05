@@ -162,7 +162,7 @@ endif()
 
 function(erkao_link_libs target)
   if(WIN32)
-    target_link_libraries(${target} winhttp ws2_32)
+    target_link_libraries(${target} winhttp ws2_32 bcrypt)
   else()
     find_package(CURL REQUIRED)
     if(TARGET CURL::libcurl)

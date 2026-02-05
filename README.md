@@ -531,7 +531,7 @@ See `examples/packages_semver.ek` for a full example.
 - `math.clamp(value, min, max)`
 - `math.PI`
 - `math.E`
-- `random.seed(value)`
+- `random.seed(value)` (deterministic mode) / `random.seed(null)` (OS-secure RNG mode)
 - `random.int(max)` / `random.int(min, max)`
 - `random.float()` / `random.float(min, max)`
 - `random.choice(array)`
@@ -572,9 +572,9 @@ See `examples/packages_semver.ek` for a full example.
 - `os.tmp()`
 - `http.get(url)`
 - `http.post(url, body)`
-- `http.request(method, url, body)`
+- `http.request(method, url, body?)`
 - `http.serve(port, routes)`
-- `proc.run(cmd)`
+- `proc.run(program, args?)`
 - `time.now()`
 - `time.sleep(seconds)`
 - `time.format(timestamp, format, utc?)`
@@ -700,6 +700,7 @@ See `examples/plugins/hello_plugin.c` and `examples/plugins/hello_plugin.ek`.
   - A function that receives a request object `{ method, path, headers, body }` and returns a string or response map
 - `http.serve(port, routes, cors)` accepts an optional third parameter for CORS config: `{ origin: "*", methods: "GET, POST", headers: "Content-Type" }`
 - `http.serve` logs requests as `[IP] [YYYY-MM-DD HH:MM:SS] Called /path`.
+- `http.serve` enforces request/header size limits and socket timeouts (slow requests are rejected).
 - HTTP tests run by default and use the built-in HTTP server; set `ERKAO_HTTP_TEST=0` to skip.
 - `ERKAO_PATH` adds module search paths (separated by `;` on Windows, `:` elsewhere).
 - `ERKAO_PACKAGES` overrides the global packages directory.
@@ -707,3 +708,8 @@ See `examples/plugins/hello_plugin.c` and `examples/plugins/hello_plugin.ek`.
 - `ERKAO_MAX_HEAP` sets a heap limit in bytes (supports `K`, `M`, `G` suffixes).
 - `ERKAO_MAX_FRAMES` caps call stack depth (max `64`).
 - `ERKAO_MAX_STACK` caps value stack slots (max `16384`).
+- Unsafe features are disabled by default:
+  - `ERKAO_ALLOW_PROC=1` enables `proc.run`.
+  - `ERKAO_ALLOW_FFI=1` enables `ffi.open`/`ffi.call`.
+  - `ERKAO_ALLOW_PLUGINS=1` enables `plugin.load`.
+  - `ERKAO_ALLOW_UNSAFE=1` enables all unsafe features.

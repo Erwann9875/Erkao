@@ -182,6 +182,39 @@ static char* joinPaths(const char* dir, const char* rel) {
   return platform_path_join(dir, rel);
 }
 
+static bool pathCharEqual(char left, char right) {
+#ifdef _WIN32
+  return tolower((unsigned char)left) == tolower((unsigned char)right);
+#else
+  return left == right;
+#endif
+}
+
+static bool pathIsWithinRoot(const char* root, const char* candidate) {
+  if (!root || !candidate) return false;
+  size_t rootLen = strlen(root);
+  size_t candidateLen = strlen(candidate);
+
+  while (rootLen > 1 &&
+         (root[rootLen - 1] == '/' || root[rootLen - 1] == '\\')) {
+    if (rootLen == 3 && root[1] == ':') break;
+    if (rootLen == 2 &&
+        (root[0] == '/' || root[0] == '\\') &&
+        (root[1] == '/' || root[1] == '\\')) {
+      break;
+    }
+    rootLen--;
+  }
+
+  if (candidateLen < rootLen) return false;
+  for (size_t i = 0; i < rootLen; i++) {
+    if (!pathCharEqual(root[i], candidate[i])) return false;
+  }
+  if (candidateLen == rootLen) return true;
+  char next = candidate[rootLen];
+  return next == '/' || next == '\\';
+}
+
 static bool isRelativePath(const char* path) {
   if (!path || path[0] == '\0') return false;
   if (path[0] != '.') return false;
@@ -894,6 +927,9 @@ static bool readPackageMeta(const char* packageDir, PackageMeta* out) {
 
 static char* resolvePackageEntry(const char* versionDir, const char* subpath) {
   if (!versionDir) return NULL;
+  char* normalizedRoot = normalizePath(versionDir);
+  if (!normalizedRoot) return NULL;
+
   PackageMeta meta;
   bool hasMeta = readPackageMeta(versionDir, &meta);
 
@@ -916,8 +952,28 @@ static char* resolvePackageEntry(const char* versionDir, const char* subpath) {
     base = copyCString(versionDir, strlen(versionDir));
   }
 
-  char* resolved = resolveModuleFile(base);
+  char* normalizedBase = normalizePath(base);
   free(base);
+  if (!normalizedBase || !pathIsWithinRoot(normalizedRoot, normalizedBase)) {
+    free(normalizedBase);
+    free(normalizedRoot);
+    if (hasMeta) packageMetaFree(&meta);
+    return NULL;
+  }
+
+  char* resolved = resolveModuleFile(normalizedBase);
+  free(normalizedBase);
+  if (resolved) {
+    char* normalizedResolved = normalizePath(resolved);
+    free(resolved);
+    resolved = NULL;
+    if (normalizedResolved && pathIsWithinRoot(normalizedRoot, normalizedResolved)) {
+      resolved = normalizedResolved;
+    } else {
+      free(normalizedResolved);
+    }
+  }
+  free(normalizedRoot);
   if (hasMeta) packageMetaFree(&meta);
   return resolved;
 }
@@ -930,12 +986,7 @@ static char* resolvePackagePath(const char* packagesDir, const char* name,
   free(nameDir);
   char* resolved = resolvePackageEntry(versionDir, subpath);
   free(versionDir);
-  if (resolved) {
-    char* normalized = normalizePath(resolved);
-    free(resolved);
-    return normalized;
-  }
-  return NULL;
+  return resolved;
 }
 
 static char* resolveFromModulePaths(VM* vm, const char* importPath) {

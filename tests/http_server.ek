@@ -6,6 +6,11 @@ let routes = {
     body: json.stringify({ message: "hello", count: 2 }),
     headers: { "Content-Type": "application/json; charset=utf-8" }
   },
+  "GET /header-inject": {
+    status: 200,
+    body: "safe",
+    headers: { "X-Test": "ok\r\nInjected: yes" }
+  },
   "POST /submit": "posted"
 };
 

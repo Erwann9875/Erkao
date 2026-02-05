@@ -1,9 +1,18 @@
 #include "stdlib_internal.h"
 #include "platform.h"
 
+#include <ctype.h>
 #include <float.h>
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 
 Value runtimeErrorValue(VM* vm, const char* message) {
   Token token;
@@ -175,4 +184,40 @@ bool numberIsFinite(double value) {
 #else
   return isfinite(value);
 #endif
+}
+
+static bool equalsIgnoreCase(const char* left, const char* right) {
+  if (!left || !right) return false;
+  while (*left != '\0' && *right != '\0') {
+    unsigned char a = (unsigned char)*left;
+    unsigned char b = (unsigned char)*right;
+    if (tolower(a) != tolower(b)) return false;
+    left++;
+    right++;
+  }
+  return *left == '\0' && *right == '\0';
+}
+
+static bool envTruthy(const char* name) {
+  const char* value = NULL;
+#ifdef _WIN32
+  char buffer[64];
+  DWORD length = GetEnvironmentVariableA(name, buffer, (DWORD)sizeof(buffer));
+  if (length == 0 || length >= sizeof(buffer)) return false;
+  value = buffer;
+#else
+  value = getenv(name);
+#endif
+  if (!value || value[0] == '\0') return false;
+  if (strcmp(value, "1") == 0) return true;
+  if (equalsIgnoreCase(value, "true")) return true;
+  if (equalsIgnoreCase(value, "yes")) return true;
+  if (equalsIgnoreCase(value, "on")) return true;
+  return false;
+}
+
+bool stdlibUnsafeEnabled(const char* featureEnv) {
+  if (envTruthy("ERKAO_ALLOW_UNSAFE")) return true;
+  if (!featureEnv || featureEnv[0] == '\0') return false;
+  return envTruthy(featureEnv);
 }

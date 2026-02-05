@@ -393,13 +393,15 @@ static Value nativeSpawn(VM* vm, int argc, Value* args) {
   if (argc < 1) {
     return runtimeErrorValue(vm, "spawn() expects a function.");
   }
-  Value result;
-  if (!vmCallValue(vm, args[0], argc - 1, argc > 1 ? &args[1] : NULL, &result)) {
-    return NULL_VAL;
-  }
   ObjMap* task = newMap(vm);
-  mapSetField(vm, task, "done", BOOL_VAL(true));
-  mapSetField(vm, task, "value", result);
+  ObjArray* taskArgs = newArrayWithCapacity(vm, argc > 1 ? argc - 1 : 0);
+  for (int i = 1; i < argc; i++) {
+    arrayWrite(taskArgs, args[i]);
+  }
+  mapSetField(vm, task, "done", BOOL_VAL(false));
+  mapSetField(vm, task, "value", NULL_VAL);
+  mapSetField(vm, task, "_fn", args[0]);
+  mapSetField(vm, task, "_args", OBJ_VAL(taskArgs));
   return OBJ_VAL(task);
 }
 
@@ -409,11 +411,34 @@ static Value nativeAwait(VM* vm, int argc, Value* args) {
     return runtimeErrorValue(vm, "await() expects a task.");
   }
   ObjMap* task = (ObjMap*)AS_OBJ(args[0]);
-  Value value;
-  if (mapGetField(vm, task, "value", &value)) {
-    return value;
+  Value done;
+  if (mapGetField(vm, task, "done", &done) && IS_BOOL(done) && AS_BOOL(done)) {
+    Value value;
+    if (mapGetField(vm, task, "value", &value)) {
+      return value;
+    }
+    return NULL_VAL;
   }
-  return NULL_VAL;
+
+  Value fn;
+  Value taskArgs;
+  if (!mapGetField(vm, task, "_fn", &fn) ||
+      !mapGetField(vm, task, "_args", &taskArgs) ||
+      !isObjType(taskArgs, OBJ_ARRAY)) {
+    return runtimeErrorValue(vm, "await() expects a task created by spawn().");
+  }
+  ObjArray* argArray = (ObjArray*)AS_OBJ(taskArgs);
+  Value* callArgs = argArray->count > 0 ? argArray->items : NULL;
+
+  Value value;
+  if (!vmCallValue(vm, fn, argArray->count, callArgs, &value)) {
+    return NULL_VAL;
+  }
+  mapSetField(vm, task, "value", value);
+  mapSetField(vm, task, "done", BOOL_VAL(true));
+  mapSetField(vm, task, "_fn", NULL_VAL);
+  mapSetField(vm, task, "_args", NULL_VAL);
+  return value;
 }
 
 static Value nativeChannel(VM* vm, int argc, Value* args) {
@@ -422,6 +447,7 @@ static Value nativeChannel(VM* vm, int argc, Value* args) {
   ObjMap* channel = newMap(vm);
   ObjArray* queue = newArray(vm);
   mapSetField(vm, channel, "_queue", OBJ_VAL(queue));
+  mapSetField(vm, channel, "_head", NUMBER_VAL(0));
   return OBJ_VAL(channel);
 }
 
@@ -436,8 +462,26 @@ static Value nativeSend(VM* vm, int argc, Value* args) {
       !isObjType(queueValue, OBJ_ARRAY)) {
     return runtimeErrorValue(vm, "send() expects a channel queue.");
   }
+  Value headValue = NUMBER_VAL(0);
+  int head = 0;
+  if (mapGetField(vm, channel, "_head", &headValue) && IS_NUMBER(headValue)) {
+    head = (int)AS_NUMBER(headValue);
+    if (head < 0) head = 0;
+  }
   ObjArray* queue = (ObjArray*)AS_OBJ(queueValue);
+  if (head >= queue->count) {
+    queue->count = 0;
+    head = 0;
+  } else if (head > 64 && head * 2 >= queue->count) {
+    int remaining = queue->count - head;
+    for (int i = 0; i < remaining; i++) {
+      queue->items[i] = queue->items[head + i];
+    }
+    queue->count = remaining;
+    head = 0;
+  }
   arrayWrite(queue, args[1]);
+  mapSetField(vm, channel, "_head", NUMBER_VAL((double)head));
   return NULL_VAL;
 }
 
@@ -452,13 +496,31 @@ static Value nativeRecv(VM* vm, int argc, Value* args) {
       !isObjType(queueValue, OBJ_ARRAY)) {
     return runtimeErrorValue(vm, "recv() expects a channel queue.");
   }
-  ObjArray* queue = (ObjArray*)AS_OBJ(queueValue);
-  if (queue->count <= 0) return NULL_VAL;
-  Value result = queue->items[0];
-  for (int i = 1; i < queue->count; i++) {
-    queue->items[i - 1] = queue->items[i];
+  Value headValue = NUMBER_VAL(0);
+  int head = 0;
+  if (mapGetField(vm, channel, "_head", &headValue) && IS_NUMBER(headValue)) {
+    head = (int)AS_NUMBER(headValue);
+    if (head < 0) head = 0;
   }
-  queue->count--;
+  ObjArray* queue = (ObjArray*)AS_OBJ(queueValue);
+  if (head >= queue->count) {
+    queue->count = 0;
+    mapSetField(vm, channel, "_head", NUMBER_VAL(0));
+    return NULL_VAL;
+  }
+  Value result = queue->items[head++];
+  if (head >= queue->count) {
+    queue->count = 0;
+    head = 0;
+  } else if (head > 64 && head * 2 >= queue->count) {
+    int remaining = queue->count - head;
+    for (int i = 0; i < remaining; i++) {
+      queue->items[i] = queue->items[head + i];
+    }
+    queue->count = remaining;
+    head = 0;
+  }
+  mapSetField(vm, channel, "_head", NUMBER_VAL((double)head));
   return result;
 }
 
